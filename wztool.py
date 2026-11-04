@@ -44,7 +44,7 @@ else:
 BIN = ROOT / "bin"
 CACHE = ROOT / ".cache"
 EXPORTS = ROOT / "exports"
-STATIC = ROOT / "app" / "static"
+STATIC = ROOT / "static"
 STATE = ROOT / "workspace.json"                # 记住上次选的工作区
 
 TOOLS = ("NoLifeWzToNx", "nxmap", "nxmob", "nxscan")

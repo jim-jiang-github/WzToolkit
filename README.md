@@ -29,9 +29,6 @@ wztool map-export 000050000 --mobs      # 导出地图并把怪物画进预览�
 
 # 3) Web 页面（可选，人看；页面只是 CLI 的可视化壳）
 wztool web            # → http://127.0.0.1:8000  自动开浏览器
-
-# 旧版 FastAPI 服务（对比保留，功能相同）：
-python run.py         # → http://127.0.0.1:8791
 ```
 
 CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
@@ -101,9 +98,7 @@ wztool.py        CLI 主程序（wztool.exe 由 PyInstaller 打包，含 CLI + w
 wztool.exe       编译好的独立 CLI（放项目根即可找到 bin\ 与 vendor\）
 vendor\          全部源码与依赖（NoLifeWzToNx、nxmap/nxmob/nxscan、NoLifeNx、render_map、Mob.txt）
 bin\             原生工具编译产物
-app\main.py      旧版 FastAPI 后端（保留对比用；新开发请用 wztool）
-app\static\      页面（index.html=旧版 / cli.html=wztool web 版）
-run.py / run.bat 旧版服务启动入口
+static\cli.html  Web 页面（wztool web 服务的可视化壳，与 CLI 交互）
 ```
 
 来源致谢：NoLifeWzToNx（Peter Atashian / Ryan Payton，AGPL）、NoLifeNx、
