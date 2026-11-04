@@ -538,10 +538,10 @@ async function mobIcon(kindId) {
 async function renderLifeDots() {
   const box = $("#lifedots");
   if (!box) return;
-  const on = $("#life-toggle") && $("#life-toggle").checked;
+  const dots = $("#life-toggle") && $("#life-toggle").checked;
   const sprites = $("#mob-toggle") && $("#mob-toggle").checked;
   box.innerHTML = "";
-  if (!on || !mapData || !mapData.life_points) return;
+  if ((!dots && !sprites) || !mapData || !mapData.life_points) return;
   const ov = mapData.overlay;
   const kinds = (mapData.life_kinds || []).filter((k) => k && k.id);
   // 世界坐标 → 预览图像素 → 百分比（图片被 CSS 缩放也能对准）
@@ -550,31 +550,35 @@ async function renderLifeDots() {
     const t = (p.y - ov.miny) * ov.s / ov.h * 100;
     return { l, t };
   };
-  if (!sprites || !kinds.length) {
-    box.innerHTML = mapData.life_points.map((p) => {
+  let html = "";
+  if (dots) {
+    html += mapData.life_points.map((p) => {
       const { l, t } = pct(p);
       const cls = p.tier === "big" ? " big" : p.tier === "boss" ? " boss" : "";
       return `<span class="ldot${cls}" style="left:${l}%;top:${t}%" title="${p.name || "怪物"} ${p.id}"></span>`;
     }).join("");
-    return;
   }
-  // 显示怪物：每个刷怪点随机分配这张图的一种怪，按锚点（脚底中心）贴立绘
-  const icons = {};
-  await Promise.all(kinds.map(async (k) => { icons[k.id] = await mobIcon(k.id); }));
-  const usable = kinds.filter((k) => icons[k.id]);
-  if (!usable.length) return;
-  box.innerHTML = mapData.life_points.map((p) => {
-    const k = usable[Math.floor(Math.random() * usable.length)];
-    const ic = icons[k.id];
-    const { l, t } = pct(p);
-    // 立绘渲染宽 = 帧宽×渲染缩放；锚点偏移同样换算成容器百分比
-    const wPct = ic.w * ov.s / ov.w * 100;
-    const oxPct = ic.ox * ov.s / ov.w * 100;
-    const oyPct = ic.oy * ov.s / ov.h * 100;
-    const left = l - oxPct, top = t - oyPct;
-    return `<img class="mspr" src="${ic.url}" style="left:${left}%;top:${top}%;width:${wPct}%"
-             title="${k.name || k.id} ${k.id}">`;
-  }).join("");
+  if (sprites && kinds.length) {
+    // 显示怪物：每个刷怪点随机分配这张图的一种怪，按锚点（脚底中心）贴立绘
+    const icons = {};
+    await Promise.all(kinds.map(async (k) => { icons[k.id] = await mobIcon(k.id); }));
+    const usable = kinds.filter((k) => icons[k.id]);
+    if (usable.length) {
+      html += mapData.life_points.map((p) => {
+        const k = usable[Math.floor(Math.random() * usable.length)];
+        const ic = icons[k.id];
+        const { l, t } = pct(p);
+        // 立绘渲染宽 = 帧宽×渲染缩放；锚点偏移同样换算成容器百分比
+        const wPct = ic.w * ov.s / ov.w * 100;
+        const oxPct = ic.ox * ov.s / ov.w * 100;
+        const oyPct = ic.oy * ov.s / ov.h * 100;
+        const left = l - oxPct, top = t - oyPct;
+        return `<img class="mspr" src="${ic.url}" style="left:${left}%;top:${top}%;width:${wPct}%"
+                 title="${k.name || k.id} ${k.id}">`;
+      }).join("");
+    }
+  }
+  box.innerHTML = html;
 }
 
 async function mapLoad(id, preview) {
