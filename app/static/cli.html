@@ -606,13 +606,19 @@ async function lifeOverlayHTML() {
         for (let i = 0; i < den; i++) {
           const k = usable[Math.floor(Math.random() * usable.length)];
           const ic = icons[k.id];
-          // 立绘渲染宽 = 帧宽×渲染缩放；锚点偏移同样换算成容器百分比
           const wPct = ic.w * ov.s / ov.w * 100;
-          const oxPct = ic.ox * ov.s / ov.w * 100;
+          // 所有怪 50% 随机镜像朝向（翻转后锚点 = 帧宽 - 原锚点）
+          const flip = Math.random() < 0.5;
+          const ox = flip ? ic.w - ic.ox : ic.ox;
+          const oxPct = ox * ov.s / ov.w * 100;
           const oyPct = ic.oy * ov.s / ov.h * 100;
-          const dxW = i === 0 ? 0 : (30 + Math.random() * 80) * (Math.random() < 0.5 ? -1 : 1);
+          // 第 1 只贴着出生点（±12 抖动）；多出的散得更开更随机（±20~150）
+          let dxW;
+          if (i === 0) dxW = Math.random() * 24 - 12;
+          else if (Math.random() < 0.25) dxW = (12 + Math.random() * 18) * (Math.random() < 0.5 ? -1 : 1);
+          else dxW = (20 + Math.random() * 130) * (Math.random() < 0.5 ? -1 : 1);
           const li = pct({ x: p.x + dxW, y: p.y }).l;
-          out += `<img class="mspr" src="${ic.url}" style="left:${li - oxPct}%;top:${t - oyPct}%;width:${wPct}%"
+          out += `<img class="mspr" src="${ic.url}" style="left:${li - oxPct}%;top:${t - oyPct}%;width:${wPct}%;${flip ? "transform:scaleX(-1);" : ""}"
                    title="${k.name || k.id} ${k.id}">`;
         }
         return out;

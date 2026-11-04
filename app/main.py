@@ -556,8 +556,8 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
                    density: int = 1) -> Path | None:
     """把这张图的怪随机贴到刷怪点上，产出 preview_mobs.png（脚底落在 cy 地面上）。
 
-    density>1 时每个刷怪点放 density 只：第 1 只在原位，其余左右 ±30~110
-    世界像素散开（可镜像翻转），随机结果按 seed 稳定可复现。
+    density>1 时每个刷怪点放 density 只：第 1 只在原位附近，其余左右散开
+    （±20~150 世界像素）；所有怪 50% 随机镜像朝向，随机结果按 seed 稳定。
     """
     import random
     from PIL import Image
@@ -592,11 +592,16 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
         # 客户端同款落地：life 的 y 只是参考点，真正站的是 cy（所站 foothold 的 y）
         gy = float(l.get("cy", l.get("y", 0))) if fh else float(l.get("y", 0))
         for i in range(max(1, density)):
-            img, ox, oy = frames[rng.choice(keys)]
-            if i and rng.random() < 0.5:
-                img, ox, oy = frames_flip[rng.choice(keys)]
-            # 第 1 只在出生点原位；多出来的在左右散开，避免叠成一摞
-            dx = 0 if i == 0 else rng.choice((-1, 1)) * rng.uniform(30, 110)
+            # 所有怪都可能随机镜像朝向
+            flip = rng.random() < 0.5
+            img, ox, oy = frames_flip[rng.choice(keys)] if flip else frames[rng.choice(keys)]
+            # 第 1 只贴着出生点（±12 抖动）；多出的散得更开更随机（±20~150）
+            if i == 0:
+                dx = rng.uniform(-12, 12)
+            else:
+                dx = rng.uniform(20, 150) * rng.choice((-1, 1))
+                if rng.random() < 0.25:      # 偶尔贴得近一点，避免机械等距
+                    dx = rng.uniform(12, 30) * rng.choice((-1, 1))
             px = (float(l.get("x", 0)) + dx - minx) * s - ox
             py = (gy - miny) * s - oy
             im.alpha_composite(img, (round(px), round(py)))
