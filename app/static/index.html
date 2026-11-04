@@ -127,6 +127,8 @@
           box-shadow: 0 0 3px #0009; pointer-events: auto; cursor: help; }
   .ldot.boss { background: #ffb454; }
   .ldot.big  { background: #ff2d78; }
+  .mspr { position: absolute; pointer-events: none; image-rendering: pixelated;
+          filter: drop-shadow(0 1px 1px #0006); }
   th:first-child, td:first-child { width: 26px; }
   td { white-space: nowrap; }
   .flexline { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -534,20 +536,55 @@ function renderMobDetail(det, d, m, preview) {
 }
 
 let mapData = null;    // 当前地图的导出结果（含刷怪点 / 坐标变换）
+const MOBICON = {};    // kind id -> icon 数据（url/w/h/ox/oy），跨地图复用缓存
 
-function renderLifeDots() {
+async function mobIcon(kindId) {
+  if (!MOBICON[kindId]) {
+    try { MOBICON[kindId] = await api(`/api/mob/icon/${kindId}`); }
+    catch (e) { MOBICON[kindId] = null; }   // 没图的怪不给贴
+  }
+  return MOBICON[kindId];
+}
+
+async function renderLifeDots() {
   const box = $("#lifedots");
   if (!box) return;
   const on = $("#life-toggle") && $("#life-toggle").checked;
+  const sprites = $("#mob-toggle") && $("#mob-toggle").checked;
   box.innerHTML = "";
   if (!on || !mapData || !mapData.life_points) return;
   const ov = mapData.overlay;
+  const kinds = (mapData.life_kinds || []).filter((k) => k && k.id);
   // 世界坐标 → 预览图像素 → 百分比（图片被 CSS 缩放也能对准）
-  box.innerHTML = mapData.life_points.map((p) => {
+  const pct = (p) => {
     const l = (p.x - ov.minx) * ov.s / ov.w * 100;
     const t = (p.y - ov.miny) * ov.s / ov.h * 100;
-    const cls = p.tier === "big" ? " big" : p.tier === "boss" ? " boss" : "";
-    return `<span class="ldot${cls}" style="left:${l}%;top:${t}%" title="${p.name || "怪物"} ${p.id}"></span>`;
+    return { l, t };
+  };
+  if (!sprites || !kinds.length) {
+    box.innerHTML = mapData.life_points.map((p) => {
+      const { l, t } = pct(p);
+      const cls = p.tier === "big" ? " big" : p.tier === "boss" ? " boss" : "";
+      return `<span class="ldot${cls}" style="left:${l}%;top:${t}%" title="${p.name || "怪物"} ${p.id}"></span>`;
+    }).join("");
+    return;
+  }
+  // 显示怪物：每个刷怪点随机分配这张图的一种怪，按锚点（脚底中心）贴立绘
+  const icons = {};
+  await Promise.all(kinds.map(async (k) => { icons[k.id] = await mobIcon(k.id); }));
+  const usable = kinds.filter((k) => icons[k.id]);
+  if (!usable.length) return;
+  box.innerHTML = mapData.life_points.map((p) => {
+    const k = usable[Math.floor(Math.random() * usable.length)];
+    const ic = icons[k.id];
+    const { l, t } = pct(p);
+    // 立绘渲染宽 = 帧宽×渲染缩放；锚点偏移同样换算成容器百分比
+    const wPct = ic.w * ov.s / ov.w * 100;
+    const oxPct = ic.ox * ov.s / ov.w * 100;
+    const oyPct = ic.oy * ov.s / ov.h * 100;
+    const left = l - oxPct, top = t - oyPct;
+    return `<img class="mspr" src="${ic.url}" style="left:${left}%;top:${top}%;width:${wPct}%"
+             title="${k.name || k.id} ${k.id}">`;
   }).join("");
 }
 
@@ -567,7 +604,8 @@ async function mapLoad(id, preview) {
     det.innerHTML = `<div class="flexline"><div>地图 <b>${id}</b>${linkNote} ·
       ${d.preview.w}×${d.preview.h}${preview ? "（预览）" : ""}</div>
       <div class="row">
-        ${d.life_count ? `<label class="muted" style="cursor:pointer"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>` : ""}
+        ${d.life_count ? `<label class="muted" style="cursor:pointer"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
+        <label class="muted" style="cursor:pointer"><input type="checkbox" id="mob-toggle" /> 显示怪物</label>` : ""}
         ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}
       </div></div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
@@ -582,6 +620,8 @@ async function mapLoad(id, preview) {
     mapData = d;
     const lt = $("#life-toggle");
     if (lt) lt.onchange = renderLifeDots;
+    const mt = $("#mob-toggle");
+    if (mt) mt.onchange = renderLifeDots;
     const b = $("#do-export");
     if (b) b.onclick = () => mapLoad(id, false);
   } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }

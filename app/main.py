@@ -474,6 +474,70 @@ def drop_dir(p: Path) -> None:
 
 
 @app.post("/api/mob/export")
+def _resolve_mob_link(raw: str, meta: dict) -> str:
+    """链接怪（info/link 且自身 0 帧）顺链解析到真正有帧的怪，防环最多 5 跳。"""
+    seen: set = set()
+    for _ in range(5):
+        m = meta.get(raw)
+        if not m or m.get("frames", 0) > 0 or not m.get("link") or raw in seen:
+            break
+        seen.add(raw)
+        raw = m["link"]
+    return raw
+
+
+def _ensure_mob_preview(raw: str, ws: Path) -> Path:
+    """确保这只怪在 .cache/mob/<raw> 有预览导出，返回目录。"""
+    outdir = CACHE / "mob" / raw
+    if not outdir.exists() or not any(outdir.rglob("*.png")):
+        if outdir.exists():
+            drop_dir(outdir)
+        outdir.parent.mkdir(parents=True, exist_ok=True)
+        _run(["nxmob", "export", str(outdir), "--only", raw, "--named"], ws,
+             timeout=600)
+    return outdir
+
+
+@app.get("/api/mob/icon/{raw}")
+def mob_icon(raw: str):
+    """一只怪的“立绘”帧（stand 帧）：给地图刷怪点叠加小怪用。"""
+    ws = _need_ws()
+    if not re.fullmatch(r"\d+", raw):
+        raise HTTPException(400, "怪 id 不合法")
+    mobnx = ws / "Mob.nx"
+    if mobnx.exists():
+        meta = {m["id"]: m for m in mob_meta(ws, mobnx)}
+        raw = _resolve_mob_link(raw, meta)
+        # nxmob 的 --only 只认 WZ 里的原始 id（带前导 0），meta 里存了原始值
+        raw = (meta.get(raw) or {}).get("raw") or raw.zfill(7)
+    else:
+        raw = raw.zfill(7)
+    outdir = _ensure_mob_preview(raw, ws)
+    pngs = sorted(outdir.rglob("*.png"))
+    if not pngs:
+        raise HTTPException(500, "这只怪没有图片资源")
+    # 优先 stand 帧（站着不动，最适合当立绘）；没有就随便一帧
+    pick = next((p for p in pngs if p.name.lower().startswith("stand")), pngs[0])
+    # manifest 里查这帧的 w/h/ox/oy（锚点=脚底中心），前端按锚点对位
+    w = h = ox = oy = 0
+    man = outdir / "manifest.csv"
+    if man.exists():
+        for f in list(csv.reader(man.read_text(encoding="utf-8-sig").splitlines()))[1:]:
+            if len(f) >= 10 and f[4] == pick.name:
+                try:
+                    w, h, ox, oy = (int(x) for x in f[5:9])
+                except ValueError:
+                    pass
+                break
+    if not w:
+        from PIL import Image
+        with Image.open(pick) as im:
+            w, h = im.size
+            ox, oy = w // 2, h
+    return {"url": f"/preview/{pick.relative_to(CACHE).as_posix()}",
+            "w": w, "h": h, "ox": ox, "oy": oy}
+
+
 def mob_export(payload: dict = Body(...)):
     """导出一只怪的全部动画帧。preview=True 只出预览（缓存），否则进 exports。"""
     ws = _need_ws()
@@ -486,13 +550,7 @@ def mob_export(payload: dict = Body(...)):
     mobnx = ws / "Mob.nx"
     if mobnx.exists():
         meta = {m["id"]: m for m in mob_meta(ws, mobnx)}
-        seen: set = set()
-        for _ in range(5):
-            m = meta.get(raw)
-            if not m or m.get("frames", 0) > 0 or not m.get("link") or raw in seen:
-                break
-            seen.add(raw)
-            raw = m["link"]
+        raw = _resolve_mob_link(raw, meta)
     link_info = {"from": raw_req, "to": raw} if raw != raw_req else None
     outdir = (CACHE / "mob" / raw) if preview else (EXPORTS / "mobs" / raw)
     if preview and outdir.exists():
