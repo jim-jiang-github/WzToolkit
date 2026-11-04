@@ -128,6 +128,17 @@
   .ldot.big  { background: #ff2d78; }
   .mspr { position: absolute; pointer-events: none; image-rendering: pixelated;
           filter: drop-shadow(0 1px 1px #0006); }
+  /* 地图放大查看器 */
+  #mapzoom { position: fixed; inset: 0; background: #000d; z-index: 999;
+             display: flex; flex-direction: column; }
+  #mapzoom[hidden] { display: none; }
+  #mapzoom .mz-bar { padding: 8px 12px; display: flex; gap: 8px; align-items: center;
+                     flex-wrap: wrap; }
+  #mapzoom .mz-scroll { flex: 1; overflow: auto; text-align: center; padding: 0 16px 16px; }
+  #mapzoom .mapwrap2 { position: relative; display: inline-block; margin: 10px auto 0; }
+  #mapzoom img.mz-img { display: block; image-rendering: pixelated; }
+  #mapzoom .mz-fit img.mz-img { max-width: calc(100vw - 60px);
+                                max-height: calc(100vh - 110px); width: auto; height: auto; }
   th:first-child, td:first-child { width: 26px; }
   td { white-space: nowrap; }
   .flexline { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -193,6 +204,25 @@
 
   <div class="muted">工具链：NoLifeWzToNx（wz→nx 转换）· nxmap / nxmob / nxscan（导出）· render_map（地图渲染）。
   导出的坐标与文件格式与 mxd_auto 现用的完全一致。</div>
+</div>
+
+<div id="mapzoom" hidden>
+  <div class="mz-bar">
+    <b>地图放大</b>
+    <button class="zb on" data-z="fit">适应</button>
+    <button class="zb" data-z="1">1x</button>
+    <button class="zb" data-z="2">2x</button>
+    <button class="zb" data-z="4">4x</button>
+    <span class="muted" id="mz-hint"></span>
+    <span style="flex:1"></span>
+    <button id="mz-close">✕ 关闭 (Esc)</button>
+  </div>
+  <div class="mz-scroll" id="mz-scroll">
+    <span class="mapwrap2">
+      <img class="mz-img" id="mz-img" alt="">
+      <span class="lifedots" id="mz-dots"></span>
+    </span>
+  </div>
 </div>
 
 <script>
@@ -540,23 +570,20 @@ async function mobIcon(kindId) {
   return MOBICON[kindId];
 }
 
-async function renderLifeDots() {
-  const box = $("#lifedots");
-  if (!box) return;
-  const dots = $("#life-toggle") && $("#life-toggle").checked;
+async function lifeOverlayHTML() {
+  // 详情图和放大查看器共用的叠加层（圆点 + 随机怪物立绘），百分比定位，任意缩放都对准
+  if (!mapData || !mapData.life_points) return "";
+  const on = $("#life-toggle") && $("#life-toggle").checked;
   const sprites = $("#mob-toggle") && $("#mob-toggle").checked;
-  box.innerHTML = "";
-  if ((!dots && !sprites) || !mapData || !mapData.life_points) return;
+  if (!on && !sprites) return "";
   const ov = mapData.overlay;
   const kinds = (mapData.life_kinds || []).filter((k) => k && k.id);
-  // 世界坐标 → 预览图像素 → 百分比（图片被 CSS 缩放也能对准）
-  const pct = (p) => {
-    const l = (p.x - ov.minx) * ov.s / ov.w * 100;
-    const t = (p.y - ov.miny) * ov.s / ov.h * 100;
-    return { l, t };
-  };
+  const pct = (p) => ({
+    l: (p.x - ov.minx) * ov.s / ov.w * 100,
+    t: (p.y - ov.miny) * ov.s / ov.h * 100,
+  });
   let html = "";
-  if (dots) {
+  if (on) {
     html += mapData.life_points.map((p) => {
       const { l, t } = pct(p);
       const cls = p.tier === "big" ? " big" : p.tier === "boss" ? " boss" : "";
@@ -583,8 +610,36 @@ async function renderLifeDots() {
       }).join("");
     }
   }
-  box.innerHTML = html;
+  return html;
 }
+
+async function renderLifeDots() {
+  const html = await lifeOverlayHTML();
+  const box = $("#lifedots");
+  if (box) box.innerHTML = html;
+  const mz = $("#mz-dots");
+  if (mz) mz.innerHTML = html;
+}
+
+/* 地图放大查看器：点预览图打开，圆点/怪物叠加层按百分比定位，任意缩放都对准 */
+let MZZ = "fit";
+function mzApply() {
+  const img = $("#mz-img"), wrap = $("#mapzoom");
+  if (!img || !mapData) return;
+  wrap.classList.toggle("mz-fit", MZZ === "fit");
+  img.style.width = MZZ === "fit" ? "" : `${mapData.preview.w * MZZ}px`;
+  $("#mz-hint").textContent = MZZ === "fit"
+    ? `${mapData.preview.w}×${mapData.preview.h} · 滚轮/滚动条平移` : `${MZZ}x = ${mapData.preview.w * MZZ}×${mapData.preview.h * MZZ}`;
+  $$("#mapzoom .zb").forEach((b) => b.classList.toggle("on", b.dataset.z === String(MZZ)));
+}
+async function mzOpen() {
+  if (!mapData) return;
+  $("#mz-img").src = mapData.preview_url;
+  $("#mapzoom").hidden = false;
+  $("#mz-dots").innerHTML = await lifeOverlayHTML();
+  mzApply();
+}
+function mzClose() { $("#mapzoom").hidden = true; }
 
 async function mapLoad(id, preview) {
   const det = $("#detail");
@@ -610,13 +665,15 @@ async function mapLoad(id, preview) {
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
       <div style="margin-bottom:6px">${kinds || '<span class="muted">这张图没有怪物</span>'}</div>
       <span class="mapwrap">
-        <a href="${d.preview_url}" target="_blank" title="点开看原尺寸">
+        <a href="${d.preview_url}" title="点开放大查看（怪物/刷怪点叠加同样显示）" id="mz-open">
           <img class="mapimg" src="${d.preview_url}" loading="lazy">
         </a>
         <span class="lifedots" id="lifedots"></span>
       </span>
-      <div class="muted" style="margin-top:4px">竖长地图已等比缩放，点图看原尺寸</div>`;
+      <div class="muted" style="margin-top:4px">竖长地图已等比缩放，点图放大（适应 / 1x / 2x / 4x）</div>`;
     mapData = d;
+    const mo = $("#mz-open");
+    if (mo) mo.onclick = (e) => { e.preventDefault(); mzOpen(); };
     const lt = $("#life-toggle");
     if (lt) lt.onchange = renderLifeDots;
     const mt = $("#mob-toggle");
@@ -677,6 +734,11 @@ function bindFilters(sel, setter) {
 }
 bindFilters("#filters", (f) => MOBFILT = f);
 bindFilters("#filters-map", (f) => MAPFILT = f);
+/* 地图放大查看器事件 */
+$$("#mapzoom .zb").forEach((b) => b.onclick = () => { MZZ = b.dataset.z === "fit" ? "fit" : +b.dataset.z; mzApply(); });
+$("#mz-close").onclick = mzClose;
+$("#mz-scroll").onclick = (e) => { if (e.target === e.currentTarget) mzClose(); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#mapzoom").hidden) mzClose(); });
 $("#tab-mob").onclick = () => { TAB = "mob"; $("#tab-mob").classList.add("on"); $("#tab-map").classList.remove("on"); renderList(); };
 $("#tab-map").onclick = () => { TAB = "map"; $("#tab-map").classList.add("on"); $("#tab-mob").classList.remove("on"); renderList(); };
 document.addEventListener("click", (e) => {
