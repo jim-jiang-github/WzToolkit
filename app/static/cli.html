@@ -251,6 +251,8 @@ let mobSel = null, mapSel = null;
 let MOBFILT = "all";   // all | boss | big
 let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // 导出的地图图里是否把怪物画进去
+let DENSITY = 1;        // 怪物密度倍数（页面叠加与导出合成共用）
+let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
 async function boot() {
@@ -591,22 +593,29 @@ async function lifeOverlayHTML() {
     }).join("");
   }
   if (sprites && kinds.length && !mapData.mobs) {
-    // 显示怪物：每个刷怪点随机分配这张图的一种怪，按锚点（脚底中心）贴立绘
+    // 显示怪物：每个刷怪点随机分配这张图的一种怪，按锚点（脚底中心）贴立绘；
+    // 密度>1 时每个点放多只，多出的在左右散开（与导出合成同款规则）
     const icons = {};
     await Promise.all(kinds.map(async (k) => { icons[k.id] = await mobIcon(k.id); }));
     const usable = kinds.filter((k) => icons[k.id]);
     if (usable.length) {
+      const den = Math.max(1, Math.min(10, DENSITY | 0));
       html += mapData.life_points.map((p) => {
-        const k = usable[Math.floor(Math.random() * usable.length)];
-        const ic = icons[k.id];
         const { l, t } = pct(p);
-        // 立绘渲染宽 = 帧宽×渲染缩放；锚点偏移同样换算成容器百分比
-        const wPct = ic.w * ov.s / ov.w * 100;
-        const oxPct = ic.ox * ov.s / ov.w * 100;
-        const oyPct = ic.oy * ov.s / ov.h * 100;
-        const left = l - oxPct, top = t - oyPct;
-        return `<img class="mspr" src="${ic.url}" style="left:${left}%;top:${top}%;width:${wPct}%"
-                 title="${k.name || k.id} ${k.id}">`;
+        let out = "";
+        for (let i = 0; i < den; i++) {
+          const k = usable[Math.floor(Math.random() * usable.length)];
+          const ic = icons[k.id];
+          // 立绘渲染宽 = 帧宽×渲染缩放；锚点偏移同样换算成容器百分比
+          const wPct = ic.w * ov.s / ov.w * 100;
+          const oxPct = ic.ox * ov.s / ov.w * 100;
+          const oyPct = ic.oy * ov.s / ov.h * 100;
+          const dxW = i === 0 ? 0 : (30 + Math.random() * 80) * (Math.random() < 0.5 ? -1 : 1);
+          const li = pct({ x: p.x + dxW, y: p.y }).l;
+          out += `<img class="mspr" src="${ic.url}" style="left:${li - oxPct}%;top:${t - oyPct}%;width:${wPct}%"
+                   title="${k.name || k.id} ${k.id}">`;
+        }
+        return out;
       }).join("");
     }
   }
@@ -642,12 +651,13 @@ async function mzOpen() {
 function mzClose() { $("#mapzoom").hidden = true; }
 
 async function mapLoad(id, preview) {
+  mapRef = { id, preview };
   const det = $("#detail");
   det.innerHTML = `<div>地图 <b>${id}</b><br><span class="muted">导出 + 渲染中（大图要几秒）…</span></div>`;
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS }),
+      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY }),
     });
     const kinds = (d.life_kinds || []).map((k) =>
       `<span class="pill ${k.tier === "big" ? "bigboss" : k.tier === "boss" ? "bossmob" : ""}">${k.name || k.id} <b>${k.id}</b>${k.tier === "big" ? " 大BOSS" : k.tier === "boss" ? " BOSS" : ""}</span>`).join("");
@@ -659,7 +669,10 @@ async function mapLoad(id, preview) {
       <div class="row">
         ${d.life_count ? `<label class="muted" style="cursor:pointer"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
         <label class="muted" style="cursor:pointer"><input type="checkbox" id="mob-toggle" /> 显示怪物</label>
-        <label class="muted" style="cursor:pointer" title="勾选后导出/预览的图片会直接把怪物画进去"><input type="checkbox" id="export-mobs" ${EXPORTMOBS ? "checked" : ""} /> 导出带怪物</label>` : ""}
+        <label class="muted" style="cursor:pointer" title="勾选后导出/预览的图片会直接把怪物画进去"><input type="checkbox" id="export-mobs" ${EXPORTMOBS ? "checked" : ""} /> 导出带怪物</label>
+        <label class="muted" title="怪物密度倍数：影响页面叠加与导出合成的怪物数量" style="cursor:default">密度
+          <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:80px" />
+          ×<b id="density-val">${DENSITY}</b></label>` : ""}
         ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}
       </div></div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
@@ -680,6 +693,16 @@ async function mapLoad(id, preview) {
     if (mt) mt.onchange = renderLifeDots;
     const em = $("#export-mobs");
     if (em) em.onchange = () => EXPORTMOBS = em.checked;
+    const ds = $("#density");
+    if (ds) {
+      ds.oninput = () => $("#density-val").textContent = ds.value;
+      ds.onchange = () => {
+        DENSITY = Number(ds.value);
+        // 勾了导出带怪物 → 重新合成图（按 seed 稳定复现）；否则只重画页面叠加层
+        if (EXPORTMOBS) mapLoad(mapRef.id, mapRef.preview);
+        else renderLifeDots();
+      };
+    }
     const b = $("#do-export");
     if (b) b.onclick = () => mapLoad(id, false);
   } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }

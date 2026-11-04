@@ -552,8 +552,13 @@ def mob_icon(raw: str):
             "w": w, "h": h, "ox": ox, "oy": oy}
 
 
-def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str) -> Path | None:
-    """把这张图的怪随机贴到刷怪点上，产出 preview_mobs.png（脚底落在 cy 地面上）。"""
+def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
+                   density: int = 1) -> Path | None:
+    """把这张图的怪随机贴到刷怪点上，产出 preview_mobs.png（脚底落在 cy 地面上）。
+
+    density>1 时每个刷怪点放 density 只：第 1 只在原位，其余左右 ±30~110
+    世界像素散开（可镜像翻转），随机结果按 seed 稳定可复现。
+    """
     import random
     from PIL import Image
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
@@ -564,6 +569,7 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str)
     minx -= 40; miny -= 40; bw += 80; bh += 80
     s = min(1.0, 1600 / max(1.0, bw))
     frames = {}
+    frames_flip = {}
     for k in sorted({str(l.get("id", "")).lstrip("0") for l in life}):
         fr = _stand_frame(ws, k)
         if fr is None:
@@ -574,19 +580,26 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str)
             img = img.resize((max(1, round(w * s)), max(1, round(h * s))))
             ox, oy = ox * s, oy * s
         frames[k] = (img, ox, oy)
+        frames_flip[k] = (img.transpose(Image.FLIP_LEFT_RIGHT),
+                          img.width - ox, oy)
     if not frames:
         return None
     im = Image.open(base_png).convert("RGBA")
-    rng = random.Random(seed)
+    rng = random.Random(f"{seed}:d{density}")
     keys = list(frames)
     for l in life:
-        img, ox, oy = frames[rng.choice(keys)]
         fh = l.get("fh")
         # 客户端同款落地：life 的 y 只是参考点，真正站的是 cy（所站 foothold 的 y）
         gy = float(l.get("cy", l.get("y", 0))) if fh else float(l.get("y", 0))
-        px = (float(l.get("x", 0)) - minx) * s - ox
-        py = (gy - miny) * s - oy
-        im.alpha_composite(img, (round(px), round(py)))
+        for i in range(max(1, density)):
+            img, ox, oy = frames[rng.choice(keys)]
+            if i and rng.random() < 0.5:
+                img, ox, oy = frames_flip[rng.choice(keys)]
+            # 第 1 只在出生点原位；多出来的在左右散开，避免叠成一摞
+            dx = 0 if i == 0 else rng.choice((-1, 1)) * rng.uniform(30, 110)
+            px = (float(l.get("x", 0)) + dx - minx) * s - ox
+            py = (gy - miny) * s - oy
+            im.alpha_composite(img, (round(px), round(py)))
     out = outdir / "preview_mobs.png"
     im.convert("RGB").save(out)
     return out
@@ -675,11 +688,12 @@ def map_export(payload: dict = Body(...)):
     if not re.fullmatch(r"\d{9}", mid):
         raise HTTPException(400, "地图 id 应该是 9 位数字")
     return _map_export(ws, mid, bool(payload.get("preview")), set(),
-                       bool(payload.get("mobs")))
+                       bool(payload.get("mobs")),
+                       int(payload.get("density") or 1))
 
 
 def _map_export(ws: Path, mid: str, preview: bool, visited: set,
-                mobs: bool = False) -> dict:
+                mobs: bool = False, density: int = 1) -> dict:
     if mid in visited:
         raise HTTPException(500, f"link 成环了：{' → '.join(sorted(visited))} → {mid}")
     visited.add(mid)
@@ -704,7 +718,7 @@ def _map_export(ws: Path, mid: str, preview: bool, visited: set,
     # 链接图：拿目标图的数据渲染（客户端同款行为）
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
-        d = _map_export(ws, link, preview, visited, mobs)
+        d = _map_export(ws, link, preview, visited, mobs, density)
         d["link"] = {"from": mid, "to": link}
         return d
 
@@ -742,7 +756,8 @@ def _map_export(ws: Path, mid: str, preview: bool, visited: set,
               "life_points": points}
     # 导出图带怪物：把怪随机贴到刷怪点上合成进预览图（preview_mobs.png）
     if mobs and life:
-        mob_png = _composite_mobs(ws, outdir, mj, png, mid)
+        mob_png = _composite_mobs(ws, outdir, mj, png, mid,
+                                  density=max(1, min(10, int(density or 1))))
         if mob_png is not None:
             rel = (mob_png.relative_to(CACHE) if preview else mob_png.relative_to(EXPORTS))
             result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview

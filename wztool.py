@@ -529,8 +529,13 @@ def c_mob_icon(raw: str) -> dict:
             "w": w, "h": h, "ox": ox, "oy": oy}
 
 
-def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str) -> Path | None:
-    """把这张图的怪随机贴到刷怪点上，产出 preview_mobs.png（脚底落在 cy 地面）。"""
+def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
+                   density: int = 1) -> Path | None:
+    """把这张图的怪随机贴到刷怪点上，产出 preview_mobs.png（脚底落在 cy 地面）。
+
+    density>1 时每个刷怪点放 density 只：第 1 只在原位，其余在左右 ±30~110
+    世界像素内散开（可镜像翻转），随机结果按 seed 稳定可复现。
+    """
     from PIL import Image
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
     if not life:
@@ -540,6 +545,7 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str)
     minx -= 40; miny -= 40; bw += 80; bh += 80
     s = min(1.0, 1600 / max(1.0, bw))
     frames = {}
+    frames_flip = {}
     for k in sorted({str(l.get("id", "")).lstrip("0") for l in life}):
         fr = _stand_frame(ws, k)
         if fr is None:
@@ -550,19 +556,26 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str)
             img = img.resize((max(1, round(w * s)), max(1, round(h * s))))
             ox, oy = ox * s, oy * s
         frames[k] = (img, ox, oy)
+        frames_flip[k] = (img.transpose(Image.FLIP_LEFT_RIGHT),
+                          img.width - ox, oy)
     if not frames:
         return None
     im = Image.open(base_png).convert("RGBA")
-    rng = random.Random(seed)
+    rng = random.Random(f"{seed}:d{density}")
     keys = list(frames)
     for l in life:
-        img, ox, oy = frames[rng.choice(keys)]
         fh = l.get("fh")
         # 客户端同款落地：life 的 y 只是参考点，真正站的是 cy（所站 foothold 的 y）
         gy = float(l.get("cy", l.get("y", 0))) if fh else float(l.get("y", 0))
-        px = (float(l.get("x", 0)) - minx) * s - ox
-        py = (gy - miny) * s - oy
-        im.alpha_composite(img, (round(px), round(py)))
+        for i in range(max(1, density)):
+            img, ox, oy = frames[rng.choice(keys)]
+            if i and rng.random() < 0.5:
+                img, ox, oy = frames_flip[rng.choice(keys)]
+            # 第 1 只在出生点原位；多出来的在左右散开，避免叠成一摞
+            dx = 0 if i == 0 else rng.choice((-1, 1)) * rng.uniform(30, 110)
+            px = (float(l.get("x", 0)) + dx - minx) * s - ox
+            py = (gy - miny) * s - oy
+            im.alpha_composite(img, (round(px), round(py)))
     out = outdir / "preview_mobs.png"
     im.convert("RGB").save(out)
     return out
@@ -637,7 +650,7 @@ def c_mob_export(raw: str, preview: bool = False) -> dict:
 
 
 def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
-                 _visited: set | None = None) -> dict:
+                 density: int = 1, _visited: set | None = None) -> dict:
     """导出一张地图：map.json（life/foothold/ladderRope）+ 全部贴图 + 渲染预览图。
 
     链接图（info/link，自己的 img 是空的）自动顺链导出目标图，返回带 link 字段。
@@ -676,14 +689,14 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     # 链接图：拿目标图的数据渲染（客户端同款行为）
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
-        d = c_map_export(link, preview, mobs, visited)
+        d = c_map_export(link, preview, mobs, density, visited)
         d["link"] = {"from": mid, "to": link}
         return d
 
-    return _map_export_inner(ws, mid, preview, mobs, visited, outdir=outdir, mj=mj)
+    return _map_export_inner(ws, mid, preview, mobs, density, visited, outdir=outdir, mj=mj)
 
 
-def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool,
+def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: int,
                       visited: set, outdir: Path | None = None, mj: dict | None = None) -> dict:
     root = CACHE if preview else EXPORTS
     if outdir is None:
@@ -723,7 +736,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool,
               "life_points": points}
     # 导出图带怪物：把怪随机贴到刷怪点上合成进预览图（preview_mobs.png）
     if mobs and life:
-        mob_png = _composite_mobs(ws, outdir, mj, png, mid)
+        mob_png = _composite_mobs(ws, outdir, mj, png, mid,
+                                  density=max(1, min(10, int(density or 1))))
         if mob_png is not None:
             rel = (mob_png.relative_to(CACHE) if preview else mob_png.relative_to(EXPORTS))
             result["preview_path"] = str(mob_png)
@@ -870,7 +884,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_mob_export, str(b.get("raw") or ""), bool(b.get("preview")))
         elif path == "/api/map/export":
             self._api(c_map_export, str(b.get("id") or ""),
-                      bool(b.get("preview")), bool(b.get("mobs")))
+                      bool(b.get("preview")), bool(b.get("mobs")),
+                      int(b.get("density") or 1))
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
         elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps") \
@@ -1020,7 +1035,7 @@ def cmd_mob_export(a) -> int:
 
 
 def cmd_map_export(a) -> int:
-    d = c_map_export(a.id, preview=a.preview, mobs=a.mobs)
+    d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density)
     if a.json:
         _out(d, True)
     else:
@@ -1143,6 +1158,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
     p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 exports")
     p.add_argument("--mobs", action="store_true", help="预览图合成怪物（随机、按地图 id 定种）")
+    p.add_argument("--density", type=int, default=1, metavar="N",
+                   help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
     _j(p); p.set_defaults(fn=cmd_map_export)
 
     p = sub.add_parser("clear-cache", help="清空 .cache 预览缓存（exports 不动）")
