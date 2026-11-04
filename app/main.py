@@ -285,11 +285,12 @@ def _mob_tier(raw_id: str, name: str, boss: int, hp: int) -> str:
 
 
 def mob_meta(ws: Path, mobnx: Path) -> list[dict]:
-    """跑 nxmob info 拿每只怪的 boss 标记 / 等级 / 血量（按 Mob.nx mtime 缓存）。
+    """跑 nxmob info 拿每只怪的 boss/等级/血量 + link 目标 + 自身帧数。
 
-    覆盖 Mob.nx + Mob001/002/2 所有卷，比 nxscan 只扫主卷全；一次 0.1s。
+    按 Mob.nx mtime 缓存（v2：info 输出加了 link,frames 两列，换个文件名
+    避免读到旧格式缓存）。覆盖 Mob.nx + Mob001/002/2 所有卷；一次 0.1s。
     """
-    cache = CACHE / f"mobinfo_{int(mobnx.stat().st_mtime)}.json"
+    cache = CACHE / f"mobinfo2_{int(mobnx.stat().st_mtime)}.json"
     if cache.exists():
         try:
             return json.loads(cache.read_text(encoding="utf-8"))
@@ -305,8 +306,14 @@ def mob_meta(ws: Path, mobnx: Path) -> list[dict]:
             boss, lv, hp, exp = (int(x) for x in row[2:6])
         except ValueError:
             boss = lv = hp = exp = 0
+        link = row[6].strip().lstrip("0") if len(row) > 6 else ""
+        try:
+            frames = int(row[7]) if len(row) > 7 else 0
+        except ValueError:
+            frames = 0
         items.append({"raw": raw, "id": raw.lstrip("0"), "name": name,
                       "boss": boss, "level": lv, "hp": hp, "exp": exp,
+                      "link": link, "frames": frames,
                       "tier": _mob_tier(raw, name, boss, hp)})
     items.sort(key=lambda x: int(x["id"]))
     try:
@@ -384,9 +391,26 @@ def mobs():
     key = f"mobs:{mobnx.stat().st_mtime}"
     if _lists.get("key") != key:
         items = mob_meta(ws, mobnx)
+        byid = {it["id"]: it for it in items}
         for it in items:
             if not it.get("name"):
                 it["name"] = mob_names().get(it["id"]) or ""
+            # 有图 = 自己有帧，或 link 链条终点有帧（客户端就是渲染目标怪）；
+            # 都没有的（唱片机、木桩这类）标 img_ok=False，列表可筛"无图"。
+            seen: set = set()
+            cur = it
+            ok = False
+            for _ in range(5):
+                if cur["id"] in seen:
+                    break
+                seen.add(cur["id"])
+                if cur.get("frames", 0) > 0:
+                    ok = True
+                    break
+                cur = byid.get(cur.get("link") or "")
+                if not cur:
+                    break
+            it["img_ok"] = ok
         _lists.update(key=key, mobs=items)
     return {"mobs": _lists["mobs"]}
 
@@ -416,8 +440,11 @@ def maps():
                 if mm:
                     ids.append(mm.group(1))
         ids = sorted(set(ids))
-        _lists.update(key=key, maps=ids)
-    return {"maps": _lists["maps"]}
+        # 「有怪的图」：life 反向聚合里出现过的 mapid（只算 m=mob，npc 不算）
+        life = life_index(ws, mapnx)
+        life_maps = sorted({m["mapid"] for rows in life.values() for m in rows})
+        _lists.update(key=key, maps=ids, life_maps=life_maps)
+    return {"maps": _lists["maps"], "life_maps": _lists.get("life_maps", [])}
 
 
 # ------------------------------------------------------------------ 预览 / 导出
@@ -454,6 +481,19 @@ def mob_export(payload: dict = Body(...)):
     if not re.fullmatch(r"\d+", raw):
         raise HTTPException(400, "怪 id 不合法")
     preview = bool(payload.get("preview"))
+    # 链接怪（info/link 且自身 0 帧）：客户端渲染 link 目标怪 —— 顺着导出目标。
+    raw_req = raw
+    mobnx = ws / "Mob.nx"
+    if mobnx.exists():
+        meta = {m["id"]: m for m in mob_meta(ws, mobnx)}
+        seen: set = set()
+        for _ in range(5):
+            m = meta.get(raw)
+            if not m or m.get("frames", 0) > 0 or not m.get("link") or raw in seen:
+                break
+            seen.add(raw)
+            raw = m["link"]
+    link_info = {"from": raw_req, "to": raw} if raw != raw_req else None
     outdir = (CACHE / "mob" / raw) if preview else (EXPORTS / "mobs" / raw)
     if preview and outdir.exists():
         pngs = sorted(outdir.rglob("*.png"))
@@ -469,7 +509,7 @@ def mob_export(payload: dict = Body(...)):
            else f"/exports/{p.relative_to(EXPORTS).as_posix()}" for p in pngs]
     return {"dir": str(outdir), "count": len(pngs), "pngs": rel[:400],
             "frames": _read_manifest(outdir, preview, pngs),
-            "preview": preview}
+            "preview": preview, "link": link_info}
 
 
 def _read_manifest(outdir: Path, preview: bool, pngs: list[Path]) -> list[dict]:
@@ -511,12 +551,23 @@ def _read_manifest(outdir: Path, preview: bool, pngs: list[Path]) -> list[dict]:
 
 @app.post("/api/map/export")
 def map_export(payload: dict = Body(...)):
-    """导出一张地图（map.json + 全部贴图 + 渲染预览图）。"""
+    """导出一张地图（map.json + 全部贴图 + 渲染预览图）。
+
+    链接图（info/link）：这种图自己的 img 是空的，客户端渲染时直接加载
+    link 指向的那张图 —— 遇到就顺着 link 导出目标图，返回里带 link 字段
+    让前端标注"画面同 xxx"，避免用户看到一张空白图。
+    """
     ws = _need_ws()
     mid = str(payload.get("id") or "").strip()
     if not re.fullmatch(r"\d{9}", mid):
         raise HTTPException(400, "地图 id 应该是 9 位数字")
-    preview = bool(payload.get("preview"))
+    return _map_export(ws, mid, bool(payload.get("preview")), set())
+
+
+def _map_export(ws: Path, mid: str, preview: bool, visited: set) -> dict:
+    if mid in visited:
+        raise HTTPException(500, f"link 成环了：{' → '.join(sorted(visited))} → {mid}")
+    visited.add(mid)
     outdir = (CACHE / "map" / mid) if preview else (EXPORTS / "maps" / mid)
 
     def _cached_ok() -> bool:
@@ -533,14 +584,33 @@ def map_export(payload: dict = Body(...)):
         _run(["nxmap", mid, str(outdir)], ws, timeout=600)
     if not (outdir / "map.json").exists():
         raise HTTPException(500, f"nxmap 没产出 map.json（这个 id 存在吗？{mid}）")
+    mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
+
+    # 链接图：拿目标图的数据渲染（客户端同款行为）
+    link = str(mj.get("info", {}).get("link") or "").strip()
+    if link and link != mid and re.fullmatch(r"\d{9}", link):
+        d = _map_export(ws, link, preview, visited)
+        d["link"] = {"from": mid, "to": link}
+        return d
+
     png = outdir / "preview.png"
     size = _render_preview(outdir, png)
-    mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
     kinds = sorted({str(l.get("id", "")).lstrip("0") for l in life})
     # 刷怪标签也带上 BOSS 档位，和左侧列表同一套判定
     mobnx = ws / "Mob.nx"
     meta = {m["id"]: m for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
+    # 刷怪点叠加：前端按 overlay 把世界坐标换算成预览图上的百分比位置。
+    # 这组参数必须和渲染实际用的一致（render_file 默认 pad=40、max_width=1600）。
+    R = _render_mod()
+    minx, miny, bw, bh = R.map_bounds(mj)
+    minx -= 40; miny -= 40; bw += 80; bh += 80
+    s = min(1.0, 1600 / max(1.0, bw))
+    points = [{"id": (k := str(l.get("id", "")).lstrip("0")),
+               "x": float(l.get("x", 0)), "y": float(l.get("y", 0)),
+               "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
+               "tier": meta.get(k, {}).get("tier", "normal")}
+              for l in life]
     return {"dir": str(outdir), "preview": size,
             "preview_url": (f"/preview/{png.relative_to(CACHE).as_posix()}" if preview
                             else f"/exports/{png.relative_to(EXPORTS).as_posix()}"),
@@ -549,7 +619,10 @@ def map_export(payload: dict = Body(...)):
                             "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
                             "tier": meta.get(k, {}).get("tier", "normal")} for k in kinds],
             "footholds": len(mj.get("foothold", [])),
-            "ladders": len(mj.get("ladderRope", []))}
+            "ladders": len(mj.get("ladderRope", [])),
+            "overlay": {"minx": minx, "miny": miny, "s": s,
+                        "w": round(bw * s), "h": round(bh * s)},
+            "life_points": points}
 
 
 @app.post("/api/export/clear-cache")

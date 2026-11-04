@@ -1,1 +1,101 @@
 # WzToolkit
+
+把冒险岛的 `.wz` 资源文件**导入 → 转换 → 浏览 → 导出**的独立小工具（WebUI）。
+
+```
+选一个放 .wz 的目录（工作区）
+   │  NoLifeWzToNx -c  把选中的 .wz 转成 .nx（.nx 落在 .wz 旁边）
+   ▼
+浏览器里浏览
+   ├─ 怪物：逐只预览全部动画帧
+   └─ 地图：渲染整图预览 + 刷怪表 / 地面 / 绳梯统计
+   ▼
+一键导出（exports\）
+   ├─ mobs\<id>\*.png              逐帧 sprite（直接可用于训练合成 / 图鉴）
+   └─ maps\<id>\{map.json, img\, preview.png}
+                                    map.json 含 life（刷怪表）/ foothold / ladderRope
+```
+
+## 首次使用
+
+```powershell
+# 1) 编译四个原生工具（需要 VS 的 C++ 工具集；一次即可）
+powershell -File build.ps1
+
+# 2) 启动（需要 python + fastapi + uvicorn + Pillow）
+#    双击 run.bat 也一样：自动起服务 + 打开浏览器
+python run.py
+#  → 打开 http://127.0.0.1:8791
+```
+
+## 说明
+
+- **不上传文件**：wz 动辄几百 MB，WebUI 只选本地目录路径，转换 / 导出全部在本机跑。
+- **工作区约定**：所有原生工具按「当前目录 + 裸文件名」找 `Map.nx` / `Mob.nx`，
+  所以转换和导出都以你选的目录为工作目录；`.nx` 永远生成在 `.wz` 旁边。
+- **常见顺序**：`Map.wz` 和 `Mob.wz` 是最有用的两个；想要怪物名字出现在目录名里，
+  顺带转一下 `String.wz`（nxmob 的 --named 会用它）。
+- **缓存**：预览产物放 `.cache\`（可随时清，接口 `POST /api/export/clear-cache`），
+  正式导出放 `exports\`。
+- 转换 `Map.wz`（约 640MB）需要几分钟，页面会显示进度日志。
+
+## 帧尺寸 / manifest.csv
+
+WZ 里**每一帧的画布都是按自己的包围盒裁出来的**（同一只怪 stand_00 是 28×28、
+stand_01 可能是 31×28、die 帧甚至 46×18），所以单看 PNG 尺寸会觉得"忽大忽小" ——
+那是原图如此，不是导错。真正决定画面位置的是 `origin`（锚点，通常在脚底中心），
+导出时会一并写进 `manifest.csv`：
+
+```
+id,name,anim,frame,file,w,h,ox,oy,delay
+2130103,"Jr. Necki",stand,0,"stand_00.png",28,28,14,28,500
+```
+
+- `ox,oy`：PNG 左上角到锚点的像素距离。把每帧按 `(-ox,-oy)` 摆到同一张画布上，
+  帧与帧才对得齐；这张公共画布的尺寸就是该动画**在客户端里的真实包围盒**。
+- `delay`：该帧停留毫秒数（WZ 没写时是 0，客户端按默认 ~120ms 播）。
+
+WebUI 预览默认 **1x = 客户端真实渲染尺寸**（缩放按钮切 2x/4x 只为看清楚），
+播放器里蓝横线是站地线、蓝点是锚点像素 —— 要和游戏里量到的大小/识别框比对时直接用 1x。
+
+## BOSS 识别
+
+列表里 BOSS 会用颜色标出来，判定只用 WZ 官方字段（`nxmob info` 一次全量导出）：
+
+- **info/boss=1** → BOSS（客户端画长血条、放 boss 音乐看的就是这个标记）；
+  再按 **maxHP** 分档：
+  - **大 BOSS**（深红底 + 红字 + 徽标）：maxHP ≥ 1000 万（Zakum / Horntail / Pink Bean 一档）
+  - **BOSS**（暗橙底 + 橙字）：其余 boss 标记的（如 Mano、King Clang）
+- 悬停任意一行可以看到 Lv / HP；列表上方有「全部 / BOSS / 大 BOSS」筛选，
+  第二行还能按「有图 / 无图」筛（唱片机、木桩这类 WZ 里就没有图片资源）。
+- **链接怪**：`info/link` 指向另一只怪、自己没帧的（如 Greatest Oldies →
+  Latest Hits Compilation），预览时自动导出目标怪并标注「画面同 xxx」，
+  和客户端行为一致。
+- 状态图标、检查用假怪（如 "A transparent item for checking elimination"）按 id 段
+  和名字剔除，不算 BOSS。
+- 地图详情的「刷怪」标签用同一套判定着色（大部分大 boss 是脚本刷的，`life` 里
+  未必有，标签没色就是普通怪）。
+
+## 地图
+
+- 地图列表可按「全部 / 有怪 / 无怪」筛（有无怪 = life 刷怪表里有没有 type=m 的条目，
+  这正是客户端进图刷怪的机制；脚本刷的大 boss 图会被算成"无怪"）。
+- **链接图**：`info/link` 指向另一张图、自己的 img 是空的（任务图 / 副本变种图
+  很常见），预览时自动渲染目标图并标注「画面同 xxx」。
+- 地图详情可勾选**显示刷怪点**：在预览图上标出每个出生点
+  （红=普通怪 / 橙=BOSS / 品红=大BOSS，悬停看怪名）。
+
+## 目录
+
+```
+build.ps1        一键编译（cl.exe 直接编，不依赖 msbuild）
+vendor\          全部源码与依赖（NoLifeWzToNx、nxmap/nxmob/nxscan、NoLifeNx、render_map、Mob.txt）
+bin\             编译产物
+app\main.py      FastAPI 后端
+app\static\      单页前端
+run.py           启动入口
+run.bat          双击启动（切目录 → 起服务 → 开浏览器）
+```
+
+来源致谢：NoLifeWzToNx（Peter Atashian / Ryan Payton，AGPL）、NoLifeNx、
+stb_image_write；怪物名表取自 HeavenMS 的 handbook。

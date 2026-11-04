@@ -65,6 +65,8 @@
           border: 1px solid currentColor; white-space: nowrap; }
   .tier.big { color: #ff6b6b; background: #ff6b6b1a; }
   .tier.boss { color: #ffb454; background: #ffb4541a; }
+  .tier.none { color: #9aa4ad; background: #9aa4ad1a; }
+  .list .it.noimg { opacity: .55; }
   .filters { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
   .filters button { font-size: 12px; padding: 1px 9px; }
   .filters button.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
@@ -117,6 +119,14 @@
   .mapimg { max-width: 100%; max-height: 430px; width: auto; display: block;
             border-radius: 6px; border: 1px solid var(--line);
             image-rendering: pixelated; cursor: zoom-in; }
+  /* 刷怪点叠加：百分比定位（和图片一起缩放），红=普通怪 橙=BOSS 品红=大BOSS */
+  .mapwrap { position: relative; display: inline-block; max-width: 100%; }
+  .lifedots { position: absolute; inset: 0; pointer-events: none; }
+  .ldot { position: absolute; width: 8px; height: 8px; border-radius: 50%;
+          background: #ff5d5d; border: 1px solid #000c; transform: translate(-50%, -50%);
+          box-shadow: 0 0 3px #0009; pointer-events: auto; cursor: help; }
+  .ldot.boss { background: #ffb454; }
+  .ldot.big  { background: #ff2d78; }
   th:first-child, td:first-child { width: 26px; }
   td { white-space: nowrap; }
   .flexline { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -161,8 +171,18 @@
           <button class="flt on" data-f="all">全部</button>
           <button class="flt" data-f="boss">BOSS</button>
           <button class="flt" data-f="big">大 BOSS</button>
-          <span class="muted" id="listcount"></span>
         </div>
+        <div class="filters" id="filters-img" style="margin-top:-4px">
+          <button class="flt on" data-f="all">全部</button>
+          <button class="flt" data-f="img">有图</button>
+          <button class="flt" data-f="none">无图</button>
+        </div>
+        <div class="filters" id="filters-map" style="display:none">
+          <button class="flt on" data-f="all">全部</button>
+          <button class="flt" data-f="mob">有怪</button>
+          <button class="flt" data-f="empty">无怪</button>
+        </div>
+        <div class="row" style="margin:2px 0 6px"><span class="muted" id="listcount"></span></div>
         <div class="list" id="list"></div>
       </div>
       <div class="detail" id="detail">
@@ -199,6 +219,9 @@ function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " +
 let WS = null, MOBS = [], MAPS = [], TAB = "mob", TIMER = null;
 let mobSel = null, mapSel = null;
 let MOBFILT = "all";   // all | boss | big
+let MOBFILT2 = "all";  // all | img | none（按有没有图片资源筛）
+let MAPFILT = "all";   // all | mob | empty
+let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
 async function boot() {
   try {
@@ -268,35 +291,51 @@ async function pollJob() {
 }
 
 async function loadLists() {
-  MOBS = []; MAPS = [];
+  MOBS = []; MAPS = []; LIFE = new Set();
   try { const d = await api("/api/mobs"); MOBS = d.mobs; } catch (e) {}
-  try { const d = await api("/api/maps"); MAPS = d.maps; } catch (e) {}
+  try {
+    const d = await api("/api/maps");
+    MAPS = d.maps;
+    LIFE = new Set(d.life_maps || []);
+  } catch (e) {}
   renderList();
 }
 
 function renderList() {
   const q = $("#q").value.trim().toLowerCase();
   const box = $("#list");
+  $("#filters").style.display = TAB === "mob" ? "" : "none";
+  $("#filters-img").style.display = TAB === "mob" ? "" : "none";
+  $("#filters-map").style.display = TAB === "mob" ? "none" : "";
   if (TAB === "mob") {
     let items = MOBS;
     if (MOBFILT === "boss") items = items.filter((m) => m.tier === "big" || m.tier === "boss");
     else if (MOBFILT === "big") items = items.filter((m) => m.tier === "big");
+    if (MOBFILT2 === "img") items = items.filter((m) => m.img_ok);
+    else if (MOBFILT2 === "none") items = items.filter((m) => !m.img_ok);
     if (q) items = items.filter((m) => m.id.includes(q) || (m.name || "").toLowerCase().includes(q));
     const top = items.slice(0, 400);
     $("#listcount").textContent = `${items.length} 只`;
     box.innerHTML = top.map((m) => {
       const badge = m.tier === "big" ? '<span class="tier big">大BOSS</span>'
-        : m.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
-      return `<div class="it ${m.tier}" data-raw="${m.raw}" data-id="${m.id}" data-tier="${m.tier}"
+        : m.tier === "boss" ? '<span class="tier boss">BOSS</span>'
+        : (m.img_ok === false ? '<span class="tier none">无图</span>' : "");
+      return `<div class="it ${m.tier}${m.img_ok === false ? " noimg" : ""}" data-raw="${m.raw}" data-id="${m.id}" data-tier="${m.tier}"
           title="Lv ${m.level} · HP ${m.hp.toLocaleString()}">
          <span class="id">${m.id}</span><span class="nm">${m.name || ""}</span>${badge}
        </div>`;
     }).join("") || '<div class="muted" style="padding:10px">没有匹配（或还没转换 Mob.wz）</div>';
   } else {
     let items = MAPS;
+    if (MAPFILT === "mob") items = items.filter((m) => LIFE.has(m));
+    else if (MAPFILT === "empty") items = items.filter((m) => !LIFE.has(m));
     if (q) items = items.filter((m) => m.includes(q));
     const top = items.slice(0, 400);
-    $("#listcount").textContent = `${items.length} 张`;
+    // 有怪/无怪全都是 5262 张 = 后端没返回刷怪数据（服务还是改代码前起的进程）
+    $("#listcount").textContent =
+      (MAPFILT !== "all" && !LIFE.size && MAPS.length)
+        ? `${MAPS.length} 张 · 刷怪数据未加载 —— 重启服务后刷新页面`
+        : `${items.length} 张`;
     box.innerHTML = top.map((m) =>
       `<div class="it" data-id="${m}"><span class="id">${m}</span></div>`).join("")
       || '<div class="muted" style="padding:10px">没有匹配（或还没转换 Map.wz）</div>';
@@ -397,8 +436,11 @@ function renderMobDetail(det, d, m, preview) {
     : m.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
   const stats = (m.level != null && m.hp != null)
     ? ` · Lv ${m.level} · HP ${Number(m.hp).toLocaleString()}` : "";
+  // 链接怪：自己没帧，后端已顺着 info/link 导出目标怪
+  const linkNote = d.link
+    ? ` <span class="pill" title="这种怪自己的 img 没有帧，客户端渲染 link 指向的怪">链接怪 → 画面同 <b>${d.link.to}</b></span>` : "";
   det.innerHTML = `<div class="flexline"><div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"}
-      ${tierBadge}<br><span class="muted">${d.count} 帧${preview ? "（预览）" : ""}${stats}</span></div>
+      ${tierBadge}${linkNote}<br><span class="muted">${d.count} 帧${preview ? "（预览）" : ""}${stats}</span></div>
       ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}</div>
     <div class="muted" style="margin:4px 0 2px">${d.dir}</div>
     <div class="zoombar"><span class="muted">缩放：</span>
@@ -491,6 +533,24 @@ function renderMobDetail(det, d, m, preview) {
   draw();
 }
 
+let mapData = null;    // 当前地图的导出结果（含刷怪点 / 坐标变换）
+
+function renderLifeDots() {
+  const box = $("#lifedots");
+  if (!box) return;
+  const on = $("#life-toggle") && $("#life-toggle").checked;
+  box.innerHTML = "";
+  if (!on || !mapData || !mapData.life_points) return;
+  const ov = mapData.overlay;
+  // 世界坐标 → 预览图像素 → 百分比（图片被 CSS 缩放也能对准）
+  box.innerHTML = mapData.life_points.map((p) => {
+    const l = (p.x - ov.minx) * ov.s / ov.w * 100;
+    const t = (p.y - ov.miny) * ov.s / ov.h * 100;
+    const cls = p.tier === "big" ? " big" : p.tier === "boss" ? " boss" : "";
+    return `<span class="ldot${cls}" style="left:${l}%;top:${t}%" title="${p.name || "怪物"} ${p.id}"></span>`;
+  }).join("");
+}
+
 async function mapLoad(id, preview) {
   const det = $("#detail");
   det.innerHTML = `<div>地图 <b>${id}</b><br><span class="muted">导出 + 渲染中（大图要几秒）…</span></div>`;
@@ -501,15 +561,27 @@ async function mapLoad(id, preview) {
     });
     const kinds = (d.life_kinds || []).map((k) =>
       `<span class="pill ${k.tier === "big" ? "bigboss" : k.tier === "boss" ? "bossmob" : ""}">${k.name || k.id} <b>${k.id}</b>${k.tier === "big" ? " 大BOSS" : k.tier === "boss" ? " BOSS" : ""}</span>`).join("");
-    det.innerHTML = `<div class="flexline"><div>地图 <b>${id}</b> ·
+    // 链接图：自己的 img 是空的，客户端渲染 link 指向的那张 —— 后端已顺着导出目标图
+    const linkNote = d.link
+      ? ` <span class="pill" title="这种图自己的 img 是空的，客户端渲染时加载 link 指向的图">链接图 → 画面同 <b>${d.link.to}</b></span>` : "";
+    det.innerHTML = `<div class="flexline"><div>地图 <b>${id}</b>${linkNote} ·
       ${d.preview.w}×${d.preview.h}${preview ? "（预览）" : ""}</div>
-      ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}</div>
+      <div class="row">
+        ${d.life_count ? `<label class="muted" style="cursor:pointer"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>` : ""}
+        ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}
+      </div></div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
       <div style="margin-bottom:6px">${kinds || '<span class="muted">这张图没有怪物</span>'}</div>
-      <a href="${d.preview_url}" target="_blank" title="点开看原尺寸">
-        <img class="mapimg" src="${d.preview_url}" loading="lazy">
-      </a>
+      <span class="mapwrap">
+        <a href="${d.preview_url}" target="_blank" title="点开看原尺寸">
+          <img class="mapimg" src="${d.preview_url}" loading="lazy">
+        </a>
+        <span class="lifedots" id="lifedots"></span>
+      </span>
       <div class="muted" style="margin-top:4px">竖长地图已等比缩放，点图看原尺寸</div>`;
+    mapData = d;
+    const lt = $("#life-toggle");
+    if (lt) lt.onchange = renderLifeDots;
     const b = $("#do-export");
     if (b) b.onclick = () => mapLoad(id, false);
   } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
@@ -552,14 +624,19 @@ $("#ws-scan").onclick = scan;
 $("#ws-browse").onclick = browseOpen;
 $("#cv-go").onclick = convert;
 $("#q").oninput = renderList;
-$("#filters").onclick = (e) => {
-  const b = e.target.closest(".flt");
-  if (!b) return;
-  $$("#filters .flt").forEach((x) => x.classList.remove("on"));
-  b.classList.add("on");
-  MOBFILT = b.dataset.f;
-  renderList();
-};
+function bindFilters(sel, setter) {
+  $(sel).onclick = (e) => {
+    const b = e.target.closest(".flt");
+    if (!b) return;
+    $(sel).querySelectorAll(".flt").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on");
+    setter(b.dataset.f);
+    renderList();
+  };
+}
+bindFilters("#filters", (f) => MOBFILT = f);
+bindFilters("#filters-img", (f) => MOBFILT2 = f);
+bindFilters("#filters-map", (f) => MAPFILT = f);
 $("#tab-mob").onclick = () => { TAB = "mob"; $("#tab-mob").classList.add("on"); $("#tab-map").classList.remove("on"); renderList(); };
 $("#tab-map").onclick = () => { TAB = "map"; $("#tab-map").classList.add("on"); $("#tab-mob").classList.remove("on"); renderList(); };
 document.addEventListener("click", (e) => {

@@ -219,3 +219,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 /exports
+
+# WorkBuddy 本地工作数据
+.workbuddy/

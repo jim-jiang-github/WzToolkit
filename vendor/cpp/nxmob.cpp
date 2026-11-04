@@ -242,11 +242,27 @@ static std::string info_link(nl::node info) {
     return std::string();
 }
 
-// 导出图鉴属性：id,name,boss,level,maxhp,exp
+// 该怪自身有多少动画帧（link 怪自己是 0，客户端渲染 link 目标的帧）。
+static long long mob_frame_count(nl::node mob) {
+    long long n = 0;
+    for (nl::node anim : mob) {
+        std::string an = anim.name();
+        if (an == "info" || an == "link") continue;
+        if (!anim["0"]) continue;
+        for (int f = 0;; ++f) {
+            if (!anim[std::to_string(f).c_str()]) break;
+            ++n;
+        }
+    }
+    return n;
+}
+
+// 导出图鉴属性：id,name,boss,level,maxhp,exp,link,frames
 // boss=1 是 WZ 官方标记（客户端画血条/播 boss 音乐就看它），比按 id 段或名字猜靠谱。
+// link = info/link 最终指向的怪 id（没有则空）；frames = 自身动画帧数。
 static int cmd_info() {
     std::vector<std::string> ids = list_mob_ids();
-    std::cout << "id,name,boss,level,maxhp,exp\n";
+    std::cout << "id,name,boss,level,maxhp,exp,link,frames\n";
     for (const std::string & id : ids) {
         nl::node mob = find_mob(id);
         if (!mob) continue;
@@ -255,10 +271,12 @@ static int cmd_info() {
         // link 怪自己没有完整 info，往目标跳（最多 4 跳，防环）
         nl::node src = info;
         std::string target = info_link(info);
+        std::string linkTo = target;   // 最终指向的怪 id（无 link 则空）
         for (int hop = 0; hop < 4 && !target.empty(); ++hop) {
             nl::node t = find_mob(norm_id(target));
             if (!t || !t["info"]) break;
             src = t["info"];
+            linkTo = target;
             target = info_link(src);
         }
         long long boss = info_int(src, "boss");
@@ -267,7 +285,9 @@ static int cmd_info() {
         long long exp = info_int(src, "exp");
         std::string nm = mob_name(id);
         std::cout << id << ",\"" << nm << "\"," << (boss > 0 ? 1 : 0)
-                  << "," << lv << "," << hp << "," << exp << "\n";
+                  << "," << lv << "," << hp << "," << exp << ","
+                  << (linkTo.empty() ? std::string() : norm_id(linkTo)) << ","
+                  << mob_frame_count(mob) << "\n";
     }
     std::cout.flush();
     return 0;
