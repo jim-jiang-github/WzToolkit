@@ -120,6 +120,9 @@
             image-rendering: pixelated; cursor: zoom-in; }
   /* 刷怪点叠加：百分比定位（和图片一起缩放），红=普通怪 橙=BOSS 品红=大BOSS */
   .mapwrap { position: relative; display: inline-block; max-width: 100%; }
+  .rgrow input[type=number] { width: 76px; padding: 2px 4px; }
+  #rgsel { position: absolute; display: none; pointer-events: none;
+           border: 1.5px dashed #378add; background: #378add1f; }
   .lifedots { position: absolute; inset: 0; pointer-events: none; }
   .ldot { position: absolute; width: 8px; height: 8px; border-radius: 50%;
           background: #ff5d5d; border: 1px solid #000c; transform: translate(-50%, -50%);
@@ -253,6 +256,61 @@ let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // 导出的地图图里是否把怪物画进去
 let DENSITY = 1;        // 怪物密度倍数（页面叠加与导出合成共用）
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
+let REGION = null;      // 导出区域 {x, y, w, h} 世界坐标（null = 整图）
+let RGDRAG = null;       // 拖框进行中的状态 {x, y, moved}
+let RGJUSTDRAGGED = false;
+
+/* 图上拖框选区域：mousedown 在 #mapsel（mapLoad 里绑定），move/up 在 window（只绑一次） */
+window.addEventListener("mousemove", (e) => {
+  if (!RGDRAG) return;
+  const wrap = $("#mapsel");
+  if (!wrap) { RGDRAG = null; return; }
+  const img = wrap.querySelector("img.mapimg");
+  if (!img) return;
+  if (Math.abs(e.clientX - RGDRAG.x) + Math.abs(e.clientY - RGDRAG.y) > 4) RGDRAG.moved = true;
+  if (!RGDRAG.moved) return;
+  const r = img.getBoundingClientRect();
+  const cx = (v) => Math.min(Math.max(v, r.left), r.right);
+  const cy = (v) => Math.min(Math.max(v, r.top), r.bottom);
+  const sel = $("#rgsel");
+  if (sel) {
+    sel.style.display = "";
+    sel.style.left = (Math.min(cx(RGDRAG.x), cx(e.clientX)) - r.left) + "px";
+    sel.style.top = (Math.min(cy(RGDRAG.y), cy(e.clientY)) - r.top) + "px";
+    sel.style.width = Math.abs(cx(e.clientX) - cx(RGDRAG.x)) + "px";
+    sel.style.height = Math.abs(cy(e.clientY) - cy(RGDRAG.y)) + "px";
+  }
+});
+window.addEventListener("mouseup", (e) => {
+  if (!RGDRAG) return;
+  const drag = RGDRAG;
+  RGDRAG = null;
+  const sel = $("#rgsel");
+  if (sel) sel.style.display = "none";
+  if (!drag.moved || !mapData) return;
+  const wrap = $("#mapsel");
+  const img = wrap && wrap.querySelector("img.mapimg");
+  if (!img) return;
+  const r = img.getBoundingClientRect();
+  const o = mapData.overlay;
+  const cx = (v) => Math.min(Math.max(v, r.left), r.right);
+  const cy = (v) => Math.min(Math.max(v, r.top), r.bottom);
+  // 显示像素 → 世界坐标（overlay.w/s 是窗口对应的世界宽度）
+  const wx = (v) => o.minx + (cx(v) - r.left) / r.width * o.w / o.s;
+  const wy = (v) => o.miny + (cy(v) - r.top) / r.height * o.h / o.s;
+  REGION = {
+    x: Math.round(Math.min(wx(drag.x), wx(e.clientX))),
+    y: Math.round(Math.min(wy(drag.y), wy(e.clientY))),
+    w: Math.round(Math.abs(wx(e.clientX) - wx(drag.x))),
+    h: Math.round(Math.abs(wy(e.clientY) - wy(drag.y))),
+  };
+  const rgx = $("#rg-x"), rgy = $("#rg-y"), rgw = $("#rg-w"), rgh = $("#rg-h");
+  if (rgx) rgx.value = REGION.x;
+  if (rgy) rgy.value = REGION.y;
+  if (rgw) rgw.value = REGION.w;
+  if (rgh) rgh.value = REGION.h;
+  RGJUSTDRAGGED = true;   // 抑制随后而来的 click 放大
+});
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
 async function boot() {
@@ -580,13 +638,18 @@ async function lifeOverlayHTML() {
   if (!on && !sprites) return "";
   const ov = mapData.overlay;
   const kinds = (mapData.life_kinds || []).filter((k) => k && k.id);
+  // 区域裁剪后 overlay 只覆盖窗口：范围外的点不画
+  const wx1 = ov.minx + ov.w / ov.s, wy1 = ov.miny + ov.h / ov.s;
+  const inView = (p) => p.x >= ov.minx - 40 && p.x <= wx1 + 40 &&
+                         p.y >= ov.miny - 60 && p.y <= wy1 + 20;
+  const pts = mapData.life_points.filter(inView);
   const pct = (p) => ({
     l: (p.x - ov.minx) * ov.s / ov.w * 100,
     t: (p.y - ov.miny) * ov.s / ov.h * 100,
   });
   let html = "";
   if (on) {
-    html += mapData.life_points.map((p) => {
+    html += pts.map((p) => {
       const { l, t } = pct(p);
       const cls = p.tier === "big" ? " big" : p.tier === "boss" ? " boss" : "";
       return `<span class="ldot${cls}" style="left:${l}%;top:${t}%" title="${p.name || "怪物"} ${p.id}"></span>`;
@@ -600,7 +663,7 @@ async function lifeOverlayHTML() {
     const usable = kinds.filter((k) => icons[k.id]);
     if (usable.length) {
       const den = Math.max(1, Math.min(10, DENSITY | 0));
-      html += mapData.life_points.map((p) => {
+      html += pts.map((p) => {
         const { l, t } = pct(p);
         let out = "";
         for (let i = 0; i < den; i++) {
@@ -657,13 +720,14 @@ async function mzOpen() {
 function mzClose() { $("#mapzoom").hidden = true; }
 
 async function mapLoad(id, preview) {
+  if (mapRef && mapRef.id !== id) REGION = null;   // 换图清掉旧区域
   mapRef = { id, preview };
   const det = $("#detail");
   det.innerHTML = `<div>地图 <b>${id}</b><br><span class="muted">导出 + 渲染中（大图要几秒）…</span></div>`;
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY }),
+      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, region: REGION }),
     });
     const kinds = (d.life_kinds || []).map((k) =>
       `<span class="pill ${k.tier === "big" ? "bigboss" : k.tier === "boss" ? "bossmob" : ""}">${k.name || k.id} <b>${k.id}</b>${k.tier === "big" ? " 大BOSS" : k.tier === "boss" ? " BOSS" : ""}</span>`).join("");
@@ -683,16 +747,36 @@ async function mapLoad(id, preview) {
       </div></div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
       <div style="margin-bottom:6px">${kinds || '<span class="muted">这张图没有怪物</span>'}</div>
-      <span class="mapwrap">
+      <div class="row rgrow" style="margin-bottom:4px">
+        <span class="muted">导出区域</span>
+        X <input type="number" id="rg-x" value="${REGION ? REGION.x : ""}" />
+        Y <input type="number" id="rg-y" value="${REGION ? REGION.y : ""}" />
+        宽 <input type="number" id="rg-w" value="${REGION ? REGION.w : ""}" placeholder="1366" />
+        高 <input type="number" id="rg-h" value="${REGION ? REGION.h : ""}" placeholder="768" />
+        <select id="rg-preset" title="常见客户端分辨率">
+          <option value="">预设…</option>
+          <option value="1366,768">1366×768</option>
+          <option value="1024,768">1024×768</option>
+          <option value="800,600">800×600</option>
+        </select>
+        <button class="mini" id="rg-clear" title="清空区域，恢复整图导出">清除</button>
+      </div>
+      <div class="muted" style="margin:0 0 6px">留空导出整图；也可以直接在下面的图上<b>拖框</b>选区域（世界坐标，游戏客户端画面就是固定分辨率的窗口）</div>
+      <span class="mapwrap" id="mapsel">
         <a href="${d.preview_url}" title="点开放大查看（怪物/刷怪点叠加同样显示）" id="mz-open">
           <img class="mapimg" src="${d.preview_url}" loading="lazy">
         </a>
         <span class="lifedots" id="lifedots"></span>
+        <span id="rgsel"></span>
       </span>
       <div class="muted" style="margin-top:4px">竖长地图已等比缩放，点图放大（适应 / 1x / 2x / 4x）</div>`;
     mapData = d;
     const mo = $("#mz-open");
-    if (mo) mo.onclick = (e) => { e.preventDefault(); mzOpen(); };
+    if (mo) mo.onclick = (e) => {
+      e.preventDefault();
+      if (RGJUSTDRAGGED) { RGJUSTDRAGGED = false; return; }  // 刚拖完框，别触发放大
+      mzOpen();
+    };
     const lt = $("#life-toggle");
     if (lt) lt.onchange = renderLifeDots;
     const mt = $("#mob-toggle");
@@ -711,6 +795,29 @@ async function mapLoad(id, preview) {
     }
     const b = $("#do-export");
     if (b) b.onclick = () => mapLoad(id, false);
+    // 区域导出：预设 / 清除 / 手填，与图上拖框（见下方 window 级拖框逻辑）
+    const rgx = $("#rg-x"), rgy = $("#rg-y"), rgw = $("#rg-w"), rgh = $("#rg-h");
+    const rgRead = () => {
+      const x = parseFloat(rgx.value), y = parseFloat(rgy.value);
+      const w = parseFloat(rgw.value), h = parseFloat(rgh.value);
+      REGION = (Number.isFinite(x) && Number.isFinite(y) &&
+                Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0)
+        ? { x, y, w, h } : null;
+    };
+    [rgx, rgy, rgw, rgh].forEach((el) => { if (el) el.onchange = rgRead; });
+    const rgp = $("#rg-preset");
+    if (rgp) rgp.onchange = () => {
+      if (!rgp.value) return;
+      const [w, h] = rgp.value.split(",").map(Number);
+      rgw.value = w; rgh.value = h;
+      rgRead();
+    };
+    const rgc = $("#rg-clear");
+    if (rgc) rgc.onclick = () => { REGION = null; mapLoad(mapRef.id, mapRef.preview); };
+    const msel = $("#mapsel");
+    if (msel) msel.onmousedown = (e) => {
+      if (e.button === 0) RGDRAG = { x: e.clientX, y: e.clientY, moved: false };
+    };
   } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
 }
 

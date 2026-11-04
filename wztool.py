@@ -655,7 +655,8 @@ def c_mob_export(raw: str, preview: bool = False) -> dict:
 
 
 def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
-                 density: int = 1, _visited: set | None = None) -> dict:
+                 density: int = 1, region: tuple | None = None,
+                 _visited: set | None = None) -> dict:
     """导出一张地图：map.json（life/foothold/ladderRope）+ 全部贴图 + 渲染预览图。
 
     链接图（info/link，自己的 img 是空的）自动顺链导出目标图，返回带 link 字段。
@@ -694,15 +695,16 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     # 链接图：拿目标图的数据渲染（客户端同款行为）
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
-        d = c_map_export(link, preview, mobs, density, visited)
+        d = c_map_export(link, preview, mobs, density, region, visited)
         d["link"] = {"from": mid, "to": link}
         return d
 
-    return _map_export_inner(ws, mid, preview, mobs, density, visited, outdir=outdir, mj=mj)
+    return _map_export_inner(ws, mid, preview, mobs, density, region, visited, outdir=outdir, mj=mj)
 
 
 def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: int,
-                      visited: set, outdir: Path | None = None, mj: dict | None = None) -> dict:
+                      region: tuple | None, visited: set,
+                      outdir: Path | None = None, mj: dict | None = None) -> dict:
     root = CACHE if preview else EXPORTS
     if outdir is None:
         outdir = (root / "map" / mid) if preview else (EXPORTS / "maps" / mid)
@@ -749,6 +751,36 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
             result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview
                                      else f"/exports/{rel.as_posix()}")
             result["mobs"] = True
+    # 区域裁剪：只导出世界坐标 (x, y, w, h) 的窗口（客户端画面就是固定分辨率的窗口）
+    if region:
+        rx, ry, rw, rh = (float(v) for v in region)
+        if rw <= 0 or rh <= 0:
+            raise CliError("区域宽高必须大于 0", 2)
+        from PIL import Image
+        src = Image.open(Path(result["preview_path"]))
+        W, H = src.size
+        left = max(0, round((rx - minx) * s))
+        top = max(0, round((ry - miny) * s))
+        right = min(W, round((rx + rw - minx) * s))
+        bottom = min(H, round((ry + rh - miny) * s))
+        if right - left < 8 or bottom - top < 8:
+            raise CliError(
+                "区域不在地图范围内。地图世界坐标范围："
+                f"x∈[{minx:.0f},{minx + bw:.0f}] y∈[{miny:.0f},{miny + bh:.0f}]", 2)
+        def _n(v: float) -> str:
+            return str(int(v)) if float(v).is_integer() else str(v)
+        out_png = outdir / f"preview_region_x{_n(rx)}_y{_n(ry)}_w{_n(rw)}_h{_n(rh)}.png"
+        src.crop((left, top, right, bottom)).save(out_png)
+        cw, ch = right - left, bottom - top
+        rel = (out_png.relative_to(CACHE) if preview else out_png.relative_to(EXPORTS))
+        result["preview"] = {"w": cw, "h": ch}
+        result["preview_path"] = str(out_png)
+        result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview
+                                 else f"/exports/{rel.as_posix()}")
+        result["region"] = {"x": rx, "y": ry, "w": rw, "h": rh,
+                            "px": {"x": left, "y": top, "w": cw, "h": ch}}
+        # 叠加层坐标系改为以区域左上角为原点，圆点/立绘在裁剪图上照样对准
+        result["overlay"] = {"minx": rx, "miny": ry, "s": s, "w": cw, "h": ch}
     return result
 
 
@@ -888,9 +920,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/mob/export":
             self._api(c_mob_export, str(b.get("raw") or ""), bool(b.get("preview")))
         elif path == "/api/map/export":
+            rg = b.get("region")
+            region = None
+            if rg:
+                try:
+                    t = (rg["x"], rg["y"], rg["w"], rg["h"]) if isinstance(rg, dict) else rg[:4]
+                    region = tuple(float(v) for v in t)
+                except Exception:
+                    region = None
             self._api(c_map_export, str(b.get("id") or ""),
                       bool(b.get("preview")), bool(b.get("mobs")),
-                      int(b.get("density") or 1))
+                      int(b.get("density") or 1), region)
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
         elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps") \
@@ -1040,7 +1080,17 @@ def cmd_mob_export(a) -> int:
 
 
 def cmd_map_export(a) -> int:
-    d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density)
+    region = None
+    if getattr(a, "region", None):
+        try:
+            parts = [float(v) for v in str(a.region).replace("，", ",").split(",")]
+            if len(parts) != 4:
+                raise ValueError
+            region = tuple(parts)
+        except ValueError:
+            print("错误: --region 应为 X,Y,W,H（如 850,-900,1366,768）", file=sys.stderr)
+            return 2
+    d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density, region=region)
     if a.json:
         _out(d, True)
     else:
@@ -1165,6 +1215,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mobs", action="store_true", help="预览图合成怪物（随机、按地图 id 定种）")
     p.add_argument("--density", type=int, default=1, metavar="N",
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
+    p.add_argument("--region", metavar="X,Y,W,H",
+                   help="只导出世界坐标区域。含负数时必须用 = 形式，"
+                        "如 --region=850,-900,1366,768"
+                        "（客户端画面就是固定分辨率窗口，常见 1366×768 / 1024×768 / 800×600）")
     _j(p); p.set_defaults(fn=cmd_map_export)
 
     p = sub.add_parser("clear-cache", help="清空 .cache 预览缓存（exports 不动）")

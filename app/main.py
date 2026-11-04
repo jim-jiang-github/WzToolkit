@@ -680,6 +680,17 @@ def _read_manifest(outdir: Path, preview: bool, pngs: list[Path]) -> list[dict]:
     return out
 
 
+def _parse_region(rg) -> tuple | None:
+    """前端传来的 region（dict 或 list）→ (x, y, w, h) 元组；不合法返回 None。"""
+    if not rg:
+        return None
+    try:
+        t = (rg["x"], rg["y"], rg["w"], rg["h"]) if isinstance(rg, dict) else rg[:4]
+        return tuple(float(v) for v in t)
+    except Exception:
+        return None
+
+
 @app.post("/api/map/export")
 def map_export(payload: dict = Body(...)):
     """导出一张地图（map.json + 全部贴图 + 渲染预览图）。
@@ -694,11 +705,13 @@ def map_export(payload: dict = Body(...)):
         raise HTTPException(400, "地图 id 应该是 9 位数字")
     return _map_export(ws, mid, bool(payload.get("preview")), set(),
                        bool(payload.get("mobs")),
-                       int(payload.get("density") or 1))
+                       int(payload.get("density") or 1),
+                       _parse_region(payload.get("region")))
 
 
 def _map_export(ws: Path, mid: str, preview: bool, visited: set,
-                mobs: bool = False, density: int = 1) -> dict:
+                mobs: bool = False, density: int = 1,
+                region: tuple | None = None) -> dict:
     if mid in visited:
         raise HTTPException(500, f"link 成环了：{' → '.join(sorted(visited))} → {mid}")
     visited.add(mid)
@@ -723,7 +736,7 @@ def _map_export(ws: Path, mid: str, preview: bool, visited: set,
     # 链接图：拿目标图的数据渲染（客户端同款行为）
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
-        d = _map_export(ws, link, preview, visited, mobs, density)
+        d = _map_export(ws, link, preview, visited, mobs, density, region)
         d["link"] = {"from": mid, "to": link}
         return d
 
@@ -768,6 +781,36 @@ def _map_export(ws: Path, mid: str, preview: bool, visited: set,
             result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview
                                      else f"/exports/{rel.as_posix()}")
             result["mobs"] = True
+    # 区域裁剪：只导出世界坐标 (x, y, w, h) 的窗口（客户端画面就是固定分辨率的窗口）
+    if region:
+        rx, ry, rw, rh = (float(v) for v in region)
+        if rw <= 0 or rh <= 0:
+            raise HTTPException(400, "区域宽高必须大于 0")
+        from PIL import Image
+        src_path = Path(mob_png) if (mobs and life and mob_png) else png
+        src = Image.open(src_path)
+        W, H = src.size
+        left = max(0, round((rx - minx) * s))
+        top = max(0, round((ry - miny) * s))
+        right = min(W, round((rx + rw - minx) * s))
+        bottom = min(H, round((ry + rh - miny) * s))
+        if right - left < 8 or bottom - top < 8:
+            raise HTTPException(
+                400, "区域不在地图范围内。地图世界坐标范围："
+                f"x∈[{minx:.0f},{minx + bw:.0f}] y∈[{miny:.0f},{miny + bh:.0f}]")
+        def _n(v: float) -> str:
+            return str(int(v)) if float(v).is_integer() else str(v)
+        out_png = outdir / f"preview_region_x{_n(rx)}_y{_n(ry)}_w{_n(rw)}_h{_n(rh)}.png"
+        src.crop((left, top, right, bottom)).save(out_png)
+        cw, ch = right - left, bottom - top
+        rel = (out_png.relative_to(CACHE) if preview else out_png.relative_to(EXPORTS))
+        result["preview"] = {"w": cw, "h": ch}
+        result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview
+                                 else f"/exports/{rel.as_posix()}")
+        result["region"] = {"x": rx, "y": ry, "w": rw, "h": rh,
+                            "px": {"x": left, "y": top, "w": cw, "h": ch}}
+        # 叠加层坐标系改为以区域左上角为原点，圆点/立绘在裁剪图上照样对准
+        result["overlay"] = {"minx": rx, "miny": ry, "s": s, "w": cw, "h": ch}
     return result
 
 
