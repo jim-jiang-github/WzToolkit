@@ -873,6 +873,9 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
                             "tier": meta.get(k, {}).get("tier", "normal")} for k in kinds],
             "footholds": len(mj.get("foothold", [])),
             "ladders": len(mj.get("ladderRope", [])),
+            # 地面段 [x1,y1,x2,y2]：可站立区域（含斜坡），导航/跳跃规划用
+            "foothold_segs": [[f["x1"], f["y1"], f["x2"], f["y2"]]
+                              for f in mj.get("foothold", [])],
             # 绳梯段 [x,y1,y2,l]：l=1 梯子 / 0 绳子
             "ladder_rope": [[lr["x"], lr["y1"], lr["y2"], lr.get("l", 0)]
                             for lr in mj.get("ladderRope", [])]}
