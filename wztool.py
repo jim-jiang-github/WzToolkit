@@ -531,10 +531,12 @@ def c_mob_icon(raw: str) -> dict:
 
 def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
                    density: int = 1) -> Path | None:
-    """把这张图的怪随机贴到刷怪点上，产出 preview_mobs.png（脚底落在 cy 地面）。
+    """把这张图的怪随机贴到地面上，产出 preview_mobs.png（脚底落在 foothold 地面）。
 
-    density>1 时每个刷怪点放 density 只：第 1 只在原位附近，其余左右散开
-    （±20~150 世界像素）；所有怪 50% 随机镜像朝向，随机结果按 seed 稳定。
+    每个怪在「随机游走区间」内取随机 x：优先用 life 自带 rx0~rx1（客户端巡逻区间），
+    没有就按图宽 ±8% 兜底；y 由 foothold 段线性插值得出（同一段里取离出生地面最近
+    的，保证贴地不悬空），落点悬空时退回出生点附近。所有怪 50% 随机镜像朝向，
+    随机结果按 seed 稳定（同 seed 同布局）。
     """
     from PIL import Image
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
@@ -563,22 +565,45 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     im = Image.open(base_png).convert("RGBA")
     rng = random.Random(f"{seed}:d{density}")
     keys = list(frames)
+    fhs = [(float(f["x1"]), float(f["y1"]), float(f["x2"]), float(f["y2"]))
+           for f in mj.get("foothold", [])]
+
+    def _ground(x: float, y_ref: float) -> float | None:
+        """x 处的地面 y：含 x 的 foothold 段里取离 y_ref 最近的一条（线性插值）。"""
+        best_d = None
+        best_y = None
+        for x1, y1, x2, y2 in fhs:
+            lo, hi = (x1, x2) if x1 <= x2 else (x2, x1)
+            if hi > lo and lo <= x <= hi:
+                y = y1 + (y2 - y1) * (x - x1) / (x2 - x1)
+                d = abs(y - y_ref)
+                if best_d is None or d < best_d:
+                    best_d, best_y = d, y
+        return best_y
+
     for l in life:
-        fh = l.get("fh")
+        bx = float(l.get("x", 0))
         # 客户端同款落地：life 的 y 只是参考点，真正站的是 cy（所站 foothold 的 y）
-        gy = float(l.get("cy", l.get("y", 0))) if fh else float(l.get("y", 0))
-        for i in range(max(1, density)):
+        base_y = float(l.get("cy", l.get("y", 0))) if l.get("fh") else float(l.get("y", 0))
+        # 随机游走区间：客户端 rx0~rx1（巡逻范围），缺省按图宽 ±8% 兜底
+        rx0, rx1 = l.get("rx0"), l.get("rx1")
+        if rx0 is not None and rx1 is not None and float(rx1) > float(rx0):
+            lo, hi = float(rx0), float(rx1)
+        else:
+            spread = max(120.0, bw * 0.08)
+            lo, hi = bx - spread, bx + spread
+        for _ in range(max(1, density)):
             # 所有怪都可能随机镜像朝向
             flip = rng.random() < 0.5
             img, ox, oy = frames_flip[rng.choice(keys)] if flip else frames[rng.choice(keys)]
-            # 第 1 只贴着出生点（±12 抖动）；多出的散得更开更随机（±20~150）
-            if i == 0:
-                dx = rng.uniform(-12, 12)
-            else:
-                dx = rng.uniform(20, 150) * rng.choice((-1, 1))
-                if rng.random() < 0.25:      # 偶尔贴得近一点，避免机械等距
-                    dx = rng.uniform(12, 30) * rng.choice((-1, 1))
-            px = (float(l.get("x", 0)) + dx - minx) * s - ox
+            x = rng.uniform(lo, hi)
+            gy = _ground(x, base_y)
+            if gy is None:            # 落点下面没有地面（悬崖外）→ 退回出生点附近
+                x = bx + rng.uniform(-15, 15)
+                gy = _ground(x, base_y)
+                if gy is None:
+                    gy = base_y
+            px = (x - minx) * s - ox
             py = (gy - miny) * s - oy
             im.alpha_composite(img, (round(px), round(py)))
     out = outdir / "preview_mobs.png"
@@ -656,13 +681,16 @@ def c_mob_export(raw: str, preview: bool = False) -> dict:
 
 def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
                  density: int = 1, region: tuple | None = None,
+                 seed: str | None = None,
                  _visited: set | None = None) -> dict:
     """导出一张地图：map.json（life/foothold/ladderRope）+ 全部贴图 + 渲染预览图。
 
     链接图（info/link，自己的 img 是空的）自动顺链导出目标图，返回带 link 字段。
-    mobs=True 时预览图直接把怪物随机画上去（preview_mobs.png，脚底落在 cy）。
+    mobs=True 时预览图把怪随机画到地面上（preview_mobs.png，沿 rx 巡逻区间散布、
+    foothold 落地）；seed 缺省每次随机，传同值可复现同一布局。
     life_points 是刷怪点（x, y 已按客户端规则落到 cy 地面），overlay 是
     世界坐标→预览图的变换（minx/miny/s/w/h），两者配合可在任何客户端复现点位。
+    foothold_segs 是全部地面段（前端随机摆怪用它做贴地插值）。
     """
     ws = _need_ws()
     mid = str(mid).strip()
@@ -695,15 +723,16 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     # 链接图：拿目标图的数据渲染（客户端同款行为）
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
-        d = c_map_export(link, preview, mobs, density, region, visited)
+        d = c_map_export(link, preview, mobs, density, region, seed, visited)
         d["link"] = {"from": mid, "to": link}
         return d
 
-    return _map_export_inner(ws, mid, preview, mobs, density, region, visited, outdir=outdir, mj=mj)
+    return _map_export_inner(ws, mid, preview, mobs, density, region, visited,
+                             seed=seed, outdir=outdir, mj=mj)
 
 
 def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: int,
-                      region: tuple | None, visited: set,
+                      region: tuple | None, visited: set, seed: str | None = None,
                       outdir: Path | None = None, mj: dict | None = None) -> dict:
     root = CACHE if preview else EXPORTS
     if outdir is None:
@@ -725,6 +754,9 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                "x": float(l.get("x", 0)),
                # 客户端同款落地：y 只是出生参考点，真正站的是 cy（fh 指向的地面 y）
                "y": float(l.get("cy") if l.get("fh") and l.get("cy") is not None else l.get("y", 0)),
+               # rx0/rx1 是客户端给这只怪划定的巡逻区间（随机摆怪用）
+               "rx0": (float(l["rx0"]) if l.get("rx0") is not None else None),
+               "rx1": (float(l["rx1"]) if l.get("rx1") is not None else None),
                "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
                "tier": meta.get(k, {}).get("tier", "normal")}
               for l in life]
@@ -740,10 +772,14 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
               "ladders": len(mj.get("ladderRope", [])),
               "overlay": {"minx": minx, "miny": miny, "s": s,
                           "w": round(bw * s), "h": round(bh * s)},
-              "life_points": points}
-    # 导出图带怪物：把怪随机贴到刷怪点上合成进预览图（preview_mobs.png）
+              "life_points": points,
+              # 全部地面段 [x1,y1,x2,y2]：前端随机摆怪时做贴地插值
+              "foothold_segs": [[f["x1"], f["y1"], f["x2"], f["y2"]]
+                                for f in mj.get("foothold", [])]}
+    # 导出图带怪物：把怪沿地面随机散布合成进预览图（preview_mobs.png）
     if mobs and life:
-        mob_png = _composite_mobs(ws, outdir, mj, png, mid,
+        mob_png = _composite_mobs(ws, outdir, mj, png,
+                                  str(seed) if seed else f"{mid}:{random.randrange(1 << 30):x}",
                                   density=max(1, min(10, int(density or 1))))
         if mob_png is not None:
             rel = (mob_png.relative_to(CACHE) if preview else mob_png.relative_to(EXPORTS))
@@ -930,7 +966,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     region = None
             self._api(c_map_export, str(b.get("id") or ""),
                       bool(b.get("preview")), bool(b.get("mobs")),
-                      int(b.get("density") or 1), region)
+                      int(b.get("density") or 1), region,
+                      str(b["seed"]) if b.get("seed") else None)
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
         elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps") \
@@ -1090,7 +1127,8 @@ def cmd_map_export(a) -> int:
         except ValueError:
             print("错误: --region 应为 X,Y,W,H（如 850,-900,1366,768）", file=sys.stderr)
             return 2
-    d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density, region=region)
+    d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density,
+                     region=region, seed=getattr(a, "seed", None))
     if a.json:
         _out(d, True)
     else:
@@ -1212,7 +1250,9 @@ def build_parser() -> argparse.ArgumentParser:
                               "--json 里的 life_points+overlay 可在任何客户端复现刷怪点。")
     p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
     p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 exports")
-    p.add_argument("--mobs", action="store_true", help="预览图合成怪物（随机、按地图 id 定种）")
+    p.add_argument("--mobs", action="store_true",
+                   help="预览图合成怪物（沿地面随机散布、贴地不悬空；默认每次随机，--seed 可复现）")
+    p.add_argument("--seed", metavar="S", help="配合 --mobs：固定随机种子（同 seed 同布局；缺省每次随机）")
     p.add_argument("--density", type=int, default=1, metavar="N",
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
     p.add_argument("--region", metavar="X,Y,W,H",

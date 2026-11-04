@@ -656,15 +656,32 @@ async function lifeOverlayHTML() {
     }).join("");
   }
   if (sprites && kinds.length && !mapData.mobs) {
-    // 显示怪物：每个刷怪点随机分配这张图的一种怪，按锚点（脚底中心）贴立绘；
-    // 密度>1 时每个点放多只，多出的在左右散开（与导出合成同款规则）
+    // 显示怪物：每次渲染都重新随机——在怪的巡逻区间（life 的 rx0~rx1，缺省按图宽
+    // ±8% 兜底）里取随机 x，y 用 foothold 段线性插值贴地（保证不悬空）；
+    // 与导出合成（_composite_mobs）同款规则
     const icons = {};
     await Promise.all(kinds.map(async (k) => { icons[k.id] = await mobIcon(k.id); }));
     const usable = kinds.filter((k) => icons[k.id]);
     if (usable.length) {
       const den = Math.max(1, Math.min(10, DENSITY | 0));
+      const fhs = mapData.foothold_segs || [];
+      const groundAt = (x, yRef) => {
+        let bestD = null, bestY = null;
+        for (const g of fhs) {
+          const lo = Math.min(g[0], g[2]), hi = Math.max(g[0], g[2]);
+          if (hi > lo && x >= lo && x <= hi) {
+            const y = g[1] + (g[3] - g[1]) * (x - g[0]) / (g[2] - g[0]);
+            const d = Math.abs(y - yRef);
+            if (bestD === null || d < bestD) { bestD = d; bestY = y; }
+          }
+        }
+        return bestY;
+      };
+      const worldW = ov.w / ov.s;
       html += pts.map((p) => {
-        const { l, t } = pct(p);
+        let lo, hi;
+        if (p.rx0 != null && p.rx1 != null && p.rx1 > p.rx0) { lo = p.rx0; hi = p.rx1; }
+        else { const sp = Math.max(120, worldW * 0.08); lo = p.x - sp; hi = p.x + sp; }
         let out = "";
         for (let i = 0; i < den; i++) {
           const k = usable[Math.floor(Math.random() * usable.length)];
@@ -675,13 +692,16 @@ async function lifeOverlayHTML() {
           const ox = flip ? ic.w - ic.ox : ic.ox;
           const oxPct = ox * ov.s / ov.w * 100;
           const oyPct = ic.oy * ov.s / ov.h * 100;
-          // 第 1 只贴着出生点（±12 抖动）；多出的散得更开更随机（±20~150）
-          let dxW;
-          if (i === 0) dxW = Math.random() * 24 - 12;
-          else if (Math.random() < 0.25) dxW = (12 + Math.random() * 18) * (Math.random() < 0.5 ? -1 : 1);
-          else dxW = (20 + Math.random() * 130) * (Math.random() < 0.5 ? -1 : 1);
-          const li = pct({ x: p.x + dxW, y: p.y }).l;
-          out += `<img class="mspr" src="${ic.url}" style="left:${li - oxPct}%;top:${t - oyPct}%;width:${wPct}%;${flip ? "transform:scaleX(-1);" : ""}"
+          // 随机 x + foothold 贴地；落点悬空（悬崖外）就退回出生点附近
+          let x = lo + Math.random() * (hi - lo);
+          let gy = groundAt(x, p.y);
+          if (gy === null) {
+            x = p.x + Math.random() * 30 - 15;
+            gy = groundAt(x, p.y);
+            if (gy === null) gy = p.y;
+          }
+          const pos = pct({ x, y: gy });
+          out += `<img class="mspr" src="${ic.url}" style="left:${pos.l - oxPct}%;top:${pos.t - oyPct}%;width:${wPct}%;${flip ? "transform:scaleX(-1);" : ""}"
                    title="${k.name || k.id} ${k.id}">`;
         }
         return out;
@@ -712,7 +732,7 @@ function mzApply() {
 }
 async function mzOpen() {
   if (!mapData) return;
-  $("#mz-img").src = mapData.preview_url;
+  $("#mz-img").src = mapData.preview_url + (mapData.mobs ? `?v=${Date.now()}` : "");
   $("#mapzoom").hidden = false;
   $("#mz-dots").innerHTML = await lifeOverlayHTML();
   mzApply();
@@ -734,6 +754,8 @@ async function mapLoad(id, preview) {
     // 链接图：自己的 img 是空的，客户端渲染 link 指向的那张 —— 后端已顺着导出目标图
     const linkNote = d.link
       ? ` <span class="pill" title="这种图自己的 img 是空的，客户端渲染时加载 link 指向的图">链接图 → 画面同 <b>${d.link.to}</b></span>` : "";
+    // 带怪的合成图每次导出都会重新随机布局，URL 不变会被浏览器缓存 → 加缓存戳
+    const pvUrl = d.preview_url + (d.mobs ? `?v=${Date.now()}` : "");
     det.innerHTML = `<div class="flexline"><div>地图 <b>${id}</b>${linkNote} ·
       ${d.preview.w}×${d.preview.h}${preview ? "（预览）" : ""}</div>
       <div class="row">
@@ -763,8 +785,8 @@ async function mapLoad(id, preview) {
       </div>
       <div class="muted" style="margin:0 0 6px">留空导出整图；也可以直接在下面的图上<b>拖框</b>选区域（世界坐标，游戏客户端画面就是固定分辨率的窗口）</div>
       <span class="mapwrap" id="mapsel">
-        <a href="${d.preview_url}" title="点开放大查看（怪物/刷怪点叠加同样显示）" id="mz-open">
-          <img class="mapimg" src="${d.preview_url}" loading="lazy">
+        <a href="${pvUrl}" title="点开放大查看（怪物/刷怪点叠加同样显示）" id="mz-open">
+          <img class="mapimg" src="${pvUrl}" loading="lazy">
         </a>
         <span class="lifedots" id="lifedots"></span>
         <span id="rgsel"></span>
