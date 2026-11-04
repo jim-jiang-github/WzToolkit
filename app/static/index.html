@@ -65,8 +65,7 @@
           border: 1px solid currentColor; white-space: nowrap; }
   .tier.big { color: #ff6b6b; background: #ff6b6b1a; }
   .tier.boss { color: #ffb454; background: #ffb4541a; }
-  .tier.none { color: #9aa4ad; background: #9aa4ad1a; }
-  .list .it.noimg { opacity: .55; }
+  .list .it { cursor: pointer; }
   .filters { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
   .filters button { font-size: 12px; padding: 1px 9px; }
   .filters button.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
@@ -174,11 +173,6 @@
           <button class="flt" data-f="boss">BOSS</button>
           <button class="flt" data-f="big">大 BOSS</button>
         </div>
-        <div class="filters" id="filters-img" style="margin-top:-4px">
-          <button class="flt on" data-f="all">全部</button>
-          <button class="flt" data-f="img">有图</button>
-          <button class="flt" data-f="none">无图</button>
-        </div>
         <div class="filters" id="filters-map" style="display:none">
           <button class="flt on" data-f="all">全部</button>
           <button class="flt" data-f="mob">有怪</button>
@@ -221,7 +215,6 @@ function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " +
 let WS = null, MOBS = [], MAPS = [], TAB = "mob", TIMER = null;
 let mobSel = null, mapSel = null;
 let MOBFILT = "all";   // all | boss | big
-let MOBFILT2 = "all";  // all | img | none（按有没有图片资源筛）
 let MAPFILT = "all";   // all | mob | empty
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
@@ -307,22 +300,18 @@ function renderList() {
   const q = $("#q").value.trim().toLowerCase();
   const box = $("#list");
   $("#filters").style.display = TAB === "mob" ? "" : "none";
-  $("#filters-img").style.display = TAB === "mob" ? "" : "none";
   $("#filters-map").style.display = TAB === "mob" ? "none" : "";
   if (TAB === "mob") {
     let items = MOBS;
     if (MOBFILT === "boss") items = items.filter((m) => m.tier === "big" || m.tier === "boss");
     else if (MOBFILT === "big") items = items.filter((m) => m.tier === "big");
-    if (MOBFILT2 === "img") items = items.filter((m) => m.img_ok);
-    else if (MOBFILT2 === "none") items = items.filter((m) => !m.img_ok);
     if (q) items = items.filter((m) => m.id.includes(q) || (m.name || "").toLowerCase().includes(q));
     const top = items.slice(0, 400);
     $("#listcount").textContent = `${items.length} 只`;
     box.innerHTML = top.map((m) => {
       const badge = m.tier === "big" ? '<span class="tier big">大BOSS</span>'
-        : m.tier === "boss" ? '<span class="tier boss">BOSS</span>'
-        : (m.img_ok === false ? '<span class="tier none">无图</span>' : "");
-      return `<div class="it ${m.tier}${m.img_ok === false ? " noimg" : ""}" data-raw="${m.raw}" data-id="${m.id}" data-tier="${m.tier}"
+        : m.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
+      return `<div class="it ${m.tier}" data-raw="${m.raw}" data-id="${m.id}" data-tier="${m.tier}"
           title="Lv ${m.level} · HP ${m.hp.toLocaleString()}">
          <span class="id">${m.id}</span><span class="nm">${m.name || ""}</span>${badge}
        </div>`;
@@ -675,7 +664,6 @@ function bindFilters(sel, setter) {
   };
 }
 bindFilters("#filters", (f) => MOBFILT = f);
-bindFilters("#filters-img", (f) => MOBFILT2 = f);
 bindFilters("#filters-map", (f) => MAPFILT = f);
 $("#tab-mob").onclick = () => { TAB = "mob"; $("#tab-mob").classList.add("on"); $("#tab-map").classList.remove("on"); renderList(); };
 $("#tab-map").onclick = () => { TAB = "map"; $("#tab-map").classList.add("on"); $("#tab-mob").classList.remove("on"); renderList(); };
