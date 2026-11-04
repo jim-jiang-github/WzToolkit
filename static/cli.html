@@ -260,6 +260,7 @@ let mobSel = null, mapSel = null;
 let MOBFILT = "all";   // all | boss | big
 let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // 导出的地图图里是否把怪物画进去
+let YOLOSHOT = false;   // 一次性：这次 mapLoad 顺带产出 YOLO 数据集
 let DENSITY = 1;        // 怪物密度倍数（页面叠加与导出合成共用）
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
 let REGION = null;      // 导出区域 {x, y, w, h} 世界坐标（null = 整图）
@@ -781,8 +782,9 @@ async function mapLoad(id, preview) {
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, region: REGION }),
+      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, region: REGION, yolo: YOLOSHOT }),
     });
+    YOLOSHOT = false;
     const kinds = (d.life_kinds || []).map((k) =>
       `<span class="pill ${k.tier === "big" ? "bigboss" : k.tier === "boss" ? "bossmob" : ""}">${k.name || k.id} <b>${k.id}</b>${k.tier === "big" ? " 大BOSS" : k.tier === "boss" ? " BOSS" : ""}</span>`).join("");
     // 链接图：自己的 img 是空的，客户端渲染 link 指向的那张 —— 后端已顺着导出目标图
@@ -805,8 +807,9 @@ async function mapLoad(id, preview) {
           <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:80px" />
           ×<b id="density-val">${DENSITY}</b></label>` : ""}
         ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}
+        <button class="mini" id="do-yolo" title="产出 YOLO 训练集（exports/yolo/：图片+标注 txt+classes.txt+dataset.yaml；每只怪一个框、绳/梯各一类；区域/密度/导出带怪设置同样生效）">导出YOLO</button>
       </div></div>
-      <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
+      <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}${d.yolo ? ` · <b>YOLO ${d.yolo.boxes} 框已导出</b>（${d.yolo.image}）` : ""}</div>
       <div style="margin-bottom:6px">${kinds || '<span class="muted">这张图没有怪物</span>'}</div>
       <div class="row rgrow" style="margin-bottom:4px">
         <span class="muted">导出区域</span>
@@ -862,6 +865,8 @@ async function mapLoad(id, preview) {
     }
     const b = $("#do-export");
     if (b) b.onclick = () => mapLoad(id, false);
+    const yb = $("#do-yolo");
+    if (yb) yb.onclick = () => { YOLOSHOT = true; mapLoad(id, false); };
     // 区域导出：预设 / 清除 / 手填，与图上拖框（见下方 window 级拖框逻辑）
     const rgx = $("#rg-x"), rgy = $("#rg-y"), rgw = $("#rg-w"), rgh = $("#rg-h");
     const rgRead = () => {

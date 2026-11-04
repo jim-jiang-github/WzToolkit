@@ -530,8 +530,11 @@ def c_mob_icon(raw: str) -> dict:
 
 
 def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
-                   density: int = 1) -> Path | None:
+                   density: int = 1):
     """把这张图的怪随机贴到地面上，产出 preview_mobs.png（脚底落在 foothold 地面）。
+
+    返回 (png路径, 摆放列表)：places 每项 {kind, x, y, w, h} 是该怪在预览图上的
+    精确像素框（x,y=左上角），YOLO 标注直接用它当 ground truth。
 
     每个怪在「随机游走区间」内取随机 x：优先用 life 自带 rx0~rx1（客户端巡逻区间），
     没有就按图宽 ±8% 兜底；y 由 foothold 段线性插值得出（同一段里取离出生地面最近
@@ -541,7 +544,7 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     from PIL import Image
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
     if not life:
-        return None
+        return None, []
     R = _render_mod()
     minx, miny, bw, bh = R.map_bounds(mj)
     minx -= 40; miny -= 40; bw += 80; bh += 80
@@ -561,12 +564,13 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
         frames_flip[k] = (img.transpose(Image.FLIP_LEFT_RIGHT),
                           img.width - ox, oy)
     if not frames:
-        return None
+        return None, []
     im = Image.open(base_png).convert("RGBA")
     rng = random.Random(f"{seed}:d{density}")
     keys = list(frames)
     fhs = [(float(f["x1"]), float(f["y1"]), float(f["x2"]), float(f["y2"]))
            for f in mj.get("foothold", [])]
+    places = []                          # 摆放记录：YOLO ground truth
 
     def _ground(x: float, y_ref: float) -> float | None:
         """x 处的地面 y：含 x 的 foothold 段里取离 y_ref 最近的一条（线性插值）。"""
@@ -595,7 +599,8 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
         for _ in range(max(1, density)):
             # 所有怪都可能随机镜像朝向
             flip = rng.random() < 0.5
-            img, ox, oy = frames_flip[rng.choice(keys)] if flip else frames[rng.choice(keys)]
+            kind = rng.choice(keys)
+            img, ox, oy = frames_flip[kind] if flip else frames[kind]
             x = rng.uniform(lo, hi)
             gy = _ground(x, base_y)
             if gy is None:            # 落点下面没有地面（悬崖外）→ 退回出生点附近
@@ -606,9 +611,11 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
             px = (x - minx) * s - ox
             py = (gy - miny) * s - oy
             im.alpha_composite(img, (round(px), round(py)))
+            places.append({"kind": kind, "x": round(px), "y": round(py),
+                           "w": img.width, "h": img.height})
     out = outdir / "preview_mobs.png"
     im.convert("RGB").save(out)
-    return out
+    return out, places
 
 
 def _read_manifest(outdir: Path, root: Path, url_prefix: str, pngs: list[Path]) -> list[dict]:
@@ -681,13 +688,16 @@ def c_mob_export(raw: str, preview: bool = False) -> dict:
 
 def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
                  density: int = 1, region: tuple | None = None,
-                 seed: str | None = None,
+                 yolo: bool = False, seed: str | None = None,
                  _visited: set | None = None) -> dict:
     """导出一张地图：map.json（life/foothold/ladderRope）+ 全部贴图 + 渲染预览图。
 
     链接图（info/link，自己的 img 是空的）自动顺链导出目标图，返回带 link 字段。
     mobs=True 时预览图把怪随机画到地面上（preview_mobs.png，沿 rx 巡逻区间散布、
     foothold 落地）；seed 缺省每次随机，传同值可复现同一布局。
+    yolo=True 时额外产出 YOLO 训练集（exports/yolo/：images + labels +
+    classes.txt/dataset.yaml；每只怪一个框、每段绳/梯一个框，怪按 id_名字分类），
+    蕴含 mobs=True。
     life_points 是刷怪点（x, y 已按客户端规则落到 cy 地面），overlay 是
     世界坐标→预览图的变换（minx/miny/s/w/h），两者配合可在任何客户端复现点位。
     foothold_segs 是全部地面段（前端随机摆怪用它做贴地插值）。
@@ -723,16 +733,17 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     # 链接图：拿目标图的数据渲染（客户端同款行为）
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
-        d = c_map_export(link, preview, mobs, density, region, seed, visited)
+        d = c_map_export(link, preview, mobs, density, region, yolo, seed, visited)
         d["link"] = {"from": mid, "to": link}
         return d
 
     return _map_export_inner(ws, mid, preview, mobs, density, region, visited,
-                             seed=seed, outdir=outdir, mj=mj)
+                             yolo=yolo, seed=seed, outdir=outdir, mj=mj)
 
 
 def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: int,
-                      region: tuple | None, visited: set, seed: str | None = None,
+                      region: tuple | None, visited: set, yolo: bool = False,
+                      seed: str | None = None,
                       outdir: Path | None = None, mj: dict | None = None) -> dict:
     root = CACHE if preview else EXPORTS
     if outdir is None:
@@ -780,16 +791,20 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
               "ladder_rope": [[lr["x"], lr["y1"], lr["y2"], lr.get("l", 0)]
                               for lr in mj.get("ladderRope", [])]}
     # 导出图带怪物：把怪沿地面随机散布合成进预览图（preview_mobs.png）
-    if mobs and life:
-        mob_png = _composite_mobs(ws, outdir, mj, png,
-                                  str(seed) if seed else f"{mid}:{random.randrange(1 << 30):x}",
-                                  density=max(1, min(10, int(density or 1))))
+    # yolo=True 必然要怪（要标它们的框）
+    use_seed = str(seed) if seed else f"{mid}:{random.randrange(1 << 30):x}"
+    places: list[dict] = []
+    if (mobs or yolo) and life:
+        mob_png, places = _composite_mobs(ws, outdir, mj, png, use_seed,
+                                          density=max(1, min(10, int(density or 1))))
         if mob_png is not None:
             rel = (mob_png.relative_to(CACHE) if preview else mob_png.relative_to(EXPORTS))
             result["preview_path"] = str(mob_png)
             result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview
                                      else f"/exports/{rel.as_posix()}")
             result["mobs"] = True
+        elif yolo:
+            raise CliError("这张图有刷怪点但没找到任何怪的图片，无法做 YOLO 标注", 1)
     # 区域裁剪：只导出世界坐标 (x, y, w, h) 的窗口（客户端画面就是固定分辨率的窗口）
     if region:
         rx, ry, rw, rh = (float(v) for v in region)
@@ -820,6 +835,74 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                             "px": {"x": left, "y": top, "w": cw, "h": ch}}
         # 叠加层坐标系改为以区域左上角为原点，圆点/立绘在裁剪图上照样对准
         result["overlay"] = {"minx": rx, "miny": ry, "s": s, "w": cw, "h": ch}
+
+    # ---------------------------------------------------------------- YOLO 数据集
+    # 每只怪一个框（合成时记录的精确 ground truth）+ 每段绳/梯一个框。
+    # 产出 exports/yolo/{images,labels}/ + classes.txt + dataset.yaml，
+    # 类别表跨导出累积（classes.json 注册表），怪的类别名 = id_英文名。
+    if yolo:
+        import shutil
+        W, H = result["preview"]["w"], result["preview"]["h"]
+        offx, offy = (result["region"]["px"]["x"], result["region"]["px"]["y"]) \
+            if region else (0, 0)
+
+        def _mob_cls(k: str) -> str:
+            nm = meta.get(k, {}).get("name") or mob_names().get(k) or ""
+            return f"{k}_{re.sub(r'[^0-9A-Za-z_]+', '_', nm).strip('_')}" if nm else k
+
+        # 类别注册表（跨导出累积，id 稳定）
+        ydir = EXPORTS / "yolo"
+        (ydir / "images").mkdir(parents=True, exist_ok=True)
+        (ydir / "labels").mkdir(parents=True, exist_ok=True)
+        reg_file = ydir / "classes.json"
+        reg: dict[str, int] = {}
+        if reg_file.exists():
+            try:
+                reg = json.loads(reg_file.read_text(encoding="utf-8"))
+            except Exception:
+                reg = {}
+        cls_names = {_mob_cls(p["kind"]) for p in places} | {"rope", "ladder"}
+        for nm in sorted(cls_names):
+            if nm not in reg:
+                reg[nm] = len(reg)
+
+        def _box(x: float, y: float, w: float, h: float) -> tuple | None:
+            """预览图像素框 → 最终图上的归一化 YOLO 框；完全在外头的丢弃。"""
+            x, y = x - offx, y - offy
+            x0, y0 = max(0.0, x), max(0.0, y)
+            x1, y1 = min(float(W), x + w), min(float(H), y + h)
+            if x1 - x0 < 2 or y1 - y0 < 2:      # 被裁得只剩边角的不算目标
+                return None
+            return (((x0 + x1) / 2) / W, ((y0 + y1) / 2) / H,
+                    (x1 - x0) / W, (y1 - y0) / H)
+
+        lines = []
+        for p in places:
+            b = _box(p["x"], p["y"], p["w"], p["h"])
+            if b:
+                lines.append(f"{reg[_mob_cls(p['kind'])]} " + " ".join(f"{v:.6f}" for v in b))
+        for x, y1, y2, l in result["ladder_rope"]:
+            b = _box((x - 16 - minx) * s, (y1 - miny) * s, 32 * s, (y2 - y1) * s)
+            if b:
+                lines.append(f"{reg['ladder' if l else 'rope']} " + " ".join(f"{v:.6f}" for v in b))
+        stem = f"{mid}_{re.sub(r'[^0-9A-Za-z_]+', '_', use_seed)}"
+        img_out = ydir / "images" / f"{stem}.png"
+        lbl_out = ydir / "labels" / f"{stem}.txt"
+        shutil.copyfile(result["preview_path"], img_out)
+        lbl_out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        reg_file.write_text(json.dumps(reg, ensure_ascii=False, indent=1), encoding="utf-8")
+        # classes.txt（darknet 风格）+ dataset.yaml（ultralytics 用），每次导出全量重写
+        inv = sorted(reg.items(), key=lambda kv: kv[1])
+        (ydir / "classes.txt").write_text(
+            "\n".join(nm for nm, _ in inv) + "\n", encoding="utf-8")
+        names_yaml = "\n".join(f"  {i}: {nm}" for nm, i in inv)
+        (ydir / "dataset.yaml").write_text(
+            f"path: {ydir.resolve().as_posix()}\ntrain: images\nval: images\n"
+            f"names:\n{names_yaml}\n", encoding="utf-8")
+        result["yolo"] = {"image": str(img_out), "labels": str(lbl_out),
+                          "classes": str(ydir / "classes.txt"),
+                          "dataset": str(ydir / "dataset.yaml"),
+                          "boxes": len(lines)}
     return result
 
 
@@ -1028,6 +1111,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_map_export, str(b.get("id") or ""),
                       bool(b.get("preview")), bool(b.get("mobs")),
                       int(b.get("density") or 1), region,
+                      bool(b.get("yolo")),
                       str(b["seed"]) if b.get("seed") else None)
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
@@ -1204,7 +1288,8 @@ def cmd_map_export(a) -> int:
             print("错误: --region 应为 X,Y,W,H（如 850,-900,1366,768）", file=sys.stderr)
             return 2
     d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density,
-                     region=region, seed=getattr(a, "seed", None))
+                     region=region, yolo=bool(getattr(a, "yolo", False)),
+                     seed=getattr(a, "seed", None))
     if a.json:
         _out(d, True)
     else:
@@ -1215,6 +1300,10 @@ def cmd_map_export(a) -> int:
               f"地面 {d['footholds']} 段 · 绳梯 {d['ladders']} 段{mobs} {link}")
         print(f"目录: {d['dir']}")
         print(f"预览: {d['preview_path']}")
+        if d.get("yolo"):
+            y = d["yolo"]
+            print(f"YOLO: {y['boxes']} 个框 · 图 {y['image']}")
+            print(f"      标注 {y['labels']} · 类别 {y['classes']} · 数据集 {y['dataset']}")
     return 0
 
 
@@ -1335,6 +1424,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 exports")
     p.add_argument("--mobs", action="store_true",
                    help="预览图合成怪物（沿地面随机散布、贴地不悬空；默认每次随机，--seed 可复现）")
+    p.add_argument("--yolo", action="store_true",
+                   help="产出 YOLO 训练集（exports/yolo/：images+labels+classes.txt"
+                        "+dataset.yaml；每只怪一个框、每段绳/梯一个框，怪按 id_名字分类；"
+                        "蕴含 --mobs）")
     p.add_argument("--seed", metavar="S", help="配合 --mobs：固定随机种子（同 seed 同布局；缺省每次随机）")
     p.add_argument("--density", type=int, default=1, metavar="N",
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
