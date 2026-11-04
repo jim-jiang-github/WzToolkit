@@ -497,12 +497,12 @@ def _ensure_mob_preview(raw: str, ws: Path) -> Path:
     return outdir
 
 
-@app.get("/api/mob/icon/{raw}")
-def mob_icon(raw: str):
-    """一只怪的“立绘”帧（stand 帧）：给地图刷怪点叠加小怪用。"""
-    ws = _need_ws()
-    if not re.fullmatch(r"\d+", raw):
-        raise HTTPException(400, "怪 id 不合法")
+def _stand_frame(ws: Path, kind_id: str):
+    """一种怪的 stand 帧 + 锚点：(Path, w, h, ox, oy)；没有图返回 None。
+
+    ox/oy 是锚点（脚底中心）在 PNG 里的位置，贴图/前端定位都用它对准刷怪点。
+    """
+    raw = kind_id.lstrip("0") or "0"
     mobnx = ws / "Mob.nx"
     if mobnx.exists():
         meta = {m["id"]: m for m in mob_meta(ws, mobnx)}
@@ -511,13 +511,15 @@ def mob_icon(raw: str):
         raw = (meta.get(raw) or {}).get("raw") or raw.zfill(7)
     else:
         raw = raw.zfill(7)
-    outdir = _ensure_mob_preview(raw, ws)
+    try:
+        outdir = _ensure_mob_preview(raw, ws)
+    except Exception:
+        return None
     pngs = sorted(outdir.rglob("*.png"))
     if not pngs:
-        raise HTTPException(500, "这只怪没有图片资源")
+        return None
     # 优先 stand 帧（站着不动，最适合当立绘）；没有就随便一帧
     pick = next((p for p in pngs if p.name.lower().startswith("stand")), pngs[0])
-    # manifest 里查这帧的 w/h/ox/oy（锚点=脚底中心），前端按锚点对位
     w = h = ox = oy = 0
     man = outdir / "manifest.csv"
     if man.exists():
@@ -533,8 +535,61 @@ def mob_icon(raw: str):
         with Image.open(pick) as im:
             w, h = im.size
             ox, oy = w // 2, h
+    return pick, w, h, ox, oy
+
+
+@app.get("/api/mob/icon/{raw}")
+def mob_icon(raw: str):
+    """一只怪的“立绘”帧（stand 帧）：给地图刷怪点叠加小怪用。"""
+    ws = _need_ws()
+    if not re.fullmatch(r"\d+", raw):
+        raise HTTPException(400, "怪 id 不合法")
+    fr = _stand_frame(ws, raw)
+    if fr is None:
+        raise HTTPException(500, "这只怪没有图片资源")
+    pick, w, h, ox, oy = fr
     return {"url": f"/preview/{pick.relative_to(CACHE).as_posix()}",
             "w": w, "h": h, "ox": ox, "oy": oy}
+
+
+def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str) -> Path | None:
+    """把这张图的怪随机贴到刷怪点上，产出 preview_mobs.png（脚底落在 cy 地面上）。"""
+    import random
+    from PIL import Image
+    life = [l for l in mj.get("life", []) if l.get("type") == "m"]
+    if not life:
+        return None
+    R = _render_mod()
+    minx, miny, bw, bh = R.map_bounds(mj)
+    minx -= 40; miny -= 40; bw += 80; bh += 80
+    s = min(1.0, 1600 / max(1.0, bw))
+    frames = {}
+    for k in sorted({str(l.get("id", "")).lstrip("0") for l in life}):
+        fr = _stand_frame(ws, k)
+        if fr is None:
+            continue
+        pick, w, h, ox, oy = fr
+        img = Image.open(pick).convert("RGBA")
+        if abs(s - 1.0) > 1e-3:
+            img = img.resize((max(1, round(w * s)), max(1, round(h * s))))
+            ox, oy = ox * s, oy * s
+        frames[k] = (img, ox, oy)
+    if not frames:
+        return None
+    im = Image.open(base_png).convert("RGBA")
+    rng = random.Random(seed)
+    keys = list(frames)
+    for l in life:
+        img, ox, oy = frames[rng.choice(keys)]
+        fh = l.get("fh")
+        # 客户端同款落地：life 的 y 只是参考点，真正站的是 cy（所站 foothold 的 y）
+        gy = float(l.get("cy", l.get("y", 0))) if fh else float(l.get("y", 0))
+        px = (float(l.get("x", 0)) - minx) * s - ox
+        py = (gy - miny) * s - oy
+        im.alpha_composite(img, (round(px), round(py)))
+    out = outdir / "preview_mobs.png"
+    im.convert("RGB").save(out)
+    return out
 
 
 @app.post("/api/mob/export")
@@ -619,10 +674,12 @@ def map_export(payload: dict = Body(...)):
     mid = str(payload.get("id") or "").strip()
     if not re.fullmatch(r"\d{9}", mid):
         raise HTTPException(400, "地图 id 应该是 9 位数字")
-    return _map_export(ws, mid, bool(payload.get("preview")), set())
+    return _map_export(ws, mid, bool(payload.get("preview")), set(),
+                       bool(payload.get("mobs")))
 
 
-def _map_export(ws: Path, mid: str, preview: bool, visited: set) -> dict:
+def _map_export(ws: Path, mid: str, preview: bool, visited: set,
+                mobs: bool = False) -> dict:
     if mid in visited:
         raise HTTPException(500, f"link 成环了：{' → '.join(sorted(visited))} → {mid}")
     visited.add(mid)
@@ -647,7 +704,7 @@ def _map_export(ws: Path, mid: str, preview: bool, visited: set) -> dict:
     # 链接图：拿目标图的数据渲染（客户端同款行为）
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
-        d = _map_export(ws, link, preview, visited)
+        d = _map_export(ws, link, preview, visited, mobs)
         d["link"] = {"from": mid, "to": link}
         return d
 
@@ -665,22 +722,33 @@ def _map_export(ws: Path, mid: str, preview: bool, visited: set) -> dict:
     minx -= 40; miny -= 40; bw += 80; bh += 80
     s = min(1.0, 1600 / max(1.0, bw))
     points = [{"id": (k := str(l.get("id", "")).lstrip("0")),
-               "x": float(l.get("x", 0)), "y": float(l.get("y", 0)),
+               "x": float(l.get("x", 0)),
+               # 客户端同款落地：life 的 y 只是出生参考点，真正站的是 cy（fh 指向的地面 y）
+               "y": float(l.get("cy") if l.get("fh") and l.get("cy") is not None else l.get("y", 0)),
                "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
                "tier": meta.get(k, {}).get("tier", "normal")}
               for l in life]
-    return {"dir": str(outdir), "preview": size,
-            "preview_url": (f"/preview/{png.relative_to(CACHE).as_posix()}" if preview
-                            else f"/exports/{png.relative_to(EXPORTS).as_posix()}"),
-            "life_count": len(life),
-            "life_kinds": [{"id": k,
-                            "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
-                            "tier": meta.get(k, {}).get("tier", "normal")} for k in kinds],
-            "footholds": len(mj.get("foothold", [])),
-            "ladders": len(mj.get("ladderRope", [])),
-            "overlay": {"minx": minx, "miny": miny, "s": s,
-                        "w": round(bw * s), "h": round(bh * s)},
-            "life_points": points}
+    result = {"dir": str(outdir), "preview": size,
+              "preview_url": (f"/preview/{png.relative_to(CACHE).as_posix()}" if preview
+                              else f"/exports/{png.relative_to(EXPORTS).as_posix()}"),
+              "life_count": len(life),
+              "life_kinds": [{"id": k,
+                              "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
+                              "tier": meta.get(k, {}).get("tier", "normal")} for k in kinds],
+              "footholds": len(mj.get("foothold", [])),
+              "ladders": len(mj.get("ladderRope", [])),
+              "overlay": {"minx": minx, "miny": miny, "s": s,
+                          "w": round(bw * s), "h": round(bh * s)},
+              "life_points": points}
+    # 导出图带怪物：把怪随机贴到刷怪点上合成进预览图（preview_mobs.png）
+    if mobs and life:
+        mob_png = _composite_mobs(ws, outdir, mj, png, mid)
+        if mob_png is not None:
+            rel = (mob_png.relative_to(CACHE) if preview else mob_png.relative_to(EXPORTS))
+            result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview
+                                     else f"/exports/{rel.as_posix()}")
+            result["mobs"] = True
+    return result
 
 
 @app.post("/api/export/clear-cache")

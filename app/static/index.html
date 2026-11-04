@@ -220,6 +220,7 @@ let WS = null, MOBS = [], MAPS = [], TAB = "mob", TIMER = null;
 let mobSel = null, mapSel = null;
 let MOBFILT = "all";   // all | boss | big
 let MAPFILT = "all";   // all | mob | empty
+let EXPORTMOBS = false; // 导出的地图图里是否把怪物画进去
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
 async function boot() {
@@ -562,7 +563,7 @@ async function renderLifeDots() {
       return `<span class="ldot${cls}" style="left:${l}%;top:${t}%" title="${p.name || "怪物"} ${p.id}"></span>`;
     }).join("");
   }
-  if (sprites && kinds.length) {
+  if (sprites && kinds.length && !mapData.mobs) {
     // 显示怪物：每个刷怪点随机分配这张图的一种怪，按锚点（脚底中心）贴立绘
     const icons = {};
     await Promise.all(kinds.map(async (k) => { icons[k.id] = await mobIcon(k.id); }));
@@ -591,7 +592,7 @@ async function mapLoad(id, preview) {
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, preview }),
+      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS }),
     });
     const kinds = (d.life_kinds || []).map((k) =>
       `<span class="pill ${k.tier === "big" ? "bigboss" : k.tier === "boss" ? "bossmob" : ""}">${k.name || k.id} <b>${k.id}</b>${k.tier === "big" ? " 大BOSS" : k.tier === "boss" ? " BOSS" : ""}</span>`).join("");
@@ -602,7 +603,8 @@ async function mapLoad(id, preview) {
       ${d.preview.w}×${d.preview.h}${preview ? "（预览）" : ""}</div>
       <div class="row">
         ${d.life_count ? `<label class="muted" style="cursor:pointer"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
-        <label class="muted" style="cursor:pointer"><input type="checkbox" id="mob-toggle" /> 显示怪物</label>` : ""}
+        <label class="muted" style="cursor:pointer"><input type="checkbox" id="mob-toggle" /> 显示怪物</label>
+        <label class="muted" style="cursor:pointer" title="勾选后导出/预览的图片会直接把怪物画进去"><input type="checkbox" id="export-mobs" ${EXPORTMOBS ? "checked" : ""} /> 导出带怪物</label>` : ""}
         ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}
       </div></div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
@@ -619,6 +621,8 @@ async function mapLoad(id, preview) {
     if (lt) lt.onchange = renderLifeDots;
     const mt = $("#mob-toggle");
     if (mt) mt.onchange = renderLifeDots;
+    const em = $("#export-mobs");
+    if (em) em.onchange = () => EXPORTMOBS = em.checked;
     const b = $("#do-export");
     if (b) b.onclick = () => mapLoad(id, false);
   } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
