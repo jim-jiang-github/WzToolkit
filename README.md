@@ -1,18 +1,17 @@
 # WzToolkit
 
-把冒险岛的 `.wz` 资源文件**导入 → 转换 → 浏览 → 导出**的独立小工具（WebUI）。
+把冒险岛的 `.wz` 资源文件**导入 → 转换 → 浏览 → 导出**的工具：
+**CLI 优先**（`wztool`，供 AI / 其他程序直接调用），附带可选 Web 页面。
 
 ```
 选一个放 .wz 的目录（工作区）
-   │  NoLifeWzToNx -c  把选中的 .wz 转成 .nx（.nx 落在 .wz 旁边）
+   │  wztool convert …  把选中的 .wz 转成 .nx（.nx 落在 .wz 旁边）
    ▼
-浏览器里浏览
-   ├─ 怪物：逐只预览全部动画帧
-   └─ 地图：渲染整图预览 + 刷怪表 / 地面 / 绳梯统计
+wztool mobs / maps   列出怪物与地图（--json 全字段）
    ▼
-一键导出（exports\）
-   ├─ mobs\<id>\*.png              逐帧 sprite（直接可用于训练合成 / 图鉴）
-   └─ maps\<id>\{map.json, img\, preview.png}
+wztool mob-export / map-export
+   ├─ exports\mobs\<id>\*.png         逐帧 sprite（直接可用于训练合成 / 图鉴）
+   └─ exports\maps\<id>\{map.json, img\, preview.png}
                                     map.json 含 life（刷怪表）/ foothold / ladderRope
 ```
 
@@ -22,11 +21,21 @@
 # 1) 编译四个原生工具（需要 VS 的 C++ 工具集；一次即可）
 powershell -File build.ps1
 
-# 2) 启动（需要 python + fastapi + uvicorn + Pillow）
-#    双击 run.bat 也一样：自动起服务 + 打开浏览器
-python run.py
-#  → 打开 http://127.0.0.1:8791
+# 2) CLI（推荐 / 自动化入口；已附带编译好的 wztool.exe）
+wztool --help                           # 全部子命令与示例（面向 AI/程序编写）
+wztool workspace "D:\MapleStory\nxrun"   # 设置工作区
+wztool mobs --json                      # 机器可读输出
+wztool map-export 000050000 --mobs      # 导出地图并把怪物画进预览图
+
+# 3) Web 页面（可选，人看；页面只是 CLI 的可视化壳）
+wztool web            # → http://127.0.0.1:8000  自动开浏览器
+
+# 旧版 FastAPI 服务（对比保留，功能相同）：
+python run.py         # → http://127.0.0.1:8791
 ```
+
+CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
+退出码 0/1/2（成功 / 业务错误 / 参数错误），方便程序判定。
 
 ## 说明
 
@@ -35,8 +44,8 @@ python run.py
   所以转换和导出都以你选的目录为工作目录；`.nx` 永远生成在 `.wz` 旁边。
 - **常见顺序**：`Map.wz` 和 `Mob.wz` 是最有用的两个；想要怪物名字出现在目录名里，
   顺带转一下 `String.wz`（nxmob 的 --named 会用它）。
-- **缓存**：预览产物放 `.cache\`（可随时清，接口 `POST /api/export/clear-cache`），
-  正式导出放 `exports\`。
+- **缓存**：预览产物放 `.cache\`（可随时清：`wztool clear-cache` 或
+  接口 `POST /api/export/clear-cache`），正式导出放 `exports\`。
 - 转换 `Map.wz`（约 640MB）需要几分钟，页面会显示进度日志。
 
 ## 帧尺寸 / manifest.csv
@@ -66,8 +75,7 @@ WebUI 预览默认 **1x = 客户端真实渲染尺寸**（缩放按钮切 2x/4x 
   再按 **maxHP** 分档：
   - **大 BOSS**（深红底 + 红字 + 徽标）：maxHP ≥ 1000 万（Zakum / Horntail / Pink Bean 一档）
   - **BOSS**（暗橙底 + 橙字）：其余 boss 标记的（如 Mano、King Clang）
-- 悬停任意一行可以看到 Lv / HP；列表上方有「全部 / BOSS / 大 BOSS」筛选，
-  第二行还能按「有图 / 无图」筛（唱片机、木桩这类 WZ 里就没有图片资源）。
+- 悬停任意一行可以看到 Lv / HP；列表上方有「全部 / BOSS / 大 BOSS」筛选。
 - **链接怪**：`info/link` 指向另一只怪、自己没帧的（如 Greatest Oldies →
   Latest Hits Compilation），预览时自动导出目标怪并标注「画面同 xxx」，
   和客户端行为一致。
@@ -89,12 +97,13 @@ WebUI 预览默认 **1x = 客户端真实渲染尺寸**（缩放按钮切 2x/4x 
 
 ```
 build.ps1        一键编译（cl.exe 直接编，不依赖 msbuild）
+wztool.py        CLI 主程序（wztool.exe 由 PyInstaller 打包，含 CLI + web 两用）
+wztool.exe       编译好的独立 CLI（放项目根即可找到 bin\ 与 vendor\）
 vendor\          全部源码与依赖（NoLifeWzToNx、nxmap/nxmob/nxscan、NoLifeNx、render_map、Mob.txt）
-bin\             编译产物
-app\main.py      FastAPI 后端
-app\static\      单页前端
-run.py           启动入口
-run.bat          双击启动（切目录 → 起服务 → 开浏览器）
+bin\             原生工具编译产物
+app\main.py      旧版 FastAPI 后端（保留对比用；新开发请用 wztool）
+app\static\      页面（index.html=旧版 / cli.html=wztool web 版）
+run.py / run.bat 旧版服务启动入口
 ```
 
 来源致谢：NoLifeWzToNx（Peter Atashian / Ryan Payton，AGPL）、NoLifeNx、

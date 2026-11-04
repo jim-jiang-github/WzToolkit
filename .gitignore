@@ -222,3 +222,7 @@ __marimo__/
 
 # WorkBuddy 本地工作数据
 .workbuddy/
+
+# PyInstaller 打包中间产物（dist/ 里按需取，wztool.exe 已拷到根目录）
+build_wztool/
+dist/
