@@ -699,6 +699,19 @@ async function lifeOverlayHTML() {
     const usable = kinds.filter((k) => icons[k.id]);
     if (usable.length) {
       const den = Math.max(1, Math.min(10, DENSITY | 0));
+      // 动作抽取权重（与后端 ACT_WEIGHTS 同款）：站/走/飞多，攻击次之，
+      // 受击/死亡/跳跃少；动作内再随机抽一帧
+      const W = [["stand",3],["move",3],["walk",3],["fly",3],
+                 ["attack",2],["regen",2],["hit",1],["die",1],["jump",1]];
+      const actWeight = (a) => (W.find(([p]) => a.startsWith(p)) || [,1])[1];
+      const pickAct = (ic) => {
+        const acts = Object.keys(ic.anims || {});
+        if (!acts.length) return [null, ic];
+        const tot = acts.reduce((s, a) => s + actWeight(a), 0);
+        let r = Math.random() * tot;
+        for (const a of acts) { r -= actWeight(a); if (r <= 0) return [a, null]; }
+        return [acts[acts.length - 1], null];
+      };
       const fhs = mapData.foothold_segs || [];
       const groundAt = (x, yRef) => {
         let bestD = null, bestY = null;
@@ -721,12 +734,17 @@ async function lifeOverlayHTML() {
         for (let i = 0; i < den; i++) {
           const k = usable[Math.floor(Math.random() * usable.length)];
           const ic = icons[k.id];
-          const wPct = ic.w * ov.s / ov.w * 100;
+          // 随机动作状态 + 动作内随机帧；没动画表的怪退回 stand 帧
+          const [act, fallback] = pickAct(ic);
+          let fr = fallback;
+          let state = "";
+          if (act) { fr = ic.anims[act][Math.floor(Math.random() * ic.anims[act].length)]; state = act; }
+          const wPct = fr.w * ov.s / ov.w * 100;
           // 所有怪 50% 随机镜像朝向（翻转后锚点 = 帧宽 - 原锚点）
           const flip = Math.random() < 0.5;
-          const ox = flip ? ic.w - ic.ox : ic.ox;
+          const ox = flip ? fr.w - fr.ox : fr.ox;
           const oxPct = ox * ov.s / ov.w * 100;
-          const oyPct = ic.oy * ov.s / ov.h * 100;
+          const oyPct = fr.oy * ov.s / ov.h * 100;
           // 随机 x + foothold 贴地；落点悬空（悬崖外）就退回出生点附近
           let x = lo + Math.random() * (hi - lo);
           let gy = groundAt(x, p.y);
@@ -736,8 +754,8 @@ async function lifeOverlayHTML() {
             if (gy === null) gy = p.y;
           }
           const pos = pct({ x, y: gy });
-          out += `<img class="mspr" src="${ic.url}" style="left:${pos.l - oxPct}%;top:${pos.t - oyPct}%;width:${wPct}%;${flip ? "transform:scaleX(-1);" : ""}"
-                   title="${k.name || k.id} ${k.id}">`;
+          out += `<img class="mspr" src="${fr.url}" style="left:${pos.l - oxPct}%;top:${pos.t - oyPct}%;width:${wPct}%;${flip ? "transform:scaleX(-1);" : ""}"
+                   title="${k.name || k.id} ${k.id}${state ? " [" + state + "]" : ""}">`;
         }
         return out;
       }).join("");

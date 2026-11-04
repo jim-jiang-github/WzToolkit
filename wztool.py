@@ -475,10 +475,11 @@ def _ensure_mob_preview(raw: str, ws: Path) -> Path:
     return outdir
 
 
-def _stand_frame(ws: Path, kind_id: str):
-    """一种怪的 stand 帧 + 锚点：(Path, w, h, ox, oy)；没有图返回 None。
+def _mob_anim_frames(ws: Path, kind_id: str) -> dict:
+    """一种怪的全部动画帧，按动作分组：{action: [(path, w, h, ox, oy), ...]}。
 
-    ox/oy 是锚点（脚底中心）在 PNG 里的位置，贴图/定位都用它对准刷怪点。
+    每帧 PNG 都按自己的包围盒裁出，ox/oy 是该帧锚点（脚底基准）；
+    stand/move/attack1/hit1/die1/jump/fly 等动作都在 manifest 里。没图返回 {}。
     """
     raw = kind_id.lstrip("0") or "0"
     mobnx = ws / "Mob.nx"
@@ -492,41 +493,77 @@ def _stand_frame(ws: Path, kind_id: str):
     try:
         outdir = _ensure_mob_preview(raw, ws)
     except Exception:
-        return None
-    pngs = sorted(outdir.rglob("*.png"))
-    if not pngs:
-        return None
-    pick = next((p for p in pngs if p.name.lower().startswith("stand")), pngs[0])
-    w = h = ox = oy = 0
+        return {}
+    by_name = {p.name: p for p in outdir.rglob("*.png")}
+    anims: dict[str, list] = {}
     man = outdir / "manifest.csv"
     if man.exists():
         for f in list(csv.reader(man.read_text(encoding="utf-8-sig").splitlines()))[1:]:
-            if len(f) >= 10 and f[4] == pick.name:
-                try:
-                    w, h, ox, oy = (int(x) for x in f[5:9])
-                except ValueError:
-                    pass
-                break
-    if not w:
+            if len(f) < 10 or f[4] not in by_name:
+                continue
+            try:
+                w, h, ox, oy = (int(x) for x in f[5:9])
+            except ValueError:
+                continue
+            anims.setdefault(f[2], []).append((by_name[f[4]], w, h, ox, oy))
+    if not anims and by_name:          # 兜底：没有 manifest 就按文件名前缀分组
         from PIL import Image
-        with Image.open(pick) as im:
-            w, h = im.size
-            ox, oy = w // 2, h
-    return pick, w, h, ox, oy
+        for name, p in sorted(by_name.items()):
+            with Image.open(p) as im:
+                w, h = im.size
+            anims.setdefault(name.split("_")[0], []).append((p, w, h, w // 2, h))
+    return anims
+
+
+# 各动作的抽取权重：站/走/飞最常见，攻击次之，受击/死亡/跳跃偏少
+ACT_WEIGHTS = (("stand", 3), ("move", 3), ("walk", 3), ("fly", 3),
+               ("attack", 2), ("regen", 2),
+               ("hit", 1), ("die", 1), ("jump", 1))
+
+
+def _act_weight(act: str) -> float:
+    for pre, w in ACT_WEIGHTS:
+        if act.startswith(pre):
+            return float(w)
+    return 1.0
+
+
+def _stand_frame(ws: Path, kind_id: str):
+    """一种怪的 stand 帧 + 锚点：(Path, w, h, ox, oy)；没有图返回 None。
+
+    ox/oy 是锚点（脚底中心）在 PNG 里的位置，贴图/定位都用它对准刷怪点。
+    """
+    anims = _mob_anim_frames(ws, kind_id)
+    for act in ("stand", "move", "fly"):
+        if anims.get(act):
+            return anims[act][0]
+    for frames in anims.values():
+        return frames[0]
+    return None
 
 
 def c_mob_icon(raw: str) -> dict:
-    """一只怪的「立绘」（stand 帧）：给地图刷怪点叠加小怪用。"""
+    """一只怪的「立绘」：stand 帧给地图叠加用；anims 给多种动作状态用。
+
+    anims = {动作名: [{url,w,h,ox,oy} 每帧]}——站/走/攻击/受击/死亡等全动作帧表，
+    页面叠加随机挑状态，和导出合成（_composite_mobs）同款规则。
+    """
     ws = _need_ws()
     if not re.fullmatch(r"\d+", raw):
         raise CliError("怪 id 不合法（应为数字）", 2)
-    fr = _stand_frame(ws, raw)
-    if fr is None:
+    anims_raw = _mob_anim_frames(ws, raw)
+    if not anims_raw:
         raise CliError("这只怪没有图片资源", 1)
-    pick, w, h, ox, oy = fr
+    anims = {act: [{"url": f"/preview/{p.relative_to(CACHE).as_posix()}",
+                    "w": w, "h": h, "ox": ox, "oy": oy}
+                   for p, w, h, ox, oy in frs]
+             for act, frs in anims_raw.items()}
+    pick, w, h, ox, oy = (anims_raw.get("stand") or
+                          next(iter(anims_raw.values())))[0]
     return {"path": str(pick),
             "url": f"/preview/{pick.relative_to(CACHE).as_posix()}",
-            "w": w, "h": h, "ox": ox, "oy": oy}
+            "w": w, "h": h, "ox": ox, "oy": oy,
+            "anims": anims}
 
 
 def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
@@ -538,8 +575,9 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
 
     每个怪在「随机游走区间」内取随机 x：优先用 life 自带 rx0~rx1（客户端巡逻区间），
     没有就按图宽 ±8% 兜底；y 由 foothold 段线性插值得出（同一段里取离出生地面最近
-    的，保证贴地不悬空），落点悬空时退回出生点附近。所有怪 50% 随机镜像朝向，
-    随机结果按 seed 稳定（同 seed 同布局）。
+    的，保证贴地不悬空），落点悬空时退回出生点附近。动作状态也随机：按 ACT_WEIGHTS
+    加权抽动作（站/走/飞多、攻击次之、受击/死亡/跳跃少），动作内随机抽帧，所有怪
+    50% 随机镜像朝向，随机结果按 seed 稳定（同 seed 同布局）。
     """
     from PIL import Image
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
@@ -549,20 +587,22 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     minx, miny, bw, bh = R.map_bounds(mj)
     minx -= 40; miny -= 40; bw += 80; bh += 80
     s = min(1.0, 1600 / max(1.0, bw))
-    frames = {}
+    frames = {}          # kind -> {action: [(img, ox, oy), ...]}（含缩放）
     frames_flip = {}
     for k in sorted({str(l.get("id", "")).lstrip("0") for l in life}):
-        fr = _stand_frame(ws, k)
-        if fr is None:
-            continue
-        pick, w, h, ox, oy = fr
-        img = Image.open(pick).convert("RGBA")
-        if abs(s - 1.0) > 1e-3:
-            img = img.resize((max(1, round(w * s)), max(1, round(h * s))))
-            ox, oy = ox * s, oy * s
-        frames[k] = (img, ox, oy)
-        frames_flip[k] = (img.transpose(Image.FLIP_LEFT_RIGHT),
-                          img.width - ox, oy)
+        ka, kf = {}, {}
+        for act, frs in _mob_anim_frames(ws, k).items():
+            for pick, w, h, ox, oy in frs:
+                img = Image.open(pick).convert("RGBA")
+                if abs(s - 1.0) > 1e-3:
+                    img = img.resize((max(1, round(w * s)), max(1, round(h * s))))
+                    ox, oy = ox * s, oy * s
+                ka.setdefault(act, []).append((img, ox, oy))
+                kf.setdefault(act, []).append(
+                    (img.transpose(Image.FLIP_LEFT_RIGHT), img.width - ox, oy))
+        if ka:
+            frames[k] = ka
+            frames_flip[k] = kf
     if not frames:
         return None, []
     im = Image.open(base_png).convert("RGBA")
@@ -600,7 +640,19 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
             # 所有怪都可能随机镜像朝向
             flip = rng.random() < 0.5
             kind = rng.choice(keys)
-            img, ox, oy = frames_flip[kind] if flip else frames[kind]
+            anim = frames_flip[kind] if flip else frames[kind]
+            # 随机动作状态：按 ACT_WEIGHTS 加权抽（站/走/飞多，攻击次之，
+            # 受击/死亡/跳跃少），再在动作里随机抽一帧
+            acts = list(anim)
+            tot = sum(_act_weight(a) for a in acts)
+            r = rng.random() * tot
+            act = acts[-1]
+            for a in acts:
+                r -= _act_weight(a)
+                if r <= 0:
+                    act = a
+                    break
+            img, ox, oy = rng.choice(anim[act])
             x = rng.uniform(lo, hi)
             gy = _ground(x, base_y)
             if gy is None:            # 落点下面没有地面（悬崖外）→ 退回出生点附近
@@ -611,7 +663,8 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
             px = (x - minx) * s - ox
             py = (gy - miny) * s - oy
             im.alpha_composite(img, (round(px), round(py)))
-            places.append({"kind": kind, "x": round(px), "y": round(py),
+            places.append({"kind": kind, "state": act,
+                           "x": round(px), "y": round(py),
                            "w": img.width, "h": img.height})
     out = outdir / "preview_mobs.png"
     im.convert("RGB").save(out)
@@ -846,9 +899,11 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
         offx, offy = (result["region"]["px"]["x"], result["region"]["px"]["y"]) \
             if region else (0, 0)
 
-        def _mob_cls(k: str) -> str:
+        def _mob_cls(k: str, state: str = "") -> str:
             nm = meta.get(k, {}).get("name") or mob_names().get(k) or ""
-            return f"{k}_{re.sub(r'[^0-9A-Za-z_]+', '_', nm).strip('_')}" if nm else k
+            base = f"{k}_{re.sub(r'[^0-9A-Za-z_]+', '_', nm).strip('_')}" if nm else k
+            # 类别名带上动作状态：YOLO 一套检测就同时认「是哪种怪 + 什么状态」
+            return f"{base}__{state}" if state else base
 
         # 类别注册表（跨导出累积，id 稳定）
         ydir = EXPORTS / "yolo"
@@ -861,7 +916,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                 reg = json.loads(reg_file.read_text(encoding="utf-8"))
             except Exception:
                 reg = {}
-        cls_names = {_mob_cls(p["kind"]) for p in places} | {"rope", "ladder"}
+        cls_names = {_mob_cls(p["kind"], p.get("state", "stand")) for p in places} \
+            | {"rope", "ladder"}
         for nm in sorted(cls_names):
             if nm not in reg:
                 reg[nm] = len(reg)
@@ -877,10 +933,14 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                     (x1 - x0) / W, (y1 - y0) / H)
 
         lines = []
+        state_cnt: dict[str, int] = {}
         for p in places:
+            st = p.get("state", "stand")
+            state_cnt[st] = state_cnt.get(st, 0) + 1
             b = _box(p["x"], p["y"], p["w"], p["h"])
             if b:
-                lines.append(f"{reg[_mob_cls(p['kind'])]} " + " ".join(f"{v:.6f}" for v in b))
+                lines.append(f"{reg[_mob_cls(p['kind'], st)]} "
+                             + " ".join(f"{v:.6f}" for v in b))
         for x, y1, y2, l in result["ladder_rope"]:
             b = _box((x - 16 - minx) * s, (y1 - miny) * s, 32 * s, (y2 - y1) * s)
             if b:
@@ -902,7 +962,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
         result["yolo"] = {"image": str(img_out), "labels": str(lbl_out),
                           "classes": str(ydir / "classes.txt"),
                           "dataset": str(ydir / "dataset.yaml"),
-                          "boxes": len(lines)}
+                          "boxes": len(lines),
+                          "states": state_cnt}
     return result
 
 
@@ -1302,8 +1363,11 @@ def cmd_map_export(a) -> int:
         print(f"预览: {d['preview_path']}")
         if d.get("yolo"):
             y = d["yolo"]
+            st = " · ".join(f"{k}×{v}" for k, v in sorted(y.get("states", {}).items()))
             print(f"YOLO: {y['boxes']} 个框 · 图 {y['image']}")
             print(f"      标注 {y['labels']} · 类别 {y['classes']} · 数据集 {y['dataset']}")
+            if st:
+                print(f"      状态分布: {st}")
     return 0
 
 
@@ -1423,7 +1487,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
     p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 exports")
     p.add_argument("--mobs", action="store_true",
-                   help="预览图合成怪物（沿地面随机散布、贴地不悬空；默认每次随机，--seed 可复现）")
+                   help="预览图合成怪物（沿地面随机散布、贴地不悬空；动作状态也随机：站/走/攻击/受击/死亡等，默认每次随机，--seed 可复现）")
     p.add_argument("--yolo", action="store_true",
                    help="产出 YOLO 训练集（exports/yolo/：images+labels+classes.txt"
                         "+dataset.yaml；每只怪一个框、每段绳/梯一个框，怪按 id_名字分类；"
