@@ -133,11 +133,32 @@ def _render_mod():
 def _render_preview(map_dir: Path, out_png: Path) -> dict:
     from PIL import Image
     if not out_png.exists():      # 渲染只取决于贴图；同图多窗口导出复用，不重渲
+        import tempfile
         R = _render_mod()
-        R.render_file(str(map_dir), str(out_png), max_width=1600)
+        out_png.parent.mkdir(parents=True, exist_ok=True)
+        # 多进程并发导同一张图时都会来渲染：先写临时文件，再原子替换，
+        # 避免互相把对方的半成品 PNG 读进来/覆盖掉
+        fd, tmp = tempfile.mkstemp(suffix=".png", dir=out_png.parent)
+        os.close(fd)
+        try:
+            os.unlink(tmp)
+            R.render_file(str(map_dir), str(tmp), max_width=1600)
+            os.replace(tmp, out_png)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    import time as _t
+    for _ in range(50):           # 对方刚 replace 完的一瞬可能撞上 FileNotFoundError
+        try:
+            with Image.open(out_png) as im:
+                return {"w": im.width, "h": im.height}
+        except FileNotFoundError:
+            _t.sleep(0.2)
     with Image.open(out_png) as im:
-        w, h = im.size
-    return {"w": w, "h": h}
+        return {"w": im.width, "h": im.height}
 
 
 # ---------------------------------------------------------------- 名字表
@@ -1047,6 +1068,63 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
                             for lr in mj.get("ladderRope", [])]}
 
 
+def c_probe_batch(ids: list[str], win_w: int = 1366, win_h: int = 768) -> list[dict]:
+    """批量探测：一次进程内算完多张图的「能不能导 1366×768 窗口」。
+
+    批量脚本别逐张调 map-info（每次都得起一个 onefile exe，杀毒+解包开销
+    会把并发拖死）——用这个一次全查：读 stdin 的 id 列表，输出 JSON 数组。
+    usable=True 表示这张图够大、不缩放、有刷怪，可以随机取窗口导出。
+    """
+    ws = _need_ws()
+    R = _render_mod()
+    out = []
+    for mid in (str(i).strip() for i in ids):
+        rec: dict = {"id": mid}
+        try:
+            if not re.fullmatch(r"\d{9}", mid):
+                raise CliError("地图 id 应该是 9 位数字", 2)
+            visited = set()
+            d_mid = mid
+            mj = None
+            for _ in range(5):                  # 链接图顺链（防环 4 跳）
+                if d_mid in visited:
+                    raise CliError("link 成环", 1)
+                visited.add(d_mid)
+                outdir = CACHE / "map" / d_mid
+                if not (outdir / "map.json").exists():
+                    if outdir.exists():
+                        drop_dir(outdir)
+                    outdir.parent.mkdir(parents=True, exist_ok=True)
+                    _run(["nxmap", d_mid, str(outdir)], ws, timeout=600)
+                if not (outdir / "map.json").exists():
+                    raise CliError(f"nxmap 没产出 map.json（{d_mid}）", 1)
+                mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
+                link = str(mj.get("info", {}).get("link") or "").strip()
+                if link and link != d_mid and re.fullmatch(r"\d{9}", link):
+                    d_mid = link
+                    continue
+                break
+            cx, cy, cw, chh = R.map_bounds(mj)
+            minx, miny = cx - 40, cy - 40
+            bw, bh = cw + 80, chh + 80
+            s = min(1.0, 1600 / max(1.0, bw))
+            life = [l for l in mj.get("life", []) if l.get("type") == "m"]
+            rec.update({"world": {"x": minx, "y": miny, "w": bw, "h": bh},
+                        "scale": round(s, 4), "life_count": len(life),
+                        "usable": bool(life and s >= 0.999
+                                       and bw >= win_w and bh >= win_h)})
+            if d_mid != mid:
+                rec["link_to"] = d_mid
+        except CliError as e:
+            rec["usable"] = False
+            rec["error"] = str(e)
+        except Exception as e:                   # 单张坏图不拖垮整批
+            rec["usable"] = False
+            rec["error"] = f"{type(e).__name__}: {e}"
+        out.append(rec)
+    return out
+
+
 def c_clear_cache() -> dict:
     # 逐个删子目录，删不掉的挪进 trash —— 见 drop_dir 注释
     for d in list(CACHE.iterdir()) if CACHE.exists() else []:
@@ -1344,6 +1422,16 @@ def cmd_map_info(a) -> int:
     return 0
 
 
+def cmd_probe(a) -> int:
+    """批量探测（stdin 一行一个 id）：usable=True 才能随机导 1366×768 窗口。"""
+    ids = [ln.strip() for ln in sys.stdin if ln.strip()]
+    recs = c_probe_batch(ids, a.w, a.h)
+    print(json.dumps(recs, ensure_ascii=False))
+    ok = sum(1 for r in recs if r.get("usable"))
+    print(f"# 探测 {len(recs)} 张，可用 {ok} 张", file=sys.stderr)
+    return 0
+
+
 def cmd_mob_icon(a) -> int:
     _out(c_mob_icon(a.id), a.json)
     return 0
@@ -1487,6 +1575,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("mob-frames", help="列出一只怪的动画列表与帧数（stand/move/die1…）")
     p.add_argument("id", help="怪 id")
     _j(p); p.set_defaults(fn=cmd_mob_frames)
+
+    p = sub.add_parser("probe", help="批量探测地图可导窗口（stdin 一行一个 id，输出 JSON 数组）",
+                       epilog="批量脚本专用：一次进程内查完全部地图，比逐张 map-info 快几十倍。\n"
+                              "usable=True 表示够大、不缩放、有刷怪，可随机导 W×H 窗口。")
+    p.add_argument("--w", type=int, default=1366, help="窗口宽（默认 1366）")
+    p.add_argument("--h", type=int, default=768, help="窗口高（默认 768）")
+    _j(p); p.set_defaults(fn=cmd_probe)
 
     p = sub.add_parser("mob-export", help="导出一只怪的全部动画帧 PNG + manifest.csv",
                        epilog="输出: exports/mobs/<id>/（--preview 时进 .cache/mob/<id>/）。\n"

@@ -226,3 +226,6 @@ __marimo__/
 # PyInstaller 打包中间产物（dist/ 里按需取，wztool.exe 已拷到根目录）
 build_wztool/
 dist/
+
+# YOLO 预训练权重（下载物，不入库）
+yolov8n.pt
