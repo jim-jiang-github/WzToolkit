@@ -473,7 +473,6 @@ def drop_dir(p: Path) -> None:
         pass
 
 
-@app.post("/api/mob/export")
 def _resolve_mob_link(raw: str, meta: dict) -> str:
     """链接怪（info/link 且自身 0 帧）顺链解析到真正有帧的怪，防环最多 5 跳。"""
     seen: set = set()
@@ -538,6 +537,7 @@ def mob_icon(raw: str):
             "w": w, "h": h, "ox": ox, "oy": oy}
 
 
+@app.post("/api/mob/export")
 def mob_export(payload: dict = Body(...)):
     """导出一只怪的全部动画帧。preview=True 只出预览（缓存），否则进 exports。"""
     ws = _need_ws()

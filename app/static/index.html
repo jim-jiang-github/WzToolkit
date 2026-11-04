@@ -204,7 +204,11 @@ function api(path, opts) {
   return fetch(path, opts).then(async (r) => {
     if (!r.ok) {
       let m = r.status + "";
-      try { m = (await r.json()).detail || m; } catch (e) {}
+      try {
+        const d = (await r.json()).detail;
+        if (d) m = typeof d === "string" ? d
+          : (Array.isArray(d) ? d.map((x) => x.msg || JSON.stringify(x)).join("；") : JSON.stringify(d));
+      } catch (e2) {}
       throw new Error(m);
     }
     return r.json();
