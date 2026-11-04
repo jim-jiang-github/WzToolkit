@@ -820,6 +820,58 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     return result
 
 
+def c_map_info(mid: str, _visited: set | None = None) -> dict:
+    """查地图元信息，**不渲染**：世界坐标包围盒 / 预览缩放 / 刷怪统计。
+
+    先知道「地图多大」，再决定导哪个窗口——比 map-export 快一个量级
+    （只跑 nxmap 解析 map.json，不合成贴图不出图）。解析结果进
+    .cache/map/<id>/（与预览共用缓存，之后 map-export 直接复用）。
+    链接图自动转向目标图，返回带 link 字段。
+    """
+    ws = _need_ws()
+    mid = str(mid).strip()
+    if not re.fullmatch(r"\d{9}", mid):
+        raise CliError("地图 id 应该是 9 位数字", 2)
+    visited = _visited if _visited is not None else set()
+    if mid in visited:
+        raise CliError(f"link 成环了：{' → '.join(sorted(visited))} → {mid}", 1)
+    visited.add(mid)
+    outdir = CACHE / "map" / mid
+    if not (outdir / "map.json").exists():
+        if outdir.exists():
+            drop_dir(outdir)
+        outdir.parent.mkdir(parents=True, exist_ok=True)
+        _run(["nxmap", mid, str(outdir)], ws, timeout=600)
+    if not (outdir / "map.json").exists():
+        raise CliError(f"nxmap 没产出 map.json（这个 id 存在吗？{mid}）", 1)
+    mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
+    link = str(mj.get("info", {}).get("link") or "").strip()
+    if link and link != mid and re.fullmatch(r"\d{9}", link):
+        d = c_map_info(link, visited)
+        d["link"] = {"from": mid, "to": link}
+        return d
+    R = _render_mod()
+    cx, cy, cw, chh = R.map_bounds(mj)          # 内容包围盒（不含 pad）
+    minx, miny = cx - 40, cy - 40
+    bw, bh = cw + 80, chh + 80                   # 渲染画布窗口（pad=40，与导出一致）
+    s = min(1.0, 1600 / max(1.0, bw))
+    life = [l for l in mj.get("life", []) if l.get("type") == "m"]
+    mobnx = ws / "Mob.nx"
+    meta = {m["id"]: m for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
+    kinds = sorted({str(l.get("id", "")).lstrip("0") for l in life})
+    return {"id": mid,
+            "bounds": {"x": cx, "y": cy, "w": cw, "h": chh},
+            "world": {"x": minx, "y": miny, "w": bw, "h": bh},
+            "scale": s,
+            "preview_px": {"w": round(bw * s), "h": round(bh * s)},
+            "life_count": len(life),
+            "life_kinds": [{"id": k,
+                            "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
+                            "tier": meta.get(k, {}).get("tier", "normal")} for k in kinds],
+            "footholds": len(mj.get("foothold", [])),
+            "ladders": len(mj.get("ladderRope", []))}
+
+
 def c_clear_cache() -> dict:
     # 逐个删子目录，删不掉的挪进 trash —— 见 drop_dir 注释
     for d in list(CACHE.iterdir()) if CACHE.exists() else []:
@@ -1101,6 +1153,21 @@ def cmd_maps(a) -> int:
     return 0
 
 
+def cmd_map_info(a) -> int:
+    d = c_map_info(a.id)
+    if a.json:
+        _out(d, a.json)
+        return 0
+    link = f"（链接图 → 目标 {d['link']['to']}）" if d.get("link") else ""
+    b, w = d["bounds"], d["world"]
+    print(f"地图 {d['id']}: 内容 {b['w']:.0f}×{b['h']:.0f} @ ({b['x']:.0f},{b['y']:.0f})"
+          f" · 可导窗口 {w['w']:.0f}×{w['h']:.0f} @ ({w['x']:.0f},{w['y']:.0f}){link}")
+    print(f"预览: {d['preview_px']['w']}×{d['preview_px']['h']} px"
+          f"（缩放 {d['scale']:.3f}）· 刷怪 {d['life_count']} · "
+          f"地面 {d['footholds']} 段 · 绳梯 {d['ladders']} 段")
+    return 0
+
+
 def cmd_mob_icon(a) -> int:
     _out(c_mob_icon(a.id), a.json)
     return 0
@@ -1225,6 +1292,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--filter", choices=["all", "mob", "empty"], default="",
                    help="mob=只看有怪的图，empty=只看无怪图")
     _j(p); p.set_defaults(fn=cmd_maps)
+
+    p = sub.add_parser("map-info", help="查地图元信息（不渲染：尺寸/世界坐标/刷怪统计）",
+                       epilog="比 map-export 快一个量级（只解析 map.json，不出图）。\n"
+                              "bounds=内容包围盒；world=加 40px pad 的可导窗口（--region 用它算）；\n"
+                              "scale<1 表示导出预览会被缩放（1366×768 窗口可能裁不满）。")
+    p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
+    _j(p); p.set_defaults(fn=cmd_map_info)
 
     p = sub.add_parser("mob-frames", help="列出一只怪的动画列表与帧数（stand/move/die1…）")
     p.add_argument("id", help="怪 id")

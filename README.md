@@ -25,6 +25,7 @@ powershell -File build.ps1
 wztool --help                           # 全部子命令与示例（面向 AI/程序编写）
 wztool workspace "D:\MapleStory\nxrun"   # 设置工作区
 wztool mobs --json                      # 机器可读输出
+wztool map-info 000050000               # 查地图尺寸/世界坐标/刷怪数（不渲染，秒级）
 wztool map-export 000050000 --mobs      # 导出地图并把怪物画进预览图
 
 # 3) Web 页面（可选，人看；页面只是 CLI 的可视化壳）
