@@ -129,6 +129,10 @@
           box-shadow: 0 0 3px #0009; pointer-events: auto; cursor: help; }
   .ldot.boss { background: #ffb454; }
   .ldot.big  { background: #ff2d78; }
+  .ropebox { position: absolute; transform: translateX(-50%); border-radius: 3px;
+             pointer-events: auto; cursor: help; box-shadow: 0 0 4px #0006; }
+  .ropebox.rope { background: #ff8c3326; border: 1.5px solid #ff8c33cc; }  /* 绳子：橙框 */
+  .ropebox.lad  { background: #38c17226; border: 1.5px solid #38c172cc; }  /* 梯子：绿框 */
   .mspr { position: absolute; pointer-events: none; image-rendering: pixelated;
           filter: drop-shadow(0 1px 1px #0006); }
   /* 地图放大查看器 */
@@ -635,7 +639,9 @@ async function lifeOverlayHTML() {
   if (!mapData || !mapData.life_points) return "";
   const on = $("#life-toggle") && $("#life-toggle").checked;
   const sprites = $("#mob-toggle") && $("#mob-toggle").checked;
-  if (!on && !sprites) return "";
+  const ropeOn = $("#rope-rope") && $("#rope-rope").checked;
+  const ladOn = $("#rope-lad") && $("#rope-lad").checked;
+  if (!on && !sprites && !ropeOn && !ladOn) return "";
   const ov = mapData.overlay;
   const kinds = (mapData.life_kinds || []).filter((k) => k && k.id);
   // 区域裁剪后 overlay 只覆盖窗口：范围外的点不画
@@ -648,6 +654,20 @@ async function lifeOverlayHTML() {
     t: (p.y - ov.miny) * ov.s / ov.h * 100,
   });
   let html = "";
+  if ((ropeOn || ladOn) && (mapData.ladder_rope || []).length) {
+    // 绳梯高亮框：绳子/梯子都是垂直段（世界坐标 x 单值，y1 顶 y2 底），
+    // 框宽取 32 世界像素（含视觉余量），按 overlay 变换换算成百分比
+    const boxW = 32;
+    html += mapData.ladder_rope.filter((s) => (s[3] ? ladOn : ropeOn)).map(([x, y1, y2, l]) => {
+      const top = (y1 - ov.miny) * ov.s / ov.h * 100;
+      const hPct = (y2 - y1) * ov.s / ov.h * 100;
+      if (top + hPct < 0 || top > 100) return "";       // 区域裁剪后范围外的跳过
+      const t0 = Math.max(0, top);
+      return `<span class="ropebox ${l ? "lad" : "rope"}"
+              style="left:${(x - ov.minx) * ov.s / ov.w * 100}%;top:${t0}%;width:${boxW * ov.s / ov.w * 100}%;height:${Math.min(hPct, 100 - t0)}%"
+              title="${l ? "梯子" : "绳子"} @ x=${x}, y=${y1}~${y2}"></span>`;
+    }).join("");
+  }
   if (on) {
     html += pts.map((p) => {
       const { l, t } = pct(p);
@@ -756,12 +776,16 @@ async function mapLoad(id, preview) {
       ? ` <span class="pill" title="这种图自己的 img 是空的，客户端渲染时加载 link 指向的图">链接图 → 画面同 <b>${d.link.to}</b></span>` : "";
     // 带怪的合成图每次导出都会重新随机布局，URL 不变会被浏览器缓存 → 加缓存戳
     const pvUrl = d.preview_url + (d.mobs ? `?v=${Date.now()}` : "");
+    const nRope = (d.ladder_rope || []).filter((s) => !s[3]).length;
+    const nLad = (d.ladder_rope || []).filter((s) => s[3]).length;
     det.innerHTML = `<div class="flexline"><div>地图 <b>${id}</b>${linkNote} ·
       ${d.preview.w}×${d.preview.h}${preview ? "（预览）" : ""}</div>
       <div class="row">
         ${d.life_count ? `<label class="muted" style="cursor:pointer"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
-        <label class="muted" style="cursor:pointer"><input type="checkbox" id="mob-toggle" /> 显示怪物</label>
-        <label class="muted" style="cursor:pointer" title="勾选后导出/预览的图片会直接把怪物画进去"><input type="checkbox" id="export-mobs" ${EXPORTMOBS ? "checked" : ""} /> 导出带怪物</label>
+        <label class="muted" style="cursor:pointer"><input type="checkbox" id="mob-toggle" /> 显示怪物</label>` : ""}
+        ${nRope ? `<label class="muted" style="cursor:pointer" title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" /> 显示绳索（${nRope}）</label>` : ""}
+        ${nLad ? `<label class="muted" style="cursor:pointer" title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" /> 显示梯子（${nLad}）</label>` : ""}
+        ${d.life_count ? `<label class="muted" style="cursor:pointer" title="勾选后导出/预览的图片会直接把怪物画进去"><input type="checkbox" id="export-mobs" ${EXPORTMOBS ? "checked" : ""} /> 导出带怪物</label>
         <label class="muted" title="怪物密度倍数：影响页面叠加与导出合成的怪物数量" style="cursor:default">密度
           <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:80px" />
           ×<b id="density-val">${DENSITY}</b></label>` : ""}
@@ -803,6 +827,10 @@ async function mapLoad(id, preview) {
     if (lt) lt.onchange = renderLifeDots;
     const mt = $("#mob-toggle");
     if (mt) mt.onchange = renderLifeDots;
+    const rr = $("#rope-rope");
+    if (rr) rr.onchange = renderLifeDots;
+    const rl = $("#rope-lad");
+    if (rl) rl.onchange = renderLifeDots;
     const em = $("#export-mobs");
     if (em) em.onchange = () => EXPORTMOBS = em.checked;
     const ds = $("#density");

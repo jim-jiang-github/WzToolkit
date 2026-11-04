@@ -775,7 +775,10 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
               "life_points": points,
               # 全部地面段 [x1,y1,x2,y2]：前端随机摆怪时做贴地插值
               "foothold_segs": [[f["x1"], f["y1"], f["x2"], f["y2"]]
-                                for f in mj.get("foothold", [])]}
+                                for f in mj.get("foothold", [])],
+              # 绳梯段 [x,y1,y2,l]：l=1 梯子 / 0 绳子（都是垂直的，x 单值）
+              "ladder_rope": [[lr["x"], lr["y1"], lr["y2"], lr.get("l", 0)]
+                              for lr in mj.get("ladderRope", [])]}
     # 导出图带怪物：把怪沿地面随机散布合成进预览图（preview_mobs.png）
     if mobs and life:
         mob_png = _composite_mobs(ws, outdir, mj, png,
@@ -869,7 +872,10 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
                             "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
                             "tier": meta.get(k, {}).get("tier", "normal")} for k in kinds],
             "footholds": len(mj.get("foothold", [])),
-            "ladders": len(mj.get("ladderRope", []))}
+            "ladders": len(mj.get("ladderRope", [])),
+            # 绳梯段 [x,y1,y2,l]：l=1 梯子 / 0 绳子
+            "ladder_rope": [[lr["x"], lr["y1"], lr["y2"], lr.get("l", 0)]
+                            for lr in mj.get("ladderRope", [])]}
 
 
 def c_clear_cache() -> dict:
