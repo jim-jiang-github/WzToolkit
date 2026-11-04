@@ -131,9 +131,10 @@ def _render_mod():
 
 
 def _render_preview(map_dir: Path, out_png: Path) -> dict:
-    R = _render_mod()
-    R.render_file(str(map_dir), str(out_png), max_width=1600)
     from PIL import Image
+    if not out_png.exists():      # 渲染只取决于贴图；同图多窗口导出复用，不重渲
+        R = _render_mod()
+        R.render_file(str(map_dir), str(out_png), max_width=1600)
     with Image.open(out_png) as im:
         w, h = im.size
     return {"w": w, "h": h}
@@ -844,10 +845,10 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
               "ladder_rope": [[lr["x"], lr["y1"], lr["y2"], lr.get("l", 0)]
                               for lr in mj.get("ladderRope", [])]}
     # 导出图带怪物：把怪沿地面随机散布合成进预览图（preview_mobs.png）
-    # yolo=True 必然要怪（要标它们的框）
+    # yolo 但不 mobs = 负样本：图里一只怪都没有（绳梯照常标注）
     use_seed = str(seed) if seed else f"{mid}:{random.randrange(1 << 30):x}"
     places: list[dict] = []
-    if (mobs or yolo) and life:
+    if mobs and life:
         mob_png, places = _composite_mobs(ws, outdir, mj, png, use_seed,
                                           density=max(1, min(10, int(density or 1))))
         if mob_png is not None:
@@ -905,65 +906,86 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
             # 类别名带上动作状态：YOLO 一套检测就同时认「是哪种怪 + 什么状态」
             return f"{base}__{state}" if state else base
 
-        # 类别注册表（跨导出累积，id 稳定）
+        # 类别注册表（跨导出累积，id 稳定）；批量导出是多进程并发的，
+        # 注册表读写要拿文件锁，否则并发分配类别 id 会互相覆盖错乱
         ydir = EXPORTS / "yolo"
         (ydir / "images").mkdir(parents=True, exist_ok=True)
         (ydir / "labels").mkdir(parents=True, exist_ok=True)
         reg_file = ydir / "classes.json"
-        reg: dict[str, int] = {}
-        if reg_file.exists():
+        import time as _time
+        lock = ydir / ".classes.lock"
+        deadline = _time.time() + 300
+        while True:
             try:
-                reg = json.loads(reg_file.read_text(encoding="utf-8"))
-            except Exception:
-                reg = {}
-        cls_names = {_mob_cls(p["kind"], p.get("state", "stand")) for p in places} \
-            | {"rope", "ladder"}
-        for nm in sorted(cls_names):
-            if nm not in reg:
-                reg[nm] = len(reg)
+                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.close(fd)
+                break
+            except FileExistsError:
+                try:
+                    if _time.time() - lock.stat().st_mtime > 300:
+                        lock.unlink()      # 陈旧锁（进程崩了没清）：清掉重试
+                except FileNotFoundError:
+                    pass
+                if _time.time() > deadline:
+                    break                  # 等不到就继续，绝不死锁
+                _time.sleep(0.05)
+        try:
+            reg: dict[str, int] = {}
+            if reg_file.exists():
+                try:
+                    reg = json.loads(reg_file.read_text(encoding="utf-8"))
+                except Exception:
+                    reg = {}
+            cls_names = {_mob_cls(p["kind"], p.get("state", "stand")) for p in places} \
+                | {"rope", "ladder"}
+            for nm in sorted(cls_names):
+                if nm not in reg:
+                    reg[nm] = len(reg)
 
-        def _box(x: float, y: float, w: float, h: float) -> tuple | None:
-            """预览图像素框 → 最终图上的归一化 YOLO 框；完全在外头的丢弃。"""
-            x, y = x - offx, y - offy
-            x0, y0 = max(0.0, x), max(0.0, y)
-            x1, y1 = min(float(W), x + w), min(float(H), y + h)
-            if x1 - x0 < 2 or y1 - y0 < 2:      # 被裁得只剩边角的不算目标
-                return None
-            return (((x0 + x1) / 2) / W, ((y0 + y1) / 2) / H,
-                    (x1 - x0) / W, (y1 - y0) / H)
+            def _box(x: float, y: float, w: float, h: float) -> tuple | None:
+                """预览图像素框 → 最终图上的归一化 YOLO 框；完全在外头的丢弃。"""
+                x, y = x - offx, y - offy
+                x0, y0 = max(0.0, x), max(0.0, y)
+                x1, y1 = min(float(W), x + w), min(float(H), y + h)
+                if x1 - x0 < 2 or y1 - y0 < 2:      # 被裁得只剩边角的不算目标
+                    return None
+                return (((x0 + x1) / 2) / W, ((y0 + y1) / 2) / H,
+                        (x1 - x0) / W, (y1 - y0) / H)
 
-        lines = []
-        state_cnt: dict[str, int] = {}
-        for p in places:
-            st = p.get("state", "stand")
-            state_cnt[st] = state_cnt.get(st, 0) + 1
-            b = _box(p["x"], p["y"], p["w"], p["h"])
-            if b:
-                lines.append(f"{reg[_mob_cls(p['kind'], st)]} "
-                             + " ".join(f"{v:.6f}" for v in b))
-        for x, y1, y2, l in result["ladder_rope"]:
-            b = _box((x - 16 - minx) * s, (y1 - miny) * s, 32 * s, (y2 - y1) * s)
-            if b:
-                lines.append(f"{reg['ladder' if l else 'rope']} " + " ".join(f"{v:.6f}" for v in b))
-        stem = f"{mid}_{re.sub(r'[^0-9A-Za-z_]+', '_', use_seed)}"
-        img_out = ydir / "images" / f"{stem}.png"
-        lbl_out = ydir / "labels" / f"{stem}.txt"
-        shutil.copyfile(result["preview_path"], img_out)
-        lbl_out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        reg_file.write_text(json.dumps(reg, ensure_ascii=False, indent=1), encoding="utf-8")
-        # classes.txt（darknet 风格）+ dataset.yaml（ultralytics 用），每次导出全量重写
-        inv = sorted(reg.items(), key=lambda kv: kv[1])
-        (ydir / "classes.txt").write_text(
-            "\n".join(nm for nm, _ in inv) + "\n", encoding="utf-8")
-        names_yaml = "\n".join(f"  {i}: {nm}" for nm, i in inv)
-        (ydir / "dataset.yaml").write_text(
-            f"path: {ydir.resolve().as_posix()}\ntrain: images\nval: images\n"
-            f"names:\n{names_yaml}\n", encoding="utf-8")
-        result["yolo"] = {"image": str(img_out), "labels": str(lbl_out),
-                          "classes": str(ydir / "classes.txt"),
-                          "dataset": str(ydir / "dataset.yaml"),
-                          "boxes": len(lines),
-                          "states": state_cnt}
+            lines = []
+            state_cnt: dict[str, int] = {}
+            for p in places:
+                st = p.get("state", "stand")
+                state_cnt[st] = state_cnt.get(st, 0) + 1
+                b = _box(p["x"], p["y"], p["w"], p["h"])
+                if b:
+                    lines.append(f"{reg[_mob_cls(p['kind'], st)]} "
+                                 + " ".join(f"{v:.6f}" for v in b))
+            for x, y1, y2, l in result["ladder_rope"]:
+                b = _box((x - 16 - minx) * s, (y1 - miny) * s, 32 * s, (y2 - y1) * s)
+                if b:
+                    lines.append(f"{reg['ladder' if l else 'rope']} " + " ".join(f"{v:.6f}" for v in b))
+            stem = f"{mid}_{re.sub(r'[^0-9A-Za-z_]+', '_', use_seed)}"
+            img_out = ydir / "images" / f"{stem}.png"
+            lbl_out = ydir / "labels" / f"{stem}.txt"
+            shutil.copyfile(result["preview_path"], img_out)
+            lbl_out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            reg_file.write_text(json.dumps(reg, ensure_ascii=False, indent=1), encoding="utf-8")
+            # classes.txt（darknet 风格）+ dataset.yaml（ultralytics 用），每次导出全量重写
+            inv = sorted(reg.items(), key=lambda kv: kv[1])
+            (ydir / "classes.txt").write_text(
+                "\n".join(nm for nm, _ in inv) + "\n", encoding="utf-8")
+            names_yaml = "\n".join(f"  {i}: {nm}" for nm, i in inv)
+            (ydir / "dataset.yaml").write_text(
+                f"path: {ydir.resolve().as_posix()}\ntrain: images\nval: images\n"
+                f"names:\n{names_yaml}\n", encoding="utf-8")
+            result["yolo"] = {"image": str(img_out), "labels": str(lbl_out),
+                              "classes": str(ydir / "classes.txt"),
+                              "dataset": str(ydir / "dataset.yaml"),
+                              "boxes": len(lines),
+                              "states": state_cnt}
+        finally:
+            lock.unlink(missing_ok=True)
     return result
 
 
@@ -1490,8 +1512,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="预览图合成怪物（沿地面随机散布、贴地不悬空；动作状态也随机：站/走/攻击/受击/死亡等，默认每次随机，--seed 可复现）")
     p.add_argument("--yolo", action="store_true",
                    help="产出 YOLO 训练集（exports/yolo/：images+labels+classes.txt"
-                        "+dataset.yaml；每只怪一个框、每段绳/梯一个框，怪按 id_名字分类；"
-                        "蕴含 --mobs）")
+                        "+dataset.yaml；每只怪一个框（类别=id_名字__动作状态）、"
+                        "每段绳/梯一个框；配 --mobs 出正样本，不带 --mobs 出负样本（没怪，绳梯照常标注））")
     p.add_argument("--seed", metavar="S", help="配合 --mobs：固定随机种子（同 seed 同布局；缺省每次随机）")
     p.add_argument("--density", type=int, default=1, metavar="N",
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
