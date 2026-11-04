@@ -818,6 +818,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return {}
 
     # ---- 路由 ----
+    # POST-only 路由集合：GET 打过来回 405（与旧 FastAPI 行为一致），别的才 404
+    _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert", "/api/mob/export",
+                   "/api/map/export", "/api/export/clear-cache"}
+
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         path = u.path
@@ -845,6 +849,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             mime = {"png": "image/png", "css": "text/css", "js": "text/javascript",
                     "html": "text/html", "txt": "text/plain"}.get(path.rsplit(".", 1)[-1], "application/octet-stream")
             self._send_file(STATIC / urllib.parse.unquote(path[len("/static/"):]), mime)
+        elif path in self._POST_ONLY:
+            self._send_json(405, {"detail": f"Method Not Allowed: {path} 是 POST 接口"})
         else:
             self._send_json(404, {"detail": f"no route: {path}"})
 
@@ -867,6 +873,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       bool(b.get("preview")), bool(b.get("mobs")))
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
+        elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps") \
+                or path.startswith("/api/mob/icon/") \
+                or (path.startswith("/api/mob/") and path.endswith("/maps")):
+            self._send_json(405, {"detail": f"Method Not Allowed: {path} 是 GET 接口"})
         else:
             self._send_json(404, {"detail": f"no route: {path}"})
 
