@@ -229,3 +229,11 @@ dist/
 
 # YOLO 预训练权重（下载物，不入库）
 yolov8n.pt
+
+# 训练产物（模型/日志/结果，不入库）
+train/runs/
+train/test_out/
+train/batch_*.json
+train/*.log
+train/ov_*.log
+train/train_report.md
