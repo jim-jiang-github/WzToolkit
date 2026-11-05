@@ -771,7 +771,8 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     mobs=True 时预览图把怪随机画到地面上（preview_mobs.png，沿 rx 巡逻区间散布、
     foothold 落地）；seed 缺省每次随机，传同值可复现同一布局。
     yolo=True 时额外产出 YOLO 训练集（exports/yolo/：images + labels +
-    classes.txt/dataset.yaml；每只怪一个框、每段绳/梯一个框，怪按 id_名字分类），
+    classes.txt/dataset.yaml；每只怪一个框、每段绳/梯一个框、每段地面一个框，
+    怪按 id_名字__动作状态分类），
     蕴含 mobs=True。
     life_points 是刷怪点（x, y 已按客户端规则落到 cy 地面），overlay 是
     世界坐标→预览图的变换（minx/miny/s/w/h），两者配合可在任何客户端复现点位。
@@ -912,7 +913,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
         result["overlay"] = {"minx": rx, "miny": ry, "s": s, "w": cw, "h": ch}
 
     # ---------------------------------------------------------------- YOLO 数据集
-    # 每只怪一个框（合成时记录的精确 ground truth）+ 每段绳/梯一个框。
+    # 每只怪一个框（合成时记录的精确 ground truth）+ 每段绳/梯一个框
+    # + 每段地面(foothold)一个框。
     # 产出 exports/yolo/{images,labels}/ + classes.txt + dataset.yaml，
     # 类别表跨导出累积（classes.json 注册表），怪的类别名 = id_英文名。
     if yolo:
@@ -958,7 +960,7 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                 except Exception:
                     reg = {}
             cls_names = {_mob_cls(p["kind"], p.get("state", "stand")) for p in places} \
-                | {"rope", "ladder"}
+                | {"rope", "ladder", "ground"}
             for nm in sorted(cls_names):
                 if nm not in reg:
                     reg[nm] = len(reg)
@@ -986,6 +988,18 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                 b = _box((x - 16 - minx) * s, (y1 - miny) * s, 32 * s, (y2 - y1) * s)
                 if b:
                     lines.append(f"{reg['ladder' if l else 'rope']} " + " ".join(f"{v:.6f}" for v in b))
+            # 地面（foothold）：每段一个框，从站立线往下盖 32 世界像素——
+            # 平台贴图主体在线的下方、怪的脚踩在线上，往下扩既能框住可视平台、
+            # 又不会和怪框打架；窄于 8 世界像素的竖直连接段是平台侧壁不可辨识，跳过
+            for fx1, fy1, fx2, fy2 in result.get("foothold_segs", []):
+                if abs(fx2 - fx1) < 8:
+                    continue
+                top = min(fy1, fy2)
+                bot = max(max(fy1, fy2), top + 32)
+                b = _box((min(fx1, fx2) - minx) * s, (top - miny) * s,
+                         abs(fx2 - fx1) * s, (bot - top) * s)
+                if b:
+                    lines.append(f"{reg['ground']} " + " ".join(f"{v:.6f}" for v in b))
             stem = f"{mid}_{re.sub(r'[^0-9A-Za-z_]+', '_', use_seed)}"
             img_out = ydir / "images" / f"{stem}.png"
             lbl_out = ydir / "labels" / f"{stem}.txt"
@@ -1608,7 +1622,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yolo", action="store_true",
                    help="产出 YOLO 训练集（exports/yolo/：images+labels+classes.txt"
                         "+dataset.yaml；每只怪一个框（类别=id_名字__动作状态）、"
-                        "每段绳/梯一个框；配 --mobs 出正样本，不带 --mobs 出负样本（没怪，绳梯照常标注））")
+                        "每段绳/梯一个框、每段地面(foothold)一个框；"
+                        "配 --mobs 出正样本，不带 --mobs 出负样本（没怪，绳梯地面照常标注））")
     p.add_argument("--seed", metavar="S", help="配合 --mobs：固定随机种子（同 seed 同布局；缺省每次随机）")
     p.add_argument("--density", type=int, default=1, metavar="N",
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")

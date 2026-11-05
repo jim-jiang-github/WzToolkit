@@ -27,7 +27,7 @@ python train\overnight_run.py --maps 350 --win 4 --epochs 100 --imgsz 960 --tag 
 
 | 步骤 | 脚本 | 说明 |
 |---|---|---|
-| 1. 批量导出 | `batch_export.py` | 随机选有怪的地图，每张导 N 个 1366×768 随机窗口（客户端同款分辨率）。正样本 `--mobs --yolo`（合成随机动作状态的怪 + 全部标注），负样本只 `--yolo`（无怪，防误检），占比 `--neg`（默认 15%） |
+| 1. 批量导出 | `batch_export.py` | 随机选有怪的地图，每张导 N 个 1366×768 随机窗口（客户端同款分辨率）。正样本 `--mobs --yolo`（合成随机动作状态的怪 + 全部标注），负样本只 `--yolo`（无怪，防误检），占比 `--neg`（默认 15%）。标注三类目标：怪（类别=id_名字__动作状态）、绳/梯（rope/ladder）、地面（ground，每段 foothold 一个框，沿站立线向下盖 32 世界像素） |
 | 2. 切分 | `prep_split.py` | 摊平图收进 `exports/yolo/images/{train,val}`（8:2），重写 `dataset.yaml`。幂等：已分过的不动，新导的自动补进去 |
 | 3. 训练 | overnight_run.py 内联 | YOLOv8n，CPU，`epochs/--imgsz/--batch` 可调，patience=25 早停 |
 | 4. 弱类补数据 | `boost_weak.py` | val per-class AP50 < `--target`(0.90) 的类，找含这些怪的图多导窗口，重训（最多 `--rounds` 轮） |
