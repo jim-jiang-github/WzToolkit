@@ -12,7 +12,7 @@ train\run.bat --maps 500 --epochs 150  :: 自定义参数
 或直接：
 
 ```bat
-python train\overnight_run.py --maps 350 --win 4 --epochs 100 --imgsz 960 --tag ov
+python train\overnight_run.py --maps 350 --epochs 100 --imgsz 960 --tag ov
 ```
 
 **必须在项目根目录运行**（`wztool.exe` 和 `yolov8n.pt` 都在根目录）。
@@ -27,7 +27,7 @@ python train\overnight_run.py --maps 350 --win 4 --epochs 100 --imgsz 960 --tag 
 
 | 步骤 | 脚本 | 说明 |
 |---|---|---|
-| 1. 批量导出 | `batch_export.py` | 随机选有怪的地图，每张导 N 个 1366×768 随机窗口（客户端同款分辨率）。正样本 `--mobs --yolo`（合成随机动作状态的怪 + 全部标注），负样本只 `--yolo`（无怪，防误检），占比 `--neg`（默认 15%）。标注三类目标：怪（类别=id_名字__动作状态）、绳/梯（rope/ladder）、地面（ground，每段 foothold 一个框，沿站立线向下盖 32 世界像素） |
+| 1. 批量导出 | `batch_export.py` | 选有怪的可用地图（`--no-boss`：只刷大BOSS HP≥1000万的图不要，高阶怪照常），每张按 1366×768（客户端同款分辨率）**网格全覆盖切分**——相邻瓦片重合 1/3（水平步长 911 / 垂直 512），行/列末块贴边，整图每个场景/楼梯/刷怪点都进训练集；`--win` 可另加随机窗口（默认 0）。正样本 `--mobs --yolo`（合成随机动作状态的怪 + 全部标注），负样本只 `--yolo`（无怪，防误检），占比 `--neg`（默认 15%）。标注四类目标：怪（类别=id_名字__动作状态）、绳/梯（rope/ladder）、平地（ground，每段 foothold 一个框，沿站立线向下盖 32 世界像素）、斜坡（slope，坡度 |dy|/|dx|≥0.2 约 11° 的段，与平地分开——挂机工具把 ground 当恒定 Y 的平地用，斜坡混入会走上去卡死） |
 | 2. 切分 | `prep_split.py` | 摊平图收进 `exports/yolo/images/{train,val}`（8:2），重写 `dataset.yaml`。幂等：已分过的不动，新导的自动补进去 |
 | 3. 训练 | overnight_run.py 内联 | YOLOv8n，CPU，`epochs/--imgsz/--batch` 可调，patience=25 早停 |
 | 4. 弱类补数据 | `boost_weak.py` | val per-class AP50 < `--target`(0.90) 的类，找含这些怪的图多导窗口，重训（最多 `--rounds` 轮） |
@@ -36,8 +36,9 @@ python train\overnight_run.py --maps 350 --win 4 --epochs 100 --imgsz 960 --tag 
 
 ## 常用参数（overnight_run.py）
 
-- `--maps N` 选多少张可用地图（受探测结果限制，如 2026-11 时可用约 154 张）
-- `--win N` 每张图导几个随机窗口（总量 = maps × win）
+- `--maps N` 选多少张可用地图（受探测结果限制，如 2026-11 时可用约 123 张）
+- `--win N` 全覆盖网格之外的每图额外随机窗口数（默认 0；总量 = 各图网格瓦片数之和）
+- `--neg 0.15` 负样本占比
 - `--epochs / --imgsz / --batch` 训练超参（CPU 建议 100 / 960 / 8）
 - `--target 0.90` 弱类判定线；`--rounds 2` 最多训练几轮
 - `--tag` 导出 seed 前缀（换 tag 可在同一数据集上追加新导出而不撞名）

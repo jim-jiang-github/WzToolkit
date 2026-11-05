@@ -1,7 +1,7 @@
 """针对弱类补数据：解析弱类里的怪物 id → 找含这些怪的地图 → 多导随机窗口。
 
 用法：python boost_weak.py '["100100_Snail__move", ...]' --win 3 --tag b1
-弱类是 rope/ladder 就直接多导一批随机窗口（每张图都有绳梯）。
+弱类是 rope/ladder/ground/slope 就直接多导一批随机窗口（每张图都有这些）。
 """
 import argparse
 import concurrent.futures as cf
@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "wztool.exe"
 YDIR = ROOT / "exports" / "yolo"
 W, H = 1366, 768
+TERRAIN = ("rope", "ladder", "ground", "slope")
 
 
 def run_cli(args):
@@ -35,7 +36,7 @@ def main() -> int:
     a = ap.parse_args()
     weak = json.loads(a.weak_json)
     mob_ids = sorted({w.split("__")[0].split("_")[0] for w in weak
-                      if w not in ("rope", "ladder")})
+                      if w not in TERRAIN})
     print(f"弱类怪 id: {mob_ids}", flush=True)
 
     # 找含这些怪的地图（mob-maps 每个 id 一次）
@@ -50,7 +51,7 @@ def main() -> int:
 
     # 批量探测可用（够大不缩放）并导出
     rnd = random.Random(a.tag)
-    r = subprocess.run([str(EXE), "probe"], input="\n".join(sorted(want_maps)).encode(),
+    r = subprocess.run([str(EXE), "probe", "--no-boss"], input="\n".join(sorted(want_maps)).encode(),
                        capture_output=True, cwd=str(ROOT), timeout=1800)
     usable = []
     if r.returncode == 0:
@@ -90,7 +91,7 @@ def _mob_maps(mid: str):
 
 def _export(job):
     mid, x, y, seed = job
-    return run_cli(["map-export", mid, "--mobs", "--yolo", "--json",
+    return run_cli(["map-export", mid, "--mobs", "--yolo", "--no-boss", "--json",
                     f"--region={x},{y},{W},{H}", f"--density=2", f"--seed={seed}"])
 
 

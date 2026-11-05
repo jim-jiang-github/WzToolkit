@@ -81,7 +81,7 @@ def main() -> int:
 
     tests = []
     for mid, x, y, seed in jobs:
-        d = run_cli(["map-export", mid, "--mobs", "--yolo", "--json",
+        d = run_cli(["map-export", mid, "--mobs", "--yolo", "--no-boss", "--json",
                      f"--region={x},{y},{W},{H}", f"--seed={seed}",
                      "--density=2"])
         if d and d.get("yolo"):

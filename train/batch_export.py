@@ -4,10 +4,16 @@
 1. 地图必须刷怪（maps --json 的 life_maps）
 2. 窗口固定 1366×768（客户端分辨率），且地图够大不会被缩放（scale==1）
 3. 正样本：--mobs --yolo（图里合成随机动作状态的怪物 + 全部标注）
-   负样本：--yolo 不带 --mobs（图里一只怪都没有，绳梯照常标注）——
+   负样本：--yolo 不带 --mobs（图里一只怪都没有，绳梯地面照常标注）——
    防止模型把地图装饰误检成怪；占比由 --neg 控制（默认 15%）
 
-用法：python batch_export.py --maps 60 --win 4 --tag p1
+覆盖策略（关键）：每张可用地图按 1366×768 **网格全覆盖切分**，
+相邻瓦片重合 1/3（步长 = 窗口的 2/3：水平 911px / 垂直 512px），
+行/列最后一块贴地图边缘——整张图的每个场景、每段楼梯、每个刷怪点
+都至少出现在一块瓦片里，边界上的目标还会出现在相邻两块（重叠区）。
+--win 是网格之外的额外随机窗口数（默认 0）。
+
+用法：python batch_export.py --maps 350 --tag p1
 产出：exports/yolo/{images,labels}/ + 本脚本目录 batch_<tag>_result.json
 """
 import argparse
@@ -22,6 +28,25 @@ ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "wztool.exe"
 YDIR = ROOT / "exports" / "yolo"
 W, H = 1366, 768
+STEP_X = round(W * 2 / 3)      # 911：瓦片水平步长（1/3 重叠）
+STEP_Y = round(H * 2 / 3)      # 512：瓦片垂直步长（1/3 重叠）
+
+
+def tile_windows(minx: float, miny: float, bw: float, bh: float) -> list[tuple[int, int]]:
+    """地图世界包围盒 → 全覆盖瓦片左上角列表（1/3 重叠，末块贴边）。
+
+    nx/ny 按「剩余距离除以步长」取整 +1；最后一块固定贴右/下边缘，
+    保证不漏角。地图比窗口还小（不会发生，probe 已保证 usable）时退 1 块。
+    """
+    nx = 1 if bw <= W else -(-(bw - W) // STEP_X) + 1
+    ny = 1 if bh <= H else -(-(bh - H) // STEP_Y) + 1
+    out = []
+    for iy in range(ny):
+        y = miny + bh - H if iy == ny - 1 else miny + iy * STEP_Y
+        for ix in range(nx):
+            x = minx + bw - W if ix == nx - 1 else minx + ix * STEP_X
+            out.append((round(x), round(y)))
+    return out
 
 
 def log(msg: str):
@@ -47,17 +72,18 @@ def run_cli(args: list, timeout: int = 1800) -> dict | None:
 
 
 def mob_class_ids() -> set:
-    """classes.json 里非 rope/ladder 的都是怪类别（含带 __状态 后缀的）。"""
+    """classes.json 里非 rope/ladder/ground/slope 的都是怪类别（含带 __状态 后缀的）。"""
     f = YDIR / "classes.json"
     if not f.exists():
         return set()
     reg = json.loads(f.read_text(encoding="utf-8"))
-    return {i for nm, i in reg.items() if nm not in ("rope", "ladder")}
+    return {i for nm, i in reg.items()
+            if nm not in ("rope", "ladder", "ground", "slope")}
 
 
 def probe_all(ids: list) -> list:
     """一次 wztool probe 批量探测（单 exe 启动，进程内全查）。"""
-    r = subprocess.run([str(EXE), "probe"], input="\n".join(ids).encode(),
+    r = subprocess.run([str(EXE), "probe", "--no-boss"], input="\n".join(ids).encode(),
                        capture_output=True, cwd=str(ROOT), timeout=1800)
     if r.returncode != 0:
         return []
@@ -72,7 +98,7 @@ def probe_all(ids: list) -> list:
 
 def export(job) -> dict:
     mid, x, y, den, seed, neg = job
-    args = ["map-export", mid, "--yolo", "--json",
+    args = ["map-export", mid, "--yolo", "--no-boss", "--json",
             f"--region={x},{y},{W},{H}", f"--seed={seed}"]
     if not neg:
         args += ["--mobs", f"--density={den}"]
@@ -98,7 +124,8 @@ def export(job) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--maps", type=int, default=60, help="选多少张可用地图")
-    ap.add_argument("--win", type=int, default=4, help="每张地图导几个随机窗口")
+    ap.add_argument("--win", type=int, default=0,
+                    help="全覆盖网格之外的额外随机窗口数（默认 0，网格已保证覆盖）")
     ap.add_argument("--neg", type=float, default=0.15, help="负样本占比（0~1）")
     ap.add_argument("--tag", default="p1", help="seed 前缀 / 结果文件名标记")
     ap.add_argument("--probe-limit", type=int, default=2000, help="最多探测多少张")
@@ -117,14 +144,20 @@ def main() -> int:
 
     jobs = []
     rnd = random.Random(a.tag)
+    n_tile = 0
     for mid, minx, miny, bw, bh in picked[:a.maps]:
-        for i in range(a.win):
-            x = round(rnd.uniform(minx, minx + bw - W))
-            y = round(rnd.uniform(miny, miny + bh - H))
+        # 全覆盖网格瓦片（1/3 重叠）+ 额外随机窗口
+        tiles = tile_windows(minx, miny, bw, bh)
+        n_tile += len(tiles)
+        wins = ([(round(rnd.uniform(minx, minx + bw - W)),
+                  round(rnd.uniform(miny, miny + bh - H))) for _ in range(a.win)]
+                if a.win > 0 else [])
+        for x, y in tiles + wins:
             seed = f"{a.tag}{rnd.randrange(1 << 24):06x}"
             neg = rnd.random() < a.neg
             jobs.append((mid, x, y, rnd.choice((1, 2)), seed, neg))
-    log(f"导出 {len(jobs)} 个窗口（4 路并行按地图分组，含 {sum(j[5] for j in jobs)} 个负样本）…")
+    log(f"导出 {len(jobs)} 个窗口（{n_tile} 网格瓦片 + {len(jobs) - n_tile} 随机窗口，"
+        f"4 路并行按地图分组，含 {sum(j[5] for j in jobs)} 个负样本）…")
 
     # 按地图分组：同一张图的窗口在同一个线程里串行导（渲染缓存天然复用，
     # 也避免多进程并发渲染/写同一张图的缓存互相踩）；不同地图之间并行

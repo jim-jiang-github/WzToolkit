@@ -260,6 +260,7 @@ let mobSel = null, mapSel = null;
 let MOBFILT = "all";   // all | boss | big
 let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // 导出的地图图里是否把怪物画进去
+let NOBOSS = false;     // 合成/标注时跳过大BOSS(HP≥1000万)，高阶怪照常出现（挂机升级用）
 let YOLOSHOT = false;   // 一次性：这次 mapLoad 顺带产出 YOLO 数据集
 let DENSITY = 1;        // 怪物密度倍数（页面叠加与导出合成共用）
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
@@ -800,7 +801,7 @@ async function mapLoad(id, preview) {
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, region: REGION, yolo: YOLOSHOT }),
+      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, region: REGION, yolo: YOLOSHOT, no_boss: NOBOSS }),
     });
     YOLOSHOT = false;
     const kinds = (d.life_kinds || []).map((k) =>
@@ -821,6 +822,7 @@ async function mapLoad(id, preview) {
         ${nRope ? `<label class="muted" style="cursor:pointer" title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" /> 显示绳索（${nRope}）</label>` : ""}
         ${nLad ? `<label class="muted" style="cursor:pointer" title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" /> 显示梯子（${nLad}）</label>` : ""}
         ${d.life_count ? `<label class="muted" style="cursor:pointer" title="勾选后导出/预览的图片会直接把怪物画进去"><input type="checkbox" id="export-mobs" ${EXPORTMOBS ? "checked" : ""} /> 导出带怪物</label>
+        <label class="muted" style="cursor:pointer" title="不合成/标注大BOSS（HP≥1000万，挂机升级不打）；高阶怪(BOSS标记但血量低)照常出现；只刷大BOSS的图会得到没有怪的图"><input type="checkbox" id="export-noboss" ${NOBOSS ? "checked" : ""} /> 不含大BOSS</label>
         <label class="muted" title="怪物密度倍数：影响页面叠加与导出合成的怪物数量" style="cursor:default">密度
           <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:80px" />
           ×<b id="density-val">${DENSITY}</b></label>` : ""}
@@ -871,6 +873,12 @@ async function mapLoad(id, preview) {
     if (fh) fh.onchange = renderLifeDots;
     const em = $("#export-mobs");
     if (em) em.onchange = () => EXPORTMOBS = em.checked;
+    const nb = $("#export-noboss");
+    if (nb) nb.onchange = () => {
+      NOBOSS = nb.checked;
+      // 勾了导出带怪物 → 立刻按新过滤重新合成图；否则只影响下次导出/YOLO
+      if (EXPORTMOBS) mapLoad(mapRef.id, mapRef.preview);
+    };
     const ds = $("#density");
     if (ds) {
       ds.oninput = () => $("#density-val").textContent = ds.value;

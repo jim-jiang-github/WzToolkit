@@ -589,11 +589,15 @@ def c_mob_icon(raw: str) -> dict:
 
 
 def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
-                   density: int = 1):
+                   density: int = 1, no_boss: bool = False):
     """把这张图的怪随机贴到地面上，产出 preview_mobs.png（脚底落在 foothold 地面）。
 
     返回 (png路径, 摆放列表)：places 每项 {kind, x, y, w, h} 是该怪在预览图上的
     精确像素框（x,y=左上角），YOLO 标注直接用它当 ground truth。
+
+    no_boss=True 时只放大 BOSS 以外的怪（tier=big 不出现，高阶怪 boss/normal
+    照常参与合成）
+    （挂机升级场景不打 Boss；只刷 Boss 的图返回空结果）。
 
     每个怪在「随机游走区间」内取随机 x：优先用 life 自带 rx0~rx1（客户端巡逻区间），
     没有就按图宽 ±8% 兜底；y 由 foothold 段线性插值得出（同一段里取离出生地面最近
@@ -603,6 +607,12 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     """
     from PIL import Image
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
+    if no_boss and life:
+        mobnx = ws / "Mob.nx"
+        meta = {m["id"]: m for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
+        life = [l for l in life
+                if meta.get(str(l.get("id", "")).lstrip("0"), {})
+                .get("tier", "normal") != "big"]
     if not life:
         return None, []
     R = _render_mod()
@@ -764,15 +774,18 @@ def c_mob_export(raw: str, preview: bool = False) -> dict:
 def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
                  density: int = 1, region: tuple | None = None,
                  yolo: bool = False, seed: str | None = None,
+                 no_boss: bool = False,
                  _visited: set | None = None) -> dict:
     """导出一张地图：map.json（life/foothold/ladderRope）+ 全部贴图 + 渲染预览图。
 
     链接图（info/link，自己的 img 是空的）自动顺链导出目标图，返回带 link 字段。
     mobs=True 时预览图把怪随机画到地面上（preview_mobs.png，沿 rx 巡逻区间散布、
     foothold 落地）；seed 缺省每次随机，传同值可复现同一布局。
+    no_boss=True 时合成怪/标注不放大 BOSS（tier=big；高阶怪 boss/normal 照常
+    出现）——挂机升级用；只刷大 BOSS 的图会得到没有怪的合成结果。
     yolo=True 时额外产出 YOLO 训练集（exports/yolo/：images + labels +
-    classes.txt/dataset.yaml；每只怪一个框、每段绳/梯一个框、每段地面一个框，
-    怪按 id_名字__动作状态分类），
+    classes.txt/dataset.yaml；每只怪一个框、每段绳/梯一个框、每段地面一个框
+    ——平地标 ground、坡度≥0.2 的标 slope），
     蕴含 mobs=True。
     life_points 是刷怪点（x, y 已按客户端规则落到 cy 地面），overlay 是
     世界坐标→预览图的变换（minx/miny/s/w/h），两者配合可在任何客户端复现点位。
@@ -809,18 +822,21 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     # 链接图：拿目标图的数据渲染（客户端同款行为）
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
-        d = c_map_export(link, preview, mobs, density, region, yolo, seed, visited)
+        d = c_map_export(link, preview, mobs, density, region, yolo, seed,
+                         no_boss, visited)
         d["link"] = {"from": mid, "to": link}
         return d
 
     return _map_export_inner(ws, mid, preview, mobs, density, region, visited,
-                             yolo=yolo, seed=seed, outdir=outdir, mj=mj)
+                             yolo=yolo, seed=seed, outdir=outdir, mj=mj,
+                             no_boss=no_boss)
 
 
 def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: int,
                       region: tuple | None, visited: set, yolo: bool = False,
                       seed: str | None = None,
-                      outdir: Path | None = None, mj: dict | None = None) -> dict:
+                      outdir: Path | None = None, mj: dict | None = None,
+                      no_boss: bool = False) -> dict:
     root = CACHE if preview else EXPORTS
     if outdir is None:
         outdir = (root / "map" / mid) if preview else (EXPORTS / "maps" / mid)
@@ -872,7 +888,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     places: list[dict] = []
     if mobs and life:
         mob_png, places = _composite_mobs(ws, outdir, mj, png, use_seed,
-                                          density=max(1, min(10, int(density or 1))))
+                                          density=max(1, min(10, int(density or 1))),
+                                          no_boss=no_boss)
         if mob_png is not None:
             rel = (mob_png.relative_to(CACHE) if preview else mob_png.relative_to(EXPORTS))
             result["preview_path"] = str(mob_png)
@@ -960,7 +977,7 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                 except Exception:
                     reg = {}
             cls_names = {_mob_cls(p["kind"], p.get("state", "stand")) for p in places} \
-                | {"rope", "ladder", "ground"}
+                | {"rope", "ladder", "ground", "slope"}
             for nm in sorted(cls_names):
                 if nm not in reg:
                     reg[nm] = len(reg)
@@ -990,7 +1007,9 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                     lines.append(f"{reg['ladder' if l else 'rope']} " + " ".join(f"{v:.6f}" for v in b))
             # 地面（foothold）：每段一个框，从站立线往下盖 32 世界像素——
             # 平台贴图主体在线的下方、怪的脚踩在线上，往下扩既能框住可视平台、
-            # 又不会和怪框打架；窄于 8 世界像素的竖直连接段是平台侧壁不可辨识，跳过
+            # 又不会和怪框打架；窄于 8 世界像素的竖直连接段是平台侧壁不可辨识，跳过。
+            # 坡度 |dy|/|dx| ≥ 0.2（约 11°）的段标 slope 而非 ground：挂机工具
+            # 把 ground 当纯平地用（恒定 Y），斜坡若混进去会走上去回不来。
             for fx1, fy1, fx2, fy2 in result.get("foothold_segs", []):
                 if abs(fx2 - fx1) < 8:
                     continue
@@ -999,7 +1018,9 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                 b = _box((min(fx1, fx2) - minx) * s, (top - miny) * s,
                          abs(fx2 - fx1) * s, (bot - top) * s)
                 if b:
-                    lines.append(f"{reg['ground']} " + " ".join(f"{v:.6f}" for v in b))
+                    steep = abs(fy2 - fy1) / abs(fx2 - fx1) >= 0.2
+                    lines.append(f"{reg['slope' if steep else 'ground']} "
+                                 + " ".join(f"{v:.6f}" for v in b))
             stem = f"{mid}_{re.sub(r'[^0-9A-Za-z_]+', '_', use_seed)}"
             img_out = ydir / "images" / f"{stem}.png"
             lbl_out = ydir / "labels" / f"{stem}.txt"
@@ -1082,15 +1103,21 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
                             for lr in mj.get("ladderRope", [])]}
 
 
-def c_probe_batch(ids: list[str], win_w: int = 1366, win_h: int = 768) -> list[dict]:
+def c_probe_batch(ids: list[str], win_w: int = 1366, win_h: int = 768,
+                  no_boss: bool = False) -> list[dict]:
     """批量探测：一次进程内算完多张图的「能不能导 1366×768 窗口」。
 
     批量脚本别逐张调 map-info（每次都得起一个 onefile exe，杀毒+解包开销
     会把并发拖死）——用这个一次全查：读 stdin 的 id 列表，输出 JSON 数组。
     usable=True 表示这张图够大、不缩放、有刷怪，可以随机取窗口导出。
+    no_boss=True 时刷怪判定只数非大 BOSS 的怪：只刷大 BOSS（tier=big）的图
+    usable=False；高阶怪（tier=boss）算可用怪。
     """
     ws = _need_ws()
     R = _render_mod()
+    mobnx = ws / "Mob.nx"
+    tier = {m["id"]: m.get("tier", "normal")
+            for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
     out = []
     for mid in (str(i).strip() for i in ids):
         rec: dict = {"id": mid}
@@ -1123,10 +1150,16 @@ def c_probe_batch(ids: list[str], win_w: int = 1366, win_h: int = 768) -> list[d
             bw, bh = cw + 80, chh + 80
             s = min(1.0, 1600 / max(1.0, bw))
             life = [l for l in mj.get("life", []) if l.get("type") == "m"]
+            small = [l for l in life
+                     if tier.get(str(l.get("id", "")).lstrip("0"), "normal") != "big"]
             rec.update({"world": {"x": minx, "y": miny, "w": bw, "h": bh},
                         "scale": round(s, 4), "life_count": len(life),
-                        "usable": bool(life and s >= 0.999
+                        "small_count": len(small),
+                        "usable": bool((small if no_boss else life)
+                                       and s >= 0.999
                                        and bw >= win_w and bh >= win_h)})
+            if no_boss and len(small) < len(life):
+                rec["boss_filtered"] = len(life) - len(small)
             if d_mid != mid:
                 rec["link_to"] = d_mid
         except CliError as e:
@@ -1287,7 +1320,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       bool(b.get("preview")), bool(b.get("mobs")),
                       int(b.get("density") or 1), region,
                       bool(b.get("yolo")),
-                      str(b["seed"]) if b.get("seed") else None)
+                      str(b["seed"]) if b.get("seed") else None,
+                      bool(b.get("no_boss")))
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
         elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps") \
@@ -1439,7 +1473,7 @@ def cmd_map_info(a) -> int:
 def cmd_probe(a) -> int:
     """批量探测（stdin 一行一个 id）：usable=True 才能随机导 1366×768 窗口。"""
     ids = [ln.strip() for ln in sys.stdin if ln.strip()]
-    recs = c_probe_batch(ids, a.w, a.h)
+    recs = c_probe_batch(ids, a.w, a.h, no_boss=a.no_boss)
     print(json.dumps(recs, ensure_ascii=False))
     ok = sum(1 for r in recs if r.get("usable"))
     print(f"# 探测 {len(recs)} 张，可用 {ok} 张", file=sys.stderr)
@@ -1474,7 +1508,8 @@ def cmd_map_export(a) -> int:
             return 2
     d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density,
                      region=region, yolo=bool(getattr(a, "yolo", False)),
-                     seed=getattr(a, "seed", None))
+                     seed=getattr(a, "seed", None),
+                     no_boss=bool(getattr(a, "no_boss", False)))
     if a.json:
         _out(d, True)
     else:
@@ -1595,6 +1630,8 @@ def build_parser() -> argparse.ArgumentParser:
                               "usable=True 表示够大、不缩放、有刷怪，可随机导 W×H 窗口。")
     p.add_argument("--w", type=int, default=1366, help="窗口宽（默认 1366）")
     p.add_argument("--h", type=int, default=768, help="窗口高（默认 768）")
+    p.add_argument("--no-boss", action="store_true",
+                   help="刷怪判定只数非大BOSS的怪：只刷大BOSS(tier=big)的图 usable=False（挂机升级场景；高阶怪算可用）")
     _j(p); p.set_defaults(fn=cmd_probe)
 
     p = sub.add_parser("mob-export", help="导出一只怪的全部动画帧 PNG + manifest.csv",
@@ -1622,9 +1659,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yolo", action="store_true",
                    help="产出 YOLO 训练集（exports/yolo/：images+labels+classes.txt"
                         "+dataset.yaml；每只怪一个框（类别=id_名字__动作状态）、"
-                        "每段绳/梯一个框、每段地面(foothold)一个框；"
+                        "每段绳/梯一个框、每段地面(foothold)一个框——"
+                        "平地=ground、坡度≥0.2(约11°)=slope 两类分开；"
                         "配 --mobs 出正样本，不带 --mobs 出负样本（没怪，绳梯地面照常标注））")
     p.add_argument("--seed", metavar="S", help="配合 --mobs：固定随机种子（同 seed 同布局；缺省每次随机）")
+    p.add_argument("--no-boss", action="store_true",
+                   help="配合 --mobs/--yolo：不合成/标注大BOSS（tier=big，HP≥1000万；高阶怪照常出现，挂机升级不打大BOSS）；"
+                        "只刷大BOSS的图会得到没有怪的图")
     p.add_argument("--density", type=int, default=1, metavar="N",
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
     p.add_argument("--region", metavar="X,Y,W,H",
@@ -1646,6 +1687,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # stdout 重定向/管道时 Windows 默认用本地 GBK，怪名里有韩文等字符会直接
+    # UnicodeEncodeError 崩掉——统一改成 UTF-8（批量脚本都按 UTF-8 解码）
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream.encoding and stream.encoding.lower().replace("-", "") != "utf8":
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     ap = build_parser()
     args = ap.parse_args(argv)
     if not getattr(args, "cmd", None):

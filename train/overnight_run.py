@@ -1,6 +1,6 @@
 """过夜全流程编排：导出 → 切分 → 训练 → 验证 → 弱类补数据 → 重训 → 终验 → 报告。
 
-用法：python overnight_run.py --maps 350 --win 4 --epochs 100 --imgsz 960
+用法：python overnight_run.py --maps 350 --epochs 100 --imgsz 960
 全程状态写 progress.log（在脚本目录），跑完写 train_report.md。
 """
 import argparse
@@ -34,7 +34,8 @@ def sh(cmd: list) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--maps", type=int, default=350)
-    ap.add_argument("--win", type=int, default=4)
+    ap.add_argument("--win", type=int, default=0,
+                    help="全覆盖网格之外的额外随机窗口数/图（默认 0）")
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--imgsz", type=int, default=960)
     ap.add_argument("--batch", type=int, default=8)
@@ -124,7 +125,7 @@ def _report(a, rounds_info, t0) -> str:
     L = []
     L.append("# WzToolkit 怪物识别模型训练报告\n")
     L.append(f"- 训练数据: train {n_tr} 张 / val {n_va} 张（1366×768，含 15% 负样本）")
-    L.append(f"- 类别数: {len(reg)}（怪 id_名字__状态 + rope/ladder）")
+    L.append(f"- 类别数: {len(reg)}（怪 id_名字__状态 + rope/ladder/ground/slope）")
     L.append(f"- 训练配置: YOLOv8n · epochs={a.epochs} · imgsz={a.imgsz} · CPU")
     L.append(f"- 总耗时: {(time.time() - t0) / 3600:.1f} 小时\n")
     for r in rounds_info:
