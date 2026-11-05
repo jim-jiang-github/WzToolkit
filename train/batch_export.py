@@ -38,8 +38,8 @@ def tile_windows(minx: float, miny: float, bw: float, bh: float) -> list[tuple[i
     nx/ny 按「剩余距离除以步长」取整 +1；最后一块固定贴右/下边缘，
     保证不漏角。地图比窗口还小（不会发生，probe 已保证 usable）时退 1 块。
     """
-    nx = 1 if bw <= W else -(-(bw - W) // STEP_X) + 1
-    ny = 1 if bh <= H else -(-(bh - H) // STEP_Y) + 1
+    nx = 1 if bw <= W else int(-(-(bw - W) // STEP_X)) + 1
+    ny = 1 if bh <= H else int(-(-(bh - H) // STEP_Y)) + 1
     out = []
     for iy in range(ny):
         y = miny + bh - H if iy == ny - 1 else miny + iy * STEP_Y
