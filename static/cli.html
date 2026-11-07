@@ -151,15 +151,7 @@
   th:first-child, td:first-child { width: 26px; }
   td { white-space: nowrap; }
   .flexline { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  /* 游戏内小地图还原（客户端 UIMiniMap 算法：miniMap/canvas + 2^mag 坐标换算） */
-  .mm-card { border: 1px solid var(--line); border-radius: 8px; background: #0b0f14;
-             margin: 4px 0 10px; max-width: max-content; }
-  .mm-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-             padding: 6px 10px; border-bottom: 1px solid var(--line); }
-  .mm-head .mm-name { font-weight: 600; }
-  .mm-body { position: relative; display: inline-block; margin: 8px;
-             background: #000; border: 1px solid var(--line); line-height: 0; }
-  .mm-body img { display: block; image-rendering: pixelated; }
+  /* 游戏内小地图标记（HUD 上叠加，客户端 UIMiniMap 算法：miniMap/canvas + 2^mag 坐标换算） */
   .mmd { position: absolute; transform: translate(-50%, -50%); pointer-events: auto; }
   .mmd.portal { width: 9px; height: 9px; border: 2px solid #3ba7ff; border-radius: 50%;
                 box-shadow: 0 0 5px #3ba7ff99; cursor: pointer; }
@@ -170,9 +162,6 @@
              border-radius: 50%; cursor: help; box-shadow: 0 0 3px #0009; }
   .mmd.mob.boss { background: #ffb454; }
   .mmd.mob.big { background: #ff2d78; }
-  .mm-body[data-n="off"] .mmd.npc { display: none; }
-  .mm-body[data-m="off"] .mmd.mob { display: none; }
-  .mm-body[data-p="off"] .mmd.portal { display: none; }
   /* 游戏内 HUD：小地图窗口直接贴在预览图上。位置 = 客户端 Setting<PosMINIMAP>（默认 0,0
      = 视口左上角，拖动后写回设置）；窗口框尺寸 = UIMiniMap::update_canvas() 算出来的那个 */
   .mm-hud { position: absolute; z-index: 5; overflow: hidden; cursor: move;
@@ -838,60 +827,22 @@ async function mzOpen() {
 }
 function mzClose() { $("#mapzoom").hidden = true; }
 
-/* ---- 游戏内小地图还原 ----
+/* ---- 游戏内小地图 ----
    算法与客户端 UIMiniMap.cpp 一致：WZ 里每张图自带预烘焙的 miniMap/canvas，
    标记坐标 = (世界坐标 + centerX/centerY) / 2^mag（后端已换算成 canvas 像素）。
-   传送门只画 pt=2 的（update_static_markers 同款），点击直接跳目标图。 */
-let MMZOOM = 2;
-const MMSHOW = { p: true, n: true, m: true };   // 卡片与 HUD 共用的标记开关（换图后保持）
-function minimapCardHTML(d) {
-  const mm = d.minimap;
-  const nm = [d.street_name, d.name].filter(Boolean).join(" · ");
-  const dots = mm.portals.map((p) =>
-    `<span class="mmd portal" data-t="p" style="left:${p.x / mm.cw * 100}%;top:${p.y / mm.ch * 100}%"
-       data-tm="${p.tm}" title="传送门 → ${p.tmn || p.tm || "?"}（点击进入）"></span>`).join("")
-    + mm.npcs.map((n) =>
-    `<span class="mmd npc" data-t="n" style="left:${n.x / mm.cw * 100}%;top:${n.y / mm.ch * 100}%" title="NPC ${n.id}"></span>`).join("")
-    + mm.mobs.map((m) =>
-    `<span class="mmd mob${m.tier === "big" ? " big" : m.tier === "boss" ? " boss" : ""}" data-t="m"
-       style="left:${m.x / mm.cw * 100}%;top:${m.y / mm.ch * 100}%" title="${m.name || "怪物"} ${m.id}"></span>`).join("");
-  const on = (k) => MMSHOW[k] ? "on" : "off";
-  return `<div class="mm-card" id="mm-card">
-    <div class="mm-head">
-      <span><span class="mm-name">🗺 小地图</span>
-        ${nm ? `<span class="muted" style="margin-left:6px">${nm}</span>` : ""}</span>
-    </div>
-    <div class="mm-body" id="mm-body" data-p="${on("p")}" data-n="${on("n")}" data-m="${on("m")}">
-      <img id="mm-img" src="${mm.url}" width="${mm.cw * MMZOOM}" height="${mm.ch * MMZOOM}">${dots}
-    </div></div>`;
-}
+   传送门只画 pt=2 的（update_static_markers 同款），点击直接跳目标图。
+   小地图只以 HUD 形式叠在预览图上，不再单独出卡片。 */
+const MMSHOW = { p: true, n: true, m: true };   // 标记开关（HUD 用，换图后保持）
 function bindMinimap(d) {
-  const card = $("#mm-card");
-  if (!card || !d.minimap) return;
-  const mm = d.minimap;
-  $("#mm-img").onload = () => {};   // 尺寸已在属性里固定，无闪烁
+  if (!d.minimap) return;
   for (const [id, key] of [["mm-p", "p"], ["mm-n", "n"], ["mm-m", "m"]]) {
     const el = $("#" + id);
     if (el) el.onchange = () => {
       MMSHOW[key] = el.checked;
-      $("#mm-body").dataset[key] = el.checked ? "on" : "off";
       const hud = $("#mm-hud");
-      if (hud) hud.dataset[key] = el.checked ? "on" : "off";   // HUD 与卡片共用开关
+      if (hud) hud.dataset[key] = el.checked ? "on" : "off";
     };
   }
-  const zb = $("#mm-zoom");
-  if (zb) zb.onclick = () => {
-    MMZOOM = MMZOOM >= 4 ? 1 : MMZOOM + 1;     // 1x → 2x → 4x → 1x
-    const img = $("#mm-img");
-    img.width = mm.cw * MMZOOM; img.height = mm.ch * MMZOOM;
-    zb.textContent = `${MMZOOM}x`;
-  };
-  $("#mm-body").querySelectorAll(".mmd.portal").forEach((el) => {
-    el.onclick = () => {
-      const tm = el.dataset.tm;
-      if (tm && +tm > 0 && +tm !== 999999999) mapLoad(String(tm).padStart(9, "0"), true);
-    };
-  });
 }
 
 /* ---- 小地图 HUD：按客户端 UIMiniMap 的位置/尺寸贴在预览图上 ----
@@ -1035,7 +986,6 @@ async function mapLoad(id, preview) {
         ${d.minimap ? `<label class="muted" style="cursor:pointer" title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${MMSHOW.p ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
         <label class="muted" style="cursor:pointer"><input type="checkbox" id="mm-n" ${MMSHOW.n ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>
         <label class="muted" style="cursor:pointer"><input type="checkbox" id="mm-m" ${MMSHOW.m ? "checked" : ""} /> 刷怪点 ${d.minimap.mobs.length}</label>
-        <button class="mini" id="mm-zoom" title="小地图 canvas 显示倍数（1x = WZ 原始尺寸，游戏内就是 1x）">${MMZOOM}x</button>
         <label class="muted" style="cursor:pointer" title="按客户端 UIMiniMap 的画法把小地图窗口直接贴在下面的预览图上：位置=客户端的 PosMINIMAP 设置（默认 0,0 = 视口左上角），拖动可移动、双击归位">
           <select id="mm-hud-anchor" style="vertical-align:middle">
             <option value="off">小地图 HUD：关</option>
@@ -1048,7 +998,6 @@ async function mapLoad(id, preview) {
       </div></div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}${d.yolo ? ` · <b>YOLO ${d.yolo.boxes} 框已导出</b>（${d.yolo.image}）` : ""}</div>
       <div style="margin-bottom:6px">${kinds || '<span class="muted">这张图没有怪物</span>'}</div>
-      ${d.minimap ? minimapCardHTML(d) : ""}
       <div class="row rgrow" style="margin-bottom:4px">
         <span class="muted">导出区域</span>
         X <input type="number" id="rg-x" value="${REGION ? REGION.x : ""}" />
