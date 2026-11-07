@@ -912,7 +912,7 @@ function mmFrame(mm) {
   return { winW, winH: ch + 27, ox, oy: 20 };
 }
 const MMHUD = {
-  anchor: localStorage.getItem("wt_mm_anchor") || "tl",
+  // 位置 = 客户端 PosMINIMAP：默认左上 (0,0)，拖动后记住（不提供下拉设置）
   pos: JSON.parse(localStorage.getItem("wt_mm_pos") || "null"),
 };
 function mmHudHTML(d) {
@@ -937,15 +937,10 @@ function mmHudHTML(d) {
 function mmHudPlace() {
   const hud = $("#mm-hud");   // HUD 的视口 = 游戏窗口（1366×768 游戏像素，固定在窗口上不随画布移动）
   if (!hud) return;
-  const sel = $("#mm-hud-anchor");
-  if (sel) sel.value = MMHUD.anchor;
-  hud.hidden = MMHUD.anchor === "off";
-  if (hud.hidden) return;
+  hud.hidden = false;
   const bw = VPW, bh = VPH;
   const w = hud.offsetWidth, h = hud.offsetHeight;
-  let x = 0, y = 0;
-  if (MMHUD.anchor === "tr") { x = bw - w; }
-  else if (MMHUD.anchor === "free" && MMHUD.pos) { x = MMHUD.pos.x; y = MMHUD.pos.y; }
+  const x = MMHUD.pos ? MMHUD.pos.x : 0, y = MMHUD.pos ? MMHUD.pos.y : 0;
   // 跟客户端一样允许贴在这块视口里任意位置，但不许跑到画面外
   hud.style.left = Math.max(0, Math.min(x, Math.max(0, bw - w))) + "px";
   hud.style.top = Math.max(0, Math.min(y, Math.max(0, bh - h))) + "px";
@@ -954,12 +949,6 @@ function bindMmHud(d) {
   if (!d.minimap || !$("#mm-hud")) return;
   const hud = $("#mm-hud"), wrap = $("#vpframe");
   mmHudPlace();
-  const sel = $("#mm-hud-anchor");
-  if (sel) sel.onchange = () => {
-    MMHUD.anchor = sel.value;
-    localStorage.setItem("wt_mm_anchor", MMHUD.anchor);
-    mmHudPlace();
-  };
   // 拖动 = 改 PosMINIMAP；松手记住位置（客户端也是拖完才写设置）
   hud.onmousedown = (e) => {
     if (e.button !== 0 || e.target.classList.contains("mmd")) return;
@@ -975,17 +964,14 @@ function bindMmHud(d) {
     const up = () => {
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
-      MMHUD.anchor = "free"; MMHUD.pos = { x: hud.offsetLeft, y: hud.offsetTop };
-      localStorage.setItem("wt_mm_anchor", "free");
+      MMHUD.pos = { x: hud.offsetLeft, y: hud.offsetTop };
       localStorage.setItem("wt_mm_pos", JSON.stringify(MMHUD.pos));
-      if (sel) sel.value = "free";
     };
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
   };
   hud.ondblclick = () => {          // 双击归位 = 客户端默认 (0,0)
-    MMHUD.anchor = "tl"; MMHUD.pos = null;
-    localStorage.setItem("wt_mm_anchor", "tl");
+    MMHUD.pos = null;
     localStorage.removeItem("wt_mm_pos");
     mmHudPlace();
   };
@@ -1034,14 +1020,7 @@ async function mapLoad(id, preview) {
           ×<b id="density-val">${DENSITY}</b></label>` : ""}
         ${d.minimap ? `<label class="muted" style="cursor:pointer" title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${MMSHOW.p ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
         <label class="muted" style="cursor:pointer"><input type="checkbox" id="mm-n" ${MMSHOW.n ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>
-        <label class="muted" style="cursor:pointer"><input type="checkbox" id="mm-m" ${MMSHOW.m ? "checked" : ""} /> 刷怪点 ${d.minimap.mobs.length}</label>
-        <label class="muted" style="cursor:pointer" title="按客户端 UIMiniMap 的画法把小地图窗口直接贴在下面的预览图上：位置=客户端的 PosMINIMAP 设置（默认 0,0 = 视口左上角），拖动可移动、双击归位">
-          <select id="mm-hud-anchor" style="vertical-align:middle">
-            <option value="off">小地图 HUD：关</option>
-            <option value="tl">小地图 HUD：左上（客户端默认 0,0）</option>
-            <option value="tr">小地图 HUD：右上</option>
-            <option value="free">小地图 HUD：拖动的位置</option>
-          </select></label>` : ""}
+        <label class="muted" style="cursor:pointer"><input type="checkbox" id="mm-m" ${MMSHOW.m ? "checked" : ""} /> 刷怪点 ${d.minimap.mobs.length}</label>` : ""}
         <label class="muted" title="1366×768 是游戏的逻辑分辨率：默认按系统 DPI 放大显示（高 DPI 屏上才不会被压得太小）；选 1x 则逐像素 1:1">画面
           <select id="gv-scale" style="vertical-align:middle">
             <option value="dpi">跟随 DPI</option>
