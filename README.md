@@ -13,6 +13,7 @@ wztool mob-export / map-export
    ├─ exports\mobs\<id>\*.png         逐帧 sprite（直接可用于训练合成 / 图鉴）
    └─ exports\maps\<id>\{map.json, img\, preview.png}
                                     map.json 含 life（刷怪表）/ foothold / ladderRope
+wztool map-minimap 101040000        渲染游戏内小地图（miniMap canvas + 标记）→ PNG
 ```
 
 ## 首次使用
@@ -27,6 +28,9 @@ wztool workspace "D:\MapleStory\nxrun"   # 设置工作区
 wztool mobs --json                      # 机器可读输出
 wztool map-info 000050000               # 查地图尺寸/世界坐标/刷怪数（不渲染，秒级）
 wztool map-export 000050000 --mobs      # 导出地图并把怪物画进预览图
+wztool map-export 000050000 --no-bg     # 不画背景（天幕/云/山全跳过，PNG 透明），
+                                        # 只出地形+建筑+物件 → preview_nobg.png
+wztool map-minimap 101040000            # 游戏内小地图（canvas+传送门/刷怪点标记）→ PNG
 
 # 3) Web 页面（可选，人看；页面只是 CLI 的可视化壳）
 wztool web            # → http://127.0.0.1:8000  自动开浏览器
@@ -90,6 +94,21 @@ WebUI 预览默认 **1x = 客户端真实渲染尺寸**（缩放按钮切 2x/4x 
   很常见），预览时自动渲染目标图并标注「画面同 xxx」。
 - 地图详情可勾选**显示刷怪点**：在预览图上标出每个出生点
   （红=普通怪 / 橙=BOSS / 品红=大BOSS，悬停看怪名）。
+- **游戏内小地图**：客户端 `UIMiniMap` 用的就是 WZ 里每张图自带的
+  `miniMap/canvas`（预烘焙缩略图）+ `centerX/centerY/mag` 做坐标换算
+  （`画布像素 = (世界坐标 + 中心偏移) / 2^mag`）。本工具照搬同一套算法：
+  - `map.json` 现在带 `miniMap`（canvas PNG 路径与换算参数）、
+    `name`/`streetName`（String.wz 的地图名），每个 portal 还带 `tmn`（目标图名）；
+  - `wztool map-minimap <id>` 输出合成好的小地图 PNG（canvas 放大 + 
+    传送门蓝圈 / NPC 黄点 / 刷怪点红橙品红）；
+  - Web 页面地图详情有「小地图」卡片：1x/2x/4x 缩放，传送门**点击直接跳目标图**，
+    NPC / 刷怪点可开关，悬停看名字——和游戏里的小地图同一份数据、同一套坐标；
+  - 还有「**小地图 HUD**」：把小地图窗口按客户端的画法直接贴在预览图上。
+    位置/尺寸严格照源码——`UIMiniMap` 继承 `UIDragElement<PosMINIMAP>`，
+    位置 = 设置项 `PosMINIMAP`（**默认 `(0,0)` 即视口左上角**，拖动后写回设置）；
+    窗口尺寸 = `update_canvas()` 算的 `max(178, canvas宽+20)`，canvas 画在
+    `(max(10, 窗宽/2 - canvas宽/2), 20)`。页面里同样可拖动（等价改 PosMINIMAP）、
+    双击归位，下拉框可切 左上/右上/关闭。
 
 ## 目录
 
