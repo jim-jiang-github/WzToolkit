@@ -325,12 +325,11 @@ let VPDRAG = null;      // 拖画布进行中
 let GVS = 1;            // 显示倍率（DPI 补偿）：窗口 CSS 尺寸 = 游戏像素 × GVS，画布仍 1:1
 let DRAGMOVED = 0;      // 刚拖过画布的时间戳 → 抑制那次点击（避免误开放大查看）
 
-/* 显示倍率：1366×768 是游戏的逻辑分辨率，高 DPI 屏上不补偿就会显得偏小。
-   默认跟随系统缩放（devicePixelRatio），也可切回 1x 逐像素。 */
+/* 显示倍率：1366×768 是游戏的逻辑分辨率，高 DPI 屏上不补偿就会显得偏小，
+   所以固定跟随系统缩放（devicePixelRatio）。 */
 function gvScale() {
-  const pref = localStorage.getItem("wt_gv_scale") || "dpi";
   const dpr = window.devicePixelRatio || 1;
-  return pref === "1" ? 1 : Math.max(1, Math.min(dpr, 3));
+  return Math.max(1, Math.min(dpr, 3));
 }
 function gvApplyScale() {
   const gv = $("#gameview"), box = $("#gvbox");
@@ -339,8 +338,6 @@ function gvApplyScale() {
   gv.style.transform = `scale(${GVS})`;
   box.style.width = VPW * GVS + "px";
   box.style.height = VPH * GVS + "px";
-  const sel = $("#gv-scale");
-  if (sel) sel.value = localStorage.getItem("wt_gv_scale") || "dpi";
   vpPlace();
 }
 
@@ -1021,11 +1018,6 @@ async function mapLoad(id, preview) {
         ${d.minimap ? `<label class="muted" style="cursor:pointer" title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${MMSHOW.p ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
         <label class="muted" style="cursor:pointer"><input type="checkbox" id="mm-n" ${MMSHOW.n ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>
         <label class="muted" style="cursor:pointer"><input type="checkbox" id="mm-m" ${MMSHOW.m ? "checked" : ""} /> 刷怪点 ${d.minimap.mobs.length}</label>` : ""}
-        <label class="muted" title="1366×768 是游戏的逻辑分辨率：默认按系统 DPI 放大显示（高 DPI 屏上才不会被压得太小）；选 1x 则逐像素 1:1">画面
-          <select id="gv-scale" style="vertical-align:middle">
-            <option value="dpi">跟随 DPI</option>
-            <option value="1">1x</option>
-          </select></label>
         <button class="primary mini" id="do-export" title="把游戏窗口里的 1366×768 画面导出到 exports/maps/&lt;id&gt;/window.png（导出带怪物/不含大BOSS/不显示背景同样生效）">导出窗口</button>
         <button class="mini" id="do-yolo" title="产出 YOLO 训练集（exports/yolo/：图片+标注 txt+classes.txt+dataset.yaml；每只怪一个框、绳/梯各一类；窗口位置/密度/导出带怪设置同样生效）">导出YOLO</button>
       </div></div>
@@ -1054,11 +1046,6 @@ async function mapLoad(id, preview) {
     vpPlace();
     const img = $("#mapsel img.mapimg");
     if (img && !img.complete) img.onload = () => vpPlace();   // 图加载完再按真实尺寸夹一次
-    const gsc = $("#gv-scale");
-    if (gsc) gsc.onchange = () => {
-      localStorage.setItem("wt_gv_scale", gsc.value);
-      gvApplyScale();
-    };
     const mo = $("#mz-open");
     if (mo) mo.onclick = (e) => {
       e.preventDefault();
