@@ -130,7 +130,7 @@ def _render_mod():
     return mod
 
 
-def _render_preview(map_dir: Path, out_png: Path) -> dict:
+def _render_preview(map_dir: Path, out_png: Path, no_bg: bool = False) -> dict:
     from PIL import Image
     if not out_png.exists():      # 渲染只取决于贴图；同图多窗口导出复用，不重渲
         import tempfile
@@ -142,7 +142,7 @@ def _render_preview(map_dir: Path, out_png: Path) -> dict:
         os.close(fd)
         try:
             os.unlink(tmp)
-            R.render_file(str(map_dir), str(tmp), max_width=1600)
+            R.render_file(str(map_dir), str(tmp), max_width=1600, no_bg=no_bg)
             os.replace(tmp, out_png)
         except Exception:
             try:
@@ -589,7 +589,8 @@ def c_mob_icon(raw: str) -> dict:
 
 
 def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
-                   density: int = 1, no_boss: bool = False):
+                   density: int = 1, no_boss: bool = False,
+                   no_bg: bool = False):
     """把这张图的怪随机贴到地面上，产出 preview_mobs.png（脚底落在 foothold 地面）。
 
     返回 (png路径, 摆放列表)：places 每项 {kind, x, y, w, h} 是该怪在预览图上的
@@ -698,8 +699,8 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
             places.append({"kind": kind, "state": act,
                            "x": round(px), "y": round(py),
                            "w": img.width, "h": img.height})
-    out = outdir / "preview_mobs.png"
-    im.convert("RGB").save(out)
+    out = outdir / ("preview_mobs_nobg.png" if no_bg else "preview_mobs.png")
+    (im if no_bg else im.convert("RGB")).save(out)   # no_bg 保留透明通道
     return out, places
 
 
@@ -775,7 +776,8 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
                  density: int = 1, region: tuple | None = None,
                  yolo: bool = False, seed: str | None = None,
                  no_boss: bool = False,
-                 _visited: set | None = None) -> dict:
+                 _visited: set | None = None,
+                 no_bg: bool = False) -> dict:
     """导出一张地图：map.json（life/foothold/ladderRope）+ 全部贴图 + 渲染预览图。
 
     链接图（info/link，自己的 img 是空的）自动顺链导出目标图，返回带 link 字段。
@@ -825,13 +827,13 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
         d = c_map_export(link, preview, mobs, density, region, yolo, seed,
-                         no_boss, visited)
+                         no_boss, visited, no_bg=no_bg)
         d["link"] = {"from": mid, "to": link}
         return d
 
     return _map_export_inner(ws, mid, preview, mobs, density, region, visited,
                              yolo=yolo, seed=seed, outdir=outdir, mj=mj,
-                             no_boss=no_boss)
+                             no_boss=no_boss, no_bg=no_bg)
 
 
 def _minimap_payload(outdir: Path, root: Path, mj: dict, meta: dict) -> dict | None:
@@ -890,14 +892,16 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                       region: tuple | None, visited: set, yolo: bool = False,
                       seed: str | None = None,
                       outdir: Path | None = None, mj: dict | None = None,
-                      no_boss: bool = False) -> dict:
+                      no_boss: bool = False, no_bg: bool = False) -> dict:
     root = CACHE if preview else EXPORTS
     if outdir is None:
         outdir = (root / "map" / mid) if preview else (EXPORTS / "maps" / mid)
     if mj is None:
         mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
-    png = outdir / "preview.png"
-    size = _render_preview(outdir, png)
+    # 无背景版单独一个文件名：预览图是按文件是否存在来复用的，
+    # 两种版本共用一个名字会互相命中缓存
+    png = outdir / ("preview_nobg.png" if no_bg else "preview.png")
+    size = _render_preview(outdir, png, no_bg=no_bg)
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
     kinds = sorted({str(l.get("id", "")).lstrip("0") for l in life})
     mobnx = ws / "Mob.nx"
@@ -918,6 +922,7 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                "tier": meta.get(k, {}).get("tier", "normal")}
               for l in life]
     result = {"dir": str(outdir), "preview": size,
+              "no_bg": bool(no_bg),
               "preview_path": str(png),
               "preview_url": (f"/preview/{png.relative_to(CACHE).as_posix()}" if preview
                               else f"/exports/{png.relative_to(EXPORTS).as_posix()}"),
@@ -943,7 +948,7 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     if mobs and life:
         mob_png, places = _composite_mobs(ws, outdir, mj, png, use_seed,
                                           density=max(1, min(10, int(density or 1))),
-                                          no_boss=no_boss)
+                                          no_boss=no_boss, no_bg=no_bg)
         if mob_png is not None:
             rel = (mob_png.relative_to(CACHE) if preview else mob_png.relative_to(EXPORTS))
             result["preview_path"] = str(mob_png)
@@ -970,7 +975,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                 f"x∈[{minx:.0f},{minx + bw:.0f}] y∈[{miny:.0f},{miny + bh:.0f}]", 2)
         def _n(v: float) -> str:
             return str(int(v)) if float(v).is_integer() else str(v)
-        out_png = outdir / f"preview_region_x{_n(rx)}_y{_n(ry)}_w{_n(rw)}_h{_n(rh)}.png"
+        out_png = outdir / (f"preview_region{'_nobg' if no_bg else ''}"
+                            f"_x{_n(rx)}_y{_n(ry)}_w{_n(rw)}_h{_n(rh)}.png")
         src.crop((left, top, right, bottom)).save(out_png)
         cw, ch = right - left, bottom - top
         rel = (out_png.relative_to(CACHE) if preview else out_png.relative_to(EXPORTS))
@@ -1456,7 +1462,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       int(b.get("density") or 1), region,
                       bool(b.get("yolo")),
                       str(b["seed"]) if b.get("seed") else None,
-                      bool(b.get("no_boss")))
+                      bool(b.get("no_boss")), no_bg=bool(b.get("no_bg")))
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
         elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps") \
@@ -1644,7 +1650,8 @@ def cmd_map_export(a) -> int:
     d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density,
                      region=region, yolo=bool(getattr(a, "yolo", False)),
                      seed=getattr(a, "seed", None),
-                     no_boss=bool(getattr(a, "no_boss", False)))
+                     no_boss=bool(getattr(a, "no_boss", False)),
+                     no_bg=bool(getattr(a, "no_bg", False)))
     if a.json:
         _out(d, True)
     else:
@@ -1803,6 +1810,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "只刷大BOSS的图会得到没有怪的图")
     p.add_argument("--density", type=int, default=1, metavar="N",
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
+    p.add_argument("--no-bg", action="store_true",
+                   help="不画背景（天幕/云/山等 back 层全跳过，画布透明），只出地形+建筑+物件；"
+                        "输出 preview_nobg.png / preview_mobs_nobg.png")
     p.add_argument("--region", metavar="X,Y,W,H",
                    help="只导出世界坐标区域。含负数时必须用 = 形式，"
                         "如 --region=850,-900,1366,768"

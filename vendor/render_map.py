@@ -111,6 +111,7 @@ class RenderOpts:
     view: tuple | None = None    # (x, y, w, h)：按「相机取景框」渲染，背景才是游戏里的样子
     show_footholds: bool = False
     fill_base: bool = False      # 预览专用：底天幕强制双向平铺（小尺寸天空砖时用）
+    no_bg: bool = False          # 不画背景（back 层全跳过，画布留透明）
     pad: int = 40
 
 
@@ -169,7 +170,9 @@ def render_map(map_json: dict, img_dirs: list[str], opts: RenderOpts | None = No
 
     s = min(opts.scale, opts.max_width / max(1.0, bw))
     W, H = max(1, int(bw * s)), max(1, int(bh * s))
-    canvas = Image.new("RGBA", (W, H), (16, 18, 24, 255))
+    # no_bg：跳过所有 back 层（天幕/云/山），画布留全透明——只留地形与物件，
+    # 透明 PNG 还能直接叠到别的底图上（做对比图 / 素材用）
+    canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0) if opts.no_bg else (16, 18, 24, 255))
     bounds_world = (minx, miny, bw, bh)
 
     def place(im: Image.Image, wx: float, wy: float, alpha: int = 255):
@@ -180,7 +183,8 @@ def render_map(map_json: dict, img_dirs: list[str], opts: RenderOpts | None = No
               alpha)
 
     # --- 背景（front=0）：预览时提供世界坐标可视化 ---
-    base_backs = [b for b in map_json.get("back", []) if int(b.get("front", 0)) == 0]
+    base_backs = [] if opts.no_bg else [b for b in map_json.get("back", [])
+                                        if int(b.get("front", 0)) == 0]
     if base_backs:
         # 底天幕在游戏里只铺一部分屏幕，其余是引擎清屏色。
         # 预览时用「把底图按行平均后纵向拉伸」的渐变铺满，既不出黑边也不假。
@@ -253,7 +257,7 @@ def render_map(map_json: dict, img_dirs: list[str], opts: RenderOpts | None = No
             place(im, float(o["x"]) - o.get("ox", 0), float(o["y"]) - o.get("oy", 0), int(o.get("a", 255)))
 
     # --- 前景背景（front=1）---
-    for b in map_json.get("back", []):
+    for b in ([] if opts.no_bg else map_json.get("back", [])):
         if int(b.get("front", 0)) != 1:
             continue
         tex = store.get(b.get("img", ""))

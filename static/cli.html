@@ -305,6 +305,7 @@ let MOBFILT = "all";   // all | boss | big
 let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // 导出的地图图里是否把怪物画进去
 let NOBOSS = false;     // 合成/标注时跳过大BOSS(HP≥1000万)，高阶怪照常出现（挂机升级用）
+let NOBG = false;       // 预览/导出不画背景（back 层全跳过，画布透明）
 let YOLOSHOT = false;   // 一次性：这次 mapLoad 顺带产出 YOLO 数据集
 let DENSITY = 1;        // 怪物密度倍数（页面叠加与导出合成共用）
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
@@ -1007,7 +1008,7 @@ async function mapLoad(id, preview) {
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, region: REGION, yolo: YOLOSHOT, no_boss: NOBOSS }),
+      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, region: REGION, yolo: YOLOSHOT, no_boss: NOBOSS, no_bg: NOBG }),
     });
     YOLOSHOT = false;
     const kinds = (d.life_kinds || []).map((k) =>
@@ -1025,6 +1026,7 @@ async function mapLoad(id, preview) {
         ${d.life_count ? `<label class="muted" style="cursor:pointer"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
         <label class="muted" style="cursor:pointer"><input type="checkbox" id="mob-toggle" /> 显示怪物</label>` : ""}
         ${d.footholds ? `<label class="muted" style="cursor:pointer" title="青色线=每一段可站立的地面（foothold，含斜坡）；看人物能走哪、哪里会掉下去、怎么跳到下个平台"><input type="checkbox" id="fh-toggle" /> 显示地面（${d.footholds}）</label>` : ""}
+        <label class="muted" style="cursor:pointer" title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上"><input type="checkbox" id="nobg-toggle" ${NOBG ? "checked" : ""} /> 不显示背景</label>
         ${nRope ? `<label class="muted" style="cursor:pointer" title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" /> 显示绳索（${nRope}）</label>` : ""}
         ${nLad ? `<label class="muted" style="cursor:pointer" title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" /> 显示梯子（${nLad}）</label>` : ""}
         ${d.life_count ? `<label class="muted" style="cursor:pointer" title="勾选后导出/预览的图片会直接把怪物画进去"><input type="checkbox" id="export-mobs" ${EXPORTMOBS ? "checked" : ""} /> 导出带怪物</label>
@@ -1088,6 +1090,8 @@ async function mapLoad(id, preview) {
     if (rl) rl.onchange = renderLifeDots;
     const fh = $("#fh-toggle");
     if (fh) fh.onchange = renderLifeDots;
+    const nb2 = $("#nobg-toggle");
+    if (nb2) nb2.onchange = () => { NOBG = nb2.checked; mapLoad(mapRef.id, mapRef.preview); };
     const em = $("#export-mobs");
     if (em) em.onchange = () => EXPORTMOBS = em.checked;
     const nb = $("#export-noboss");
