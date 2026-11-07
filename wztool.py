@@ -803,17 +803,19 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     outdir = (root / "map" / mid) if preview else (EXPORTS / "maps" / mid)
 
     def _cached_ok() -> bool:
-        # 缓存要能解析才算数：早期 nxmap 有产出坏 JSON 的情况
+        # 缓存要能解析才算数：早期 nxmap 有产出坏 JSON 的情况；
+        # 另外要求带 miniMap 键——旧版 nxmap 不导小地图，命中旧缓存就永远出不来
         try:
-            json.loads((outdir / "map.json").read_text(encoding="utf-8"))
-            return True
+            mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
+            return "miniMap" in mj
         except Exception:
             return False
 
     if not _cached_ok():
-        if outdir.exists():
-            drop_dir(outdir)
         outdir.parent.mkdir(parents=True, exist_ok=True)
+        # 覆盖式刷新，不整目录重删：nxmap 会重写 map.json 与引用到的贴图，
+        # 旧版本缓存的遗留 PNG 留着无害（渲染只按 map.json 引用取图），
+        # 而且几百个文件的整目录删除在部分环境会被批量删除保护拦下
         _run(["nxmap", mid, str(outdir)], ws, timeout=600)
     if not (outdir / "map.json").exists():
         raise CliError(f"nxmap 没产出 map.json（这个 id 存在吗？{mid}）", 1)
@@ -830,6 +832,58 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     return _map_export_inner(ws, mid, preview, mobs, density, region, visited,
                              yolo=yolo, seed=seed, outdir=outdir, mj=mj,
                              no_boss=no_boss)
+
+
+def _minimap_payload(outdir: Path, root: Path, mj: dict, meta: dict) -> dict | None:
+    """把 nxmap 导出的 miniMap 数据整理成前端可直接渲染的小地图。
+
+    客户端 UIMiniMap 的坐标规则（UIMiniMap.cpp）：
+        scale = 2^mag；画布像素 = (世界坐标 + centerX/centerY) / scale
+    传送门只画 pt=2 的（update_static_markers 同款）；怪/NPC 用 cy 落地，
+    与 life_points 一致。坐标换算在这里做完，前端只管按百分比摆点。
+    """
+    mm = mj.get("miniMap")
+    if not (mm and mm.get("img")):
+        return None
+    canvas = outdir / "img" / str(mm["img"])
+    if not canvas.exists():
+        return None
+    try:
+        scale = 2.0 ** float(mm.get("mag", 0))
+    except (TypeError, ValueError, OverflowError):
+        scale = 1.0
+    cx, cy = float(mm.get("centerX", 0)), float(mm.get("centerY", 0))
+
+    def px(x, y) -> dict:
+        return {"x": round((float(x) + cx) / scale, 1),
+                "y": round((float(y) + cy) / scale, 1)}
+
+    prefix = "/preview/" if root is CACHE else "/exports/"
+    portals = [{"pn": p.get("pn", ""),
+                **px(p.get("x", 0), p.get("y", 0)),
+                "tm": p.get("tm", 0), "tmn": p.get("tmn", "")}
+               for p in mj.get("portal", []) if p.get("pt") == 2]
+    npcs, mobs = [], []
+    for l in mj.get("life", []):
+        t = l.get("type")
+        if t not in ("m", "n"):
+            continue
+        y = l.get("cy") if l.get("fh") and l.get("cy") is not None else l.get("y", 0)
+        k = str(l.get("id", "")).lstrip("0")
+        q = px(l.get("x", 0), y)
+        if t == "m":
+            mobs.append({**q, "id": k,
+                         "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
+                         "tier": meta.get(k, {}).get("tier", "normal")})
+        else:
+            npcs.append({**q, "id": k})
+    return {"url": prefix + canvas.relative_to(root).as_posix(),
+            "img_file": str(canvas),
+            "w": mm.get("w"), "h": mm.get("h"),
+            "cw": mm.get("cw"), "ch": mm.get("ch"),
+            "center_x": mm.get("centerX"), "center_y": mm.get("centerY"),
+            "mag": mm.get("mag"), "scale": scale,
+            "portals": portals, "npcs": npcs, "mobs": mobs}
 
 
 def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: int,
@@ -1042,7 +1096,81 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                               "states": state_cnt}
         finally:
             lock.unlink(missing_ok=True)
+    # 游戏内小地图（miniMap canvas + 客户端同款标记换算），Web UI / AI 都能用
+    result["name"] = mj.get("name", "")
+    result["street_name"] = mj.get("streetName", "")
+    result["minimap"] = _minimap_payload(outdir, root, mj, meta)
     return result
+
+
+def _minimap_composite(export: dict, out: Path, zoom: int = 2) -> Path:
+    """把 minimap canvas 放大 zoom 倍，按客户端规则画上标记，存成 PNG。
+
+    标记配色沿用地图详情的约定：传送门=蓝圈、NPC=黄点、
+    刷怪点 红=普通怪 / 橙=BOSS / 品红=大BOSS。
+    """
+    from PIL import Image, ImageDraw
+    mm = export.get("minimap")
+    if not mm:
+        raise CliError("这张图没有 miniMap（hideMinimap=1 或该版本数据缺失）", 1)
+    src = Image.open(mm["img_file"]).convert("RGBA")
+    img = src.resize((src.width * zoom, src.height * zoom), Image.NEAREST)
+    d = ImageDraw.Draw(img)
+    dot = max(2, zoom)                      # 实心点半径
+    ring = dot + zoom                       # 传送门圈半径
+    for n in mm.get("npcs", []):
+        x, y = n["x"] * zoom, n["y"] * zoom
+        d.ellipse([x - dot, y - dot, x + dot, y + dot],
+                  fill=(255, 221, 0, 255), outline=(90, 70, 0, 255))
+    tier_color = {"normal": (255, 64, 64, 255),
+                  "boss": (255, 140, 0, 255),
+                  "big": (255, 0, 255, 255)}
+    for m in mm.get("mobs", []):
+        x, y = m["x"] * zoom, m["y"] * zoom
+        c = tier_color.get(m.get("tier"), tier_color["normal"])
+        d.ellipse([x - dot, y - dot, x + dot, y + dot], fill=c)
+    for p in mm.get("portals", []):
+        x, y = p["x"] * zoom, p["y"] * zoom
+        d.ellipse([x - ring, y - ring, x + ring, y + ring],
+                  outline=(64, 160, 255, 255), width=max(1, zoom // 2 + 1))
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.convert("RGB").save(out)
+    return out
+
+
+def c_map_minimap(mid: str, out: str = "", zoom: int = 2,
+                  preview: bool = False) -> dict:
+    """渲染一张地图的游戏内小地图（canvas + 传送门/刷怪点标记）→ PNG。
+
+    数据走 map-export 的缓存链路（.cache/map/<id>/，二次调用秒回）。
+    """
+    d = c_map_export(mid, preview=preview)
+    target = Path(out) if out else Path(d["dir"]) / "minimap.png"
+    mm = d.get("minimap") or {}
+    z = max(1, min(8, int(zoom or 2)))
+    png = _minimap_composite(d, target, z)
+    return {"map": mid,
+            "name": d.get("name", ""), "street_name": d.get("street_name", ""),
+            "image": str(png),
+            "w": mm.get("cw", 0) * z,
+            "h": mm.get("ch", 0) * z,
+            "zoom": z,
+            "portals": len(mm.get("portals", [])),
+            "npcs": len(mm.get("npcs", [])),
+            "mobs": len(mm.get("mobs", []))}
+
+
+def cmd_map_minimap(a) -> int:
+    d = c_map_minimap(a.id, out=a.out, zoom=a.zoom, preview=a.preview)
+    if a.json:
+        _out(d, True)
+    else:
+        nm = f"{d['street_name']} · {d['name']}" if d["name"] else d["map"]
+        print(f"小地图 {d['map']}（{nm}）: {d['w']}×{d['h']}（canvas×{d['zoom']}）"
+              f" · 传送门 {d['portals']} · NPC {d['npcs']} · 刷怪点 {d['mobs']}")
+        print(f"图片: {d['image']}")
+    return 0
 
 
 def c_map_info(mid: str, _visited: set | None = None) -> dict:
@@ -1062,9 +1190,16 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
         raise CliError(f"link 成环了：{' → '.join(sorted(visited))} → {mid}", 1)
     visited.add(mid)
     outdir = CACHE / "map" / mid
-    if not (outdir / "map.json").exists():
-        if outdir.exists():
-            drop_dir(outdir)
+    stale = False
+    if (outdir / "map.json").exists():
+        # 旧版 nxmap 的缓存没有 miniMap/name 字段 → 视为过期重导一次
+        try:
+            stale = "miniMap" not in json.loads(
+                (outdir / "map.json").read_text(encoding="utf-8"))
+        except Exception:
+            stale = True
+    if stale or not (outdir / "map.json").exists():
+        # 同 map-export：覆盖式刷新，不做整目录删除
         outdir.parent.mkdir(parents=True, exist_ok=True)
         _run(["nxmap", mid, str(outdir)], ws, timeout=600)
     if not (outdir / "map.json").exists():
@@ -1673,6 +1808,18 @@ def build_parser() -> argparse.ArgumentParser:
                         "如 --region=850,-900,1366,768"
                         "（客户端画面就是固定分辨率窗口，常见 1366×768 / 1024×768 / 800×600）")
     _j(p); p.set_defaults(fn=cmd_map_export)
+
+    p = sub.add_parser("map-minimap",
+                       help="渲染游戏内小地图（miniMap canvas + 标记）→ PNG",
+                       epilog="与客户端 UIMiniMap 同款算法：WZ 预烘焙的 miniMap/canvas\n"
+                              "按 2^mag 换算坐标，叠上传送门(蓝圈)/NPC(黄点)/刷怪点(红橙品红)。\n"
+                              "数据走 map-export 缓存（.cache/map/<id>/），二次调用秒回。")
+    p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
+    p.add_argument("--zoom", type=int, default=2, metavar="N",
+                   help="canvas 放大倍数（1-8，默认 2；1x=WZ 原始尺寸）")
+    p.add_argument("--out", default="", metavar="PATH", help="输出 PNG 路径（默认 exports/maps/<id>/minimap.png）")
+    p.add_argument("--preview", action="store_true", help="数据只进预览缓存，不落 exports")
+    _j(p); p.set_defaults(fn=cmd_map_minimap)
 
     p = sub.add_parser("clear-cache", help="清空 .cache 预览缓存（exports 不动）")
     _j(p); p.set_defaults(fn=cmd_clear_cache)
