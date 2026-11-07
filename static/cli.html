@@ -122,20 +122,28 @@
   .browse div { padding: 4px 10px; cursor: pointer; border-radius: 5px; }
   .browse div:hover { background: #0e3b35; }
   .mapimg { display: block; image-rendering: pixelated; cursor: zoom-in; }
-  /* 1:1 地图放在固定 1366×768 的可滚动容器里（viewer 可视范围 = 导出窗口大小）；
-     蓝框 = 导出窗口（1366×768，客户端画面），可拖动 */
-  .mapscroll { position: relative; width: 1366px; height: 768px; flex: none;
-               overflow: auto;
-               background: #0b0f14; border: 1px solid var(--line); border-radius: 6px; }
-  .mapwrap { position: relative; display: inline-block; }
+  /* 游戏窗口：1366×768 固定视角（= 客户端画面 = 导出尺寸）。里面的地图是"画布"，
+     按住拖动平移（不缩放）；小地图 HUD 贴在这个窗口上，所以不动。
+     --gv = 显示倍率（DPI 补偿）：1 游戏像素显示成 --gv 个 CSS px，画布仍是 1:1 游戏像素 */
+  .gvbox { position: relative; flex: none; overflow: hidden; border-radius: 6px;
+           background: #0b0f14; border: 1px solid var(--line);
+           box-shadow: 0 0 0 1px #0006 inset; }
+  .gameview { position: absolute; left: 0; top: 0; width: 1366px; height: 768px;
+              overflow: hidden; transform-origin: 0 0; background: #0b0f14;
+              cursor: grab; touch-action: none; }
+  .gameview.dragging { cursor: grabbing; }
+  .mapwrap { position: absolute; left: 0; top: 0; display: inline-block;
+             will-change: transform; }
   .expthumb { display: block; max-width: 340px; max-height: 200px; margin-top: 4px;
               border: 1px solid var(--line); border-radius: 4px; image-rendering: pixelated; }
-  #vpframe { position: absolute; width: 1366px; height: 768px; z-index: 4;
-             border: 2px solid #3ba7ff; box-shadow: 0 0 0 4000px #00000066;
-             cursor: move; }
-  #vpframe .vp-tag { position: absolute; left: -2px; top: -2px; background: #3ba7ffd9;
+  /* 窗口边框（不拦截鼠标，拖拽交给 .gameview） */
+  #vpframe { position: absolute; inset: 0; z-index: 4; pointer-events: none;
+             border: 2px solid #3ba7ff66; }
+  #vpframe .mm-hud { pointer-events: auto; }
+  #vpframe .vp-tag { position: absolute; left: 0; bottom: 0; background: #3ba7ffb8;
              color: #001322; font-size: 11px; line-height: 16px; padding: 0 6px;
-             border-radius: 2px 0 4px 0; pointer-events: none; white-space: nowrap; }
+             border-radius: 0 4px 0 0; pointer-events: none; white-space: nowrap;
+             opacity: .85; }
   .lifedots { position: absolute; inset: 0; pointer-events: none; }
   .ldot { position: absolute; width: 8px; height: 8px; border-radius: 50%;
           background: #ff5d5d; border: 1px solid #000c; transform: translate(-50%, -50%);
@@ -311,37 +319,89 @@ let NOBG = false;       // 预览/导出不画背景（back 层全跳过，画�
 let YOLOSHOT = false;   // 一次性：这次 mapLoad 顺带产出 YOLO 数据集
 let DENSITY = 1;        // 怪物密度倍数（页面叠加与导出合成共用）
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
-const VPW = 1366, VPH = 768;   // 客户端画面窗口，也是唯一的导出尺寸
-let VIEWPOS = null;     // 导出窗口左上角（整图内的像素坐标）；null = 地图正中
-let VPDRAG = null;      // 拖窗口进行中 {dx, dy}（指针在框内的偏移）
+const VPW = 1366, VPH = 768;   // 游戏窗口（= 客户端画面）= 唯一导出尺寸
+let VIEWPOS = null;     // 窗口左上角在整张地图里的坐标（游戏像素）；null = 居中
+let VPDRAG = null;      // 拖画布进行中
+let GVS = 1;            // 显示倍率（DPI 补偿）：窗口 CSS 尺寸 = 游戏像素 × GVS，画布仍 1:1
+let DRAGMOVED = 0;      // 刚拖过画布的时间戳 → 抑制那次点击（避免误开放大查看）
 
-/* 拖动导出窗口（蓝框）：mousedown 在 #vpframe（mapLoad 里绑定），move/up 在 window */
+/* 显示倍率：1366×768 是游戏的逻辑分辨率，高 DPI 屏上不补偿就会显得偏小。
+   默认跟随系统缩放（devicePixelRatio），也可切回 1x 逐像素。 */
+function gvScale() {
+  const pref = localStorage.getItem("wt_gv_scale") || "dpi";
+  const dpr = window.devicePixelRatio || 1;
+  return pref === "1" ? 1 : Math.max(1, Math.min(dpr, 3));
+}
+function gvApplyScale() {
+  const gv = $("#gameview"), box = $("#gvbox");
+  if (!gv || !box) return;
+  GVS = gvScale();
+  gv.style.transform = `scale(${GVS})`;
+  box.style.width = VPW * GVS + "px";
+  box.style.height = VPH * GVS + "px";
+  const sel = $("#gv-scale");
+  if (sel) sel.value = localStorage.getItem("wt_gv_scale") || "dpi";
+  vpPlace();
+}
+
+/* 窗口固定不动，整张地图反向平移 —— 就是游戏里人物走动时画布横向滚动的效果 */
+function applyView() {
+  const sel = $("#mapsel");
+  if (!sel || !VIEWPOS) return;
+  sel.style.transform = `translate3d(${-VIEWPOS.x}px, ${-VIEWPOS.y}px, 0)`;
+}
+function vpClamp() {
+  const sel = $("#mapsel");
+  if (!sel) return;
+  const img = sel.querySelector("img");
+  if (img && !img.complete) return;      // 图还没加载完，尺寸不作数（onload 里再摆一次）
+  const maxX = Math.max(0, sel.offsetWidth - VPW);
+  const maxY = Math.max(0, sel.offsetHeight - VPH);
+  if (!VIEWPOS) VIEWPOS = { x: Math.round(maxX / 2), y: Math.round(maxY / 2) };
+  VIEWPOS = { x: Math.min(Math.max(0, VIEWPOS.x), maxX),
+              y: Math.min(Math.max(0, VIEWPOS.y), maxY) };
+  applyView();
+}
+function vpPlace() { vpClamp(); }   // 摆视角：缺省居中，换图后夹在地图范围内
+
+/* 拖动 / 滚轮平移画布（只能拖，不能缩放）：小地图 HUD 的拖动自己处理，这里不抢 */
+function bindGvDrag() {
+  const gv = $("#gameview");
+  if (!gv) return;
+  gv.onmousedown = (e) => {
+    if (e.button !== 0 || e.target.closest(".mm-hud")) return;
+    e.preventDefault();
+    VPDRAG = { x: e.clientX, y: e.clientY, vx: VIEWPOS ? VIEWPOS.x : 0,
+               vy: VIEWPOS ? VIEWPOS.y : 0, moved: false };
+    gv.classList.add("dragging");
+  };
+  gv.onwheel = (e) => {
+    if (!VIEWPOS) return;
+    e.preventDefault();
+    const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX / GVS : 0;
+    const dy = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY / GVS : 0;
+    VIEWPOS = { x: VIEWPOS.x + dx, y: VIEWPOS.y + dy };
+    vpClamp();
+    DRAGMOVED = Date.now();
+  };
+}
 window.addEventListener("mousemove", (e) => {
   if (!VPDRAG) return;
-  const f = $("#vpframe");
-  if (!f) { VPDRAG = null; return; }
-  const wrap = f.parentElement;          // .mapwrap = 整张 1:1 地图
-  const r = wrap.getBoundingClientRect();
-  const sc = $("#mapscroll");
-  const x = Math.max(0, Math.min(e.clientX - r.left + (sc ? sc.scrollLeft : 0) - VPDRAG.dx,
-                                 Math.max(0, wrap.offsetWidth - VPW)));
-  const y = Math.max(0, Math.min(e.clientY - r.top + (sc ? sc.scrollTop : 0) - VPDRAG.dy,
-                                 Math.max(0, wrap.offsetHeight - VPH)));
-  f.style.left = x + "px"; f.style.top = y + "px";
-  VIEWPOS = { x, y };
+  if (!VPDRAG.moved && Math.abs(e.clientX - VPDRAG.x) + Math.abs(e.clientY - VPDRAG.y) > 3) VPDRAG.moved = true;
+  if (!VPDRAG.moved) return;
+  const dx = (e.clientX - VPDRAG.x) / GVS, dy = (e.clientY - VPDRAG.y) / GVS;
+  VIEWPOS = { x: VPDRAG.vx - dx, y: VPDRAG.vy - dy };   // 画布跟手 = 相机反向
+  vpClamp();
+  DRAGMOVED = Date.now();
 });
-window.addEventListener("mouseup", () => { VPDRAG = null; });
-function vpPlace() {   // 摆窗口：缺省居中；换图后夹在地图范围内
-  const f = $("#vpframe"), wrap = $("#mapsel");
-  if (!f || !wrap) return;
-  const maxX = Math.max(0, wrap.offsetWidth - VPW);
-  const maxY = Math.max(0, wrap.offsetHeight - VPH);
-  if (!VIEWPOS) VIEWPOS = { x: Math.round(maxX / 2), y: Math.round(maxY / 2) };
-  VIEWPOS = { x: Math.min(VIEWPOS.x, maxX), y: Math.min(VIEWPOS.y, maxY) };
-  f.style.left = VIEWPOS.x + "px"; f.style.top = VIEWPOS.y + "px";
-  const sc = $("#mapscroll");
-  if (sc) { sc.scrollLeft = Math.max(0, VIEWPOS.x - 40); sc.scrollTop = Math.max(0, VIEWPOS.y - 40); }
-}
+window.addEventListener("mouseup", () => {
+  if (!VPDRAG) return;
+  if (VPDRAG.moved) DRAGMOVED = Date.now();     // 拖完那一下的 click 不算点开
+  VPDRAG = null;
+  const gv = $("#gameview");
+  if (gv) gv.classList.remove("dragging");
+});
+window.addEventListener("resize", () => { if ($("#gameview")) gvApplyScale(); });
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
 async function boot() {
@@ -875,13 +935,13 @@ function mmHudHTML(d) {
     </div></div>`;
 }
 function mmHudPlace() {
-  const hud = $("#mm-hud"), wrap = $("#vpframe");   // HUD 的视口 = 导出窗口（客户端画面）
-  if (!hud || !wrap) return;
+  const hud = $("#mm-hud");   // HUD 的视口 = 游戏窗口（1366×768 游戏像素，固定在窗口上不随画布移动）
+  if (!hud) return;
   const sel = $("#mm-hud-anchor");
   if (sel) sel.value = MMHUD.anchor;
   hud.hidden = MMHUD.anchor === "off";
   if (hud.hidden) return;
-  const bw = wrap.clientWidth, bh = wrap.clientHeight;
+  const bw = VPW, bh = VPH;
   const w = hud.offsetWidth, h = hud.offsetHeight;
   let x = 0, y = 0;
   if (MMHUD.anchor === "tr") { x = bw - w; }
@@ -905,10 +965,10 @@ function bindMmHud(d) {
     if (e.button !== 0 || e.target.classList.contains("mmd")) return;
     e.preventDefault(); e.stopPropagation();
     const r = wrap.getBoundingClientRect(), hr = hud.getBoundingClientRect();
-    const dx = e.clientX - hr.left, dy = e.clientY - hr.top;
+    const dx = (e.clientX - hr.left) / GVS, dy = (e.clientY - hr.top) / GVS;   // 窗口是 scale(GVS) 的，换算回游戏像素
     const move = (ev) => {
-      const x = Math.max(0, Math.min(ev.clientX - r.left - dx, wrap.clientWidth - hud.offsetWidth));
-      const y = Math.max(0, Math.min(ev.clientY - r.top - dy, wrap.clientHeight - hud.offsetHeight));
+      const x = Math.max(0, Math.min((ev.clientX - r.left) / GVS - dx, VPW - hud.offsetWidth));
+      const y = Math.max(0, Math.min((ev.clientY - r.top) / GVS - dy, VPH - hud.offsetHeight));
       hud.style.left = x + "px"; hud.style.top = y + "px";
       MMHUD.pos = { x, y };
     };
@@ -982,30 +1042,50 @@ async function mapLoad(id, preview) {
             <option value="tr">小地图 HUD：右上</option>
             <option value="free">小地图 HUD：拖动的位置</option>
           </select></label>` : ""}
-        <button class="primary mini" id="do-export" title="把蓝框里的 1366×768 画面导出到 exports/maps/&lt;id&gt;/window.png（导出带怪物/不含大BOSS/不显示背景同样生效）">导出窗口</button>
-        <button class="mini" id="do-yolo" title="产出 YOLO 训练集（exports/yolo/：图片+标注 txt+classes.txt+dataset.yaml；每只怪一个框、绳/梯各一类；蓝框窗口/密度/导出带怪设置同样生效）">导出YOLO</button>
+        <label class="muted" title="1366×768 是游戏的逻辑分辨率：默认按系统 DPI 放大显示（高 DPI 屏上才不会被压得太小）；选 1x 则逐像素 1:1">画面
+          <select id="gv-scale" style="vertical-align:middle">
+            <option value="dpi">跟随 DPI</option>
+            <option value="1">1x</option>
+          </select></label>
+        <button class="primary mini" id="do-export" title="把游戏窗口里的 1366×768 画面导出到 exports/maps/&lt;id&gt;/window.png（导出带怪物/不含大BOSS/不显示背景同样生效）">导出窗口</button>
+        <button class="mini" id="do-yolo" title="产出 YOLO 训练集（exports/yolo/：图片+标注 txt+classes.txt+dataset.yaml；每只怪一个框、绳/梯各一类；窗口位置/密度/导出带怪设置同样生效）">导出YOLO</button>
       </div></div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}${d.yolo ? ` · <b>YOLO ${d.yolo.boxes} 框已导出</b>（${d.yolo.image}）` : ""}</div>
       <div style="margin-bottom:6px">${kinds || '<span class="muted">这张图没有怪物</span>'}</div>
-      <div class="muted" style="margin:0 0 6px">地图按 <b>1:1 真实尺寸</b>显示（滚轮/滚动条平移）。<b style="color:#3ba7ff">蓝框 = 导出窗口</b>（1366×768，客户端画面），<b>拖动蓝框</b>选位置，导出/YOLO 都是这个窗口里的画面；窗口超出地图的部分留空。</div>
-      <div class="mapscroll" id="mapscroll">
-        <span class="mapwrap" id="mapsel">
-          <a href="${pvUrl}" title="点开放大查看（怪物/刷怪点叠加同样显示）" id="mz-open">
-            <img class="mapimg" src="${pvUrl}" loading="lazy">
-          </a>
-          <span class="lifedots" id="lifedots"></span>
-          <div id="vpframe"><span class="vp-tag">导出窗口 1366×768 · 拖动</span>
+      <div class="muted" style="margin:0 0 6px">窗口就是 <b style="color:#3ba7ff">客户端画面 1366×768</b>：<b>按住拖动画布</b>（滚轮也平移，不能缩放）看不同位置，左上角小地图固定在窗口上不会跟着动；导出/YOLO 都是这个窗口里的画面，窗口超出地图的部分留空。</div>
+      <div class="gvbox" id="gvbox">
+        <div class="gameview" id="gameview">
+          <span class="mapwrap" id="mapsel">
+            <a href="${pvUrl}" title="点开放大查看（怪物/刷怪点叠加同样显示）" id="mz-open">
+              <img class="mapimg" src="${pvUrl}" loading="lazy">
+            </a>
+            <span class="lifedots" id="lifedots"></span>
+          </span>
+          <div id="vpframe"><span class="vp-tag">游戏窗口 1366×768 · 拖动画布</span>
             ${d.minimap ? mmHudHTML(d) : ""}
           </div>
-        </span>
+        </div>
       </div>
       <div id="export-out" style="margin-top:6px"></div>`;
     mapData = d;
     bindMinimap(d);
+    gvApplyScale();          // 先算显示倍率（DPI 补偿），窗口尺寸按倍率放大
     bindMmHud(d);
+    bindGvDrag();            // 画布拖动 / 滚轮平移
     vpPlace();
+    const img = $("#mapsel img.mapimg");
+    if (img && !img.complete) img.onload = () => vpPlace();   // 图加载完再按真实尺寸夹一次
+    const gsc = $("#gv-scale");
+    if (gsc) gsc.onchange = () => {
+      localStorage.setItem("wt_gv_scale", gsc.value);
+      gvApplyScale();
+    };
     const mo = $("#mz-open");
-    if (mo) mo.onclick = (e) => { e.preventDefault(); mzOpen(); };
+    if (mo) mo.onclick = (e) => {
+      e.preventDefault();
+      if (Date.now() - DRAGMOVED < 300) return;   // 刚拖完画布 → 当成拖动，不当点击
+      mzOpen();
+    };
     const lt = $("#life-toggle");
     if (lt) lt.onchange = renderLifeDots;
     const mt = $("#mob-toggle");
@@ -1036,23 +1116,15 @@ async function mapLoad(id, preview) {
         else renderLifeDots();
       };
     }
-    // 导出 = 蓝框里的 1366×768 画面（不重建面板，结果展示在 #export-out）
+    // 导出 = 游戏窗口里的 1366×768 画面（不重建面板，结果展示在 #export-out）
     const b = $("#do-export");
     if (b) b.onclick = () => exportWindow(false);
     const yb = $("#do-yolo");
     if (yb) yb.onclick = () => exportWindow(true);
-    // 拖动导出窗口（蓝框）；小地图 HUD/标记有自己的拖动，不抢
-    const fr = $("#vpframe");
-    if (fr) fr.onmousedown = (e) => {
-      if (e.button !== 0 || e.target.closest(".mm-hud") || e.target.closest(".mmd")) return;
-      e.preventDefault(); e.stopPropagation();
-      const r = fr.getBoundingClientRect();
-      VPDRAG = { dx: e.clientX - r.left, dy: e.clientY - r.top };
-    };
   } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
 }
 
-/* 把蓝框窗口导出成 1366×768（yolo=true 时顺带产出 YOLO 训练集） */
+/* 把游戏窗口导出成 1366×768（yolo=true 时顺带产出 YOLO 训练集） */
 async function exportWindow(yolo) {
   if (!mapData || !mapRef) return;
   const ov = mapData.overlay;
