@@ -11,8 +11,9 @@ wztool mobs / maps   列出怪物与地图（--json 全字段）
    ▼
 wztool mob-export / map-export
    ├─ exports\mobs\<id>\*.png         逐帧 sprite（直接可用于训练合成 / 图鉴）
-   └─ exports\maps\<id>\{map.json, img\, preview.png}
-                                    map.json 含 life（刷怪表）/ foothold / ladderRope
+   └─ exports\maps\<id>\{map.json, img\, window.png}
+                                    map.json 含 life（刷怪表）/ foothold / ladderRope；
+                                    window.png = 1366×768 导出窗口（--view 选位置）
 wztool map-minimap 101040000        渲染游戏内小地图（miniMap canvas + 标记）→ PNG
 ```
 
@@ -101,8 +102,9 @@ WebUI 预览默认 **1x = 客户端真实渲染尺寸**（缩放按钮切 2x/4x 
     `name`/`streetName`（String.wz 的地图名），每个 portal 还带 `tmn`（目标图名）；
   - `wztool map-minimap <id>` 输出合成好的小地图 PNG（canvas 放大 + 
     传送门蓝圈 / NPC 黄点 / 刷怪点红橙品红）；
-  - Web 页面地图详情有「小地图」卡片：1x/2x/4x 缩放，传送门**点击直接跳目标图**，
-    NPC / 刷怪点可开关，悬停看名字——和游戏里的小地图同一份数据、同一套坐标；
+  - Web 页面地图详情：地图按 **1:1 真实尺寸**放在可滚动视图里，蓝色框 = 
+    **导出窗口（1366×768，客户端画面）**，拖动蓝框选位置，导出 / 导出YOLO
+    都是窗口里的画面（传送门蓝圈点击直接跳目标图，NPC / 刷怪点可开关）；
   - 还有「**小地图 HUD**」：把小地图窗口按客户端的画法直接贴在预览图上。
     位置/尺寸严格照源码——`UIMiniMap` 继承 `UIDragElement<PosMINIMAP>`，
     位置 = 设置项 `PosMINIMAP`（**默认 `(0,0)` 即视口左上角**，拖动后写回设置）；

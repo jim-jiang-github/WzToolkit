@@ -131,8 +131,16 @@ def _render_mod():
 
 
 def _render_preview(map_dir: Path, out_png: Path, no_bg: bool = False) -> dict:
+    """按 **真实尺寸（1:1）** 渲染地图 PNG（客户端渲染就是 1:1，缩放由 UI 负责）。
+
+    缓存：PNG 旁边写一个同名的 `.meta` 记录渲染参数。早期版本渲染的是缩到 1600 宽的
+    小图，没有 meta 就当作过期重渲（否则会一直命中旧的小图）。
+    """
     from PIL import Image
-    if not out_png.exists():      # 渲染只取决于贴图；同图多窗口导出复用，不重渲
+    meta = out_png.with_suffix(".meta")
+    stamp = f"native-1x no_bg={int(bool(no_bg))}\n"
+    fresh = out_png.exists() and meta.exists() and meta.read_text() == stamp
+    if not fresh:
         import tempfile
         R = _render_mod()
         out_png.parent.mkdir(parents=True, exist_ok=True)
@@ -142,8 +150,9 @@ def _render_preview(map_dir: Path, out_png: Path, no_bg: bool = False) -> dict:
         os.close(fd)
         try:
             os.unlink(tmp)
-            R.render_file(str(map_dir), str(tmp), max_width=1600, no_bg=no_bg)
+            R.render_file(str(map_dir), str(tmp), max_width=None, no_bg=no_bg)
             os.replace(tmp, out_png)
+            meta.write_text(stamp)
         except Exception:
             try:
                 os.unlink(tmp)
@@ -619,7 +628,7 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     R = _render_mod()
     minx, miny, bw, bh = R.map_bounds(mj)
     minx -= 40; miny -= 40; bw += 80; bh += 80
-    s = min(1.0, 1600 / max(1.0, bw))
+    s = 1.0                  # 渲染改成 1:1（真实尺寸），不再缩到 1600 宽
     frames = {}          # kind -> {action: [(img, ox, oy), ...]}（含缩放）
     frames_flip = {}
     for k in sorted({str(l.get("id", "")).lstrip("0") for l in life}):
@@ -773,7 +782,7 @@ def c_mob_export(raw: str, preview: bool = False) -> dict:
 
 
 def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
-                 density: int = 1, region: tuple | None = None,
+                 density: int = 1, view: tuple | None = None,
                  yolo: bool = False, seed: str | None = None,
                  no_boss: bool = False,
                  _visited: set | None = None,
@@ -789,6 +798,8 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     classes.txt/dataset.yaml；每只怪一个框、每段绳/梯一个框、每段地面一个框
     ——平地标 ground、坡度≥0.2 的标 slope），
     蕴含 mobs=True。
+    view=(x, y) 是导出窗口（VIEW_W×VIEW_H = 客户端画面 1366×768）的左上角世界坐标；
+    缺省取地图正中。导出文件统一是 1366×768，窗口超出地图边界的地方补空白。
     life_points 是刷怪点（x, y 已按客户端规则落到 cy 地面），overlay 是
     世界坐标→预览图的变换（minx/miny/s/w/h），两者配合可在任何客户端复现点位。
     foothold_segs 是全部地面段（前端随机摆怪用它做贴地插值）。
@@ -826,12 +837,12 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     # 链接图：拿目标图的数据渲染（客户端同款行为）
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
-        d = c_map_export(link, preview, mobs, density, region, yolo, seed,
+        d = c_map_export(link, preview, mobs, density, view, yolo, seed,
                          no_boss, visited, no_bg=no_bg)
         d["link"] = {"from": mid, "to": link}
         return d
 
-    return _map_export_inner(ws, mid, preview, mobs, density, region, visited,
+    return _map_export_inner(ws, mid, preview, mobs, density, view, visited,
                              yolo=yolo, seed=seed, outdir=outdir, mj=mj,
                              no_boss=no_boss, no_bg=no_bg)
 
@@ -888,8 +899,27 @@ def _minimap_payload(outdir: Path, root: Path, mj: dict, meta: dict) -> dict | N
             "portals": portals, "npcs": npcs, "mobs": mobs}
 
 
+VIEW_W, VIEW_H = 1366, 768      # 客户端画面窗口，也是唯一的导出尺寸
+
+
+def _view_origin(view: tuple | None, minx: float, miny: float,
+                 bw: float, bh: float) -> tuple[int, int]:
+    """导出窗口左上角的世界坐标：按传入值夹在地图内，缺省取地图正中。
+
+    地图比窗口还小就居中（窗口四周留空），拖动/传值都不会把窗口推出地图。
+    """
+    if view:
+        vx, vy = float(view[0]), float(view[1])
+    else:
+        vx = minx + (bw - VIEW_W) / 2
+        vy = miny + (bh - VIEW_H) / 2
+    vx = minx + (bw - VIEW_W) / 2 if bw <= VIEW_W else min(max(vx, minx), minx + bw - VIEW_W)
+    vy = miny + (bh - VIEW_H) / 2 if bh <= VIEW_H else min(max(vy, miny), miny + bh - VIEW_H)
+    return round(vx), round(vy)
+
+
 def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: int,
-                      region: tuple | None, visited: set, yolo: bool = False,
+                      view: tuple | None, visited: set, yolo: bool = False,
                       seed: str | None = None,
                       outdir: Path | None = None, mj: dict | None = None,
                       no_boss: bool = False, no_bg: bool = False) -> dict:
@@ -906,11 +936,11 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     kinds = sorted({str(l.get("id", "")).lstrip("0") for l in life})
     mobnx = ws / "Mob.nx"
     meta = {m["id"]: m for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
-    # 刷怪点叠加：overlay 必须和渲染实际用的一致（render_file pad=40、max_width=1600）
+    # 刷怪点叠加：overlay 必须和渲染实际用的一致（render_file pad=40、1:1 不缩放）
     R = _render_mod()
     minx, miny, bw, bh = R.map_bounds(mj)
     minx -= 40; miny -= 40; bw += 80; bh += 80
-    s = min(1.0, 1600 / max(1.0, bw))
+    s = 1.0                      # 1:1 真实尺寸
     points = [{"id": (k := str(l.get("id", "")).lstrip("0")),
                "x": float(l.get("x", 0)),
                # 客户端同款落地：y 只是出生参考点，真正站的是 cy（fh 指向的地面 y）
@@ -957,37 +987,32 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
             result["mobs"] = True
         elif yolo:
             raise CliError("这张图有刷怪点但没找到任何怪的图片，无法做 YOLO 标注", 1)
-    # 区域裁剪：只导出世界坐标 (x, y, w, h) 的窗口（客户端画面就是固定分辨率的窗口）
-    if region:
-        rx, ry, rw, rh = (float(v) for v in region)
-        if rw <= 0 or rh <= 0:
-            raise CliError("区域宽高必须大于 0", 2)
+    # 导出 = 客户端那个固定 1366×768 的画面窗口（预览模式输出整张 1:1 地图，供页面叠窗口用）
+    if not preview:
         from PIL import Image
-        src = Image.open(Path(result["preview_path"]))
-        W, H = src.size
-        left = max(0, round((rx - minx) * s))
-        top = max(0, round((ry - miny) * s))
-        right = min(W, round((rx + rw - minx) * s))
-        bottom = min(H, round((ry + rh - miny) * s))
-        if right - left < 8 or bottom - top < 8:
-            raise CliError(
-                "区域不在地图范围内。地图世界坐标范围："
-                f"x∈[{minx:.0f},{minx + bw:.0f}] y∈[{miny:.0f},{miny + bh:.0f}]", 2)
-        def _n(v: float) -> str:
-            return str(int(v)) if float(v).is_integer() else str(v)
-        out_png = outdir / (f"preview_region{'_nobg' if no_bg else ''}"
-                            f"_x{_n(rx)}_y{_n(ry)}_w{_n(rw)}_h{_n(rh)}.png")
-        src.crop((left, top, right, bottom)).save(out_png)
-        cw, ch = right - left, bottom - top
+        src = Image.open(Path(result["preview_path"])).convert("RGBA")
+        vx, vy = _view_origin(view, minx, miny, bw, bh)
+        left, top = round(vx - minx), round(vy - miny)
+        canvas = Image.new("RGBA", (VIEW_W, VIEW_H),
+                           (0, 0, 0, 0) if no_bg else (16, 18, 24, 255))
+        # 窗口可以超出地图边界（小图/边缘），只贴交集，其余留空
+        sx0, sy0 = max(0, left), max(0, top)
+        sx1 = min(src.width, left + VIEW_W)
+        sy1 = min(src.height, top + VIEW_H)
+        if sx1 > sx0 and sy1 > sy0:
+            canvas.paste(src.crop((sx0, sy0, sx1, sy1)), (sx0 - left, sy0 - top))
+        out_png = outdir / ("window_nobg.png" if no_bg else "window.png")
+        canvas.convert("RGBA" if no_bg else "RGB").save(out_png)
         rel = (out_png.relative_to(CACHE) if preview else out_png.relative_to(EXPORTS))
-        result["preview"] = {"w": cw, "h": ch}
+        result["preview"] = {"w": VIEW_W, "h": VIEW_H}
         result["preview_path"] = str(out_png)
         result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview
                                  else f"/exports/{rel.as_posix()}")
-        result["region"] = {"x": rx, "y": ry, "w": rw, "h": rh,
-                            "px": {"x": left, "y": top, "w": cw, "h": ch}}
-        # 叠加层坐标系改为以区域左上角为原点，圆点/立绘在裁剪图上照样对准
-        result["overlay"] = {"minx": rx, "miny": ry, "s": s, "w": cw, "h": ch}
+        result["window"] = {"x": vx, "y": vy, "w": VIEW_W, "h": VIEW_H,
+                            "px": {"x": left, "y": top}}
+        # 叠加层坐标系改成以窗口左上角为原点，圆点/立绘在窗口图上照样对准
+        result["overlay"] = {"minx": vx, "miny": vy, "s": 1.0,
+                             "w": VIEW_W, "h": VIEW_H}
 
     # ---------------------------------------------------------------- YOLO 数据集
     # 每只怪一个框（合成时记录的精确 ground truth）+ 每段绳/梯一个框
@@ -997,8 +1022,9 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     if yolo:
         import shutil
         W, H = result["preview"]["w"], result["preview"]["h"]
-        offx, offy = (result["region"]["px"]["x"], result["region"]["px"]["y"]) \
-            if region else (0, 0)
+        # 导出图是 1366×768 窗口，标注框要减去窗口左上角在整图上的像素偏移
+        offx, offy = (result["window"]["px"]["x"], result["window"]["px"]["y"]) \
+            if result.get("window") else (0, 0)
 
         def _mob_cls(k: str, state: str = "") -> str:
             nm = meta.get(k, {}).get("name") or mob_names().get(k) or ""
@@ -1220,7 +1246,7 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
     cx, cy, cw, chh = R.map_bounds(mj)          # 内容包围盒（不含 pad）
     minx, miny = cx - 40, cy - 40
     bw, bh = cw + 80, chh + 80                   # 渲染画布窗口（pad=40，与导出一致）
-    s = min(1.0, 1600 / max(1.0, bw))
+    s = 1.0                  # 渲染改成 1:1（真实尺寸），不再缩到 1600 宽
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
     mobnx = ws / "Mob.nx"
     meta = {m["id"]: m for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
@@ -1289,7 +1315,7 @@ def c_probe_batch(ids: list[str], win_w: int = 1366, win_h: int = 768,
             cx, cy, cw, chh = R.map_bounds(mj)
             minx, miny = cx - 40, cy - 40
             bw, bh = cw + 80, chh + 80
-            s = min(1.0, 1600 / max(1.0, bw))
+            s = 1.0                  # 渲染改成 1:1（真实尺寸），不再缩到 1600 宽
             life = [l for l in mj.get("life", []) if l.get("type") == "m"]
             small = [l for l in life
                      if tier.get(str(l.get("id", "")).lstrip("0"), "normal") != "big"]
@@ -1449,17 +1475,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/mob/export":
             self._api(c_mob_export, str(b.get("raw") or ""), bool(b.get("preview")))
         elif path == "/api/map/export":
-            rg = b.get("region")
-            region = None
-            if rg:
+            vp = b.get("view")      # 导出窗口左上角世界坐标 {x, y}；缺省地图正中
+            view = None
+            if isinstance(vp, dict) and "x" in vp and "y" in vp:
                 try:
-                    t = (rg["x"], rg["y"], rg["w"], rg["h"]) if isinstance(rg, dict) else rg[:4]
-                    region = tuple(float(v) for v in t)
-                except Exception:
-                    region = None
+                    view = (float(vp["x"]), float(vp["y"]))
+                except (TypeError, ValueError):
+                    view = None
             self._api(c_map_export, str(b.get("id") or ""),
                       bool(b.get("preview")), bool(b.get("mobs")),
-                      int(b.get("density") or 1), region,
+                      int(b.get("density") or 1), view,
                       bool(b.get("yolo")),
                       str(b["seed"]) if b.get("seed") else None,
                       bool(b.get("no_boss")), no_bg=bool(b.get("no_bg")))
@@ -1637,18 +1662,19 @@ def cmd_mob_export(a) -> int:
 
 
 def cmd_map_export(a) -> int:
-    region = None
-    if getattr(a, "region", None):
+    view = None
+    if getattr(a, "view", None):
         try:
-            parts = [float(v) for v in str(a.region).replace("，", ",").split(",")]
-            if len(parts) != 4:
+            parts = [float(v) for v in str(a.view).replace("，", ",").split(",")]
+            if len(parts) != 2:
                 raise ValueError
-            region = tuple(parts)
+            view = tuple(parts)
         except ValueError:
-            print("错误: --region 应为 X,Y,W,H（如 850,-900,1366,768）", file=sys.stderr)
+            print("错误: --view 应为 X,Y（导出窗口左上角世界坐标，如 850,-900）",
+                  file=sys.stderr)
             return 2
     d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density,
-                     region=region, yolo=bool(getattr(a, "yolo", False)),
+                     view=view, yolo=bool(getattr(a, "yolo", False)),
                      seed=getattr(a, "seed", None),
                      no_boss=bool(getattr(a, "no_boss", False)),
                      no_bg=bool(getattr(a, "no_bg", False)))
@@ -1658,7 +1684,9 @@ def cmd_map_export(a) -> int:
         link = f"（链接图 → 画面同 {d['link']['to']}）" if d.get("link") else ""
         p = d["preview"]
         mobs = " · 已合成怪物" if d.get("mobs") else ""
-        print(f"地图 {a.id}: {p['w']}×{p['h']} · 刷怪 {d['life_count']} · "
+        win = d.get("window")
+        where = f" · 窗口 ({win['x']},{win['y']})" if win else " · 整图 1:1"
+        print(f"地图 {a.id}: {p['w']}×{p['h']}{where} · 刷怪 {d['life_count']} · "
               f"地面 {d['footholds']} 段 · 绳梯 {d['ladders']} 段{mobs} {link}")
         print(f"目录: {d['dir']}")
         print(f"预览: {d['preview_path']}")
@@ -1758,8 +1786,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("map-info", help="查地图元信息（不渲染：尺寸/世界坐标/刷怪统计）",
                        epilog="比 map-export 快一个量级（只解析 map.json，不出图）。\n"
-                              "bounds=内容包围盒；world=加 40px pad 的可导窗口（--region 用它算）；\n"
-                              "scale<1 表示导出预览会被缩放（1366×768 窗口可能裁不满）。")
+                              "bounds=内容包围盒；world=加 40px pad 的世界范围（导出窗口就在这里走）。\n"
+                              "导出图固定 1366×768（客户端画面），--view 选窗口位置。")
     p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
     _j(p); p.set_defaults(fn=cmd_map_info)
 
@@ -1812,11 +1840,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
     p.add_argument("--no-bg", action="store_true",
                    help="不画背景（天幕/云/山等 back 层全跳过，画布透明），只出地形+建筑+物件；"
-                        "输出 preview_nobg.png / preview_mobs_nobg.png")
-    p.add_argument("--region", metavar="X,Y,W,H",
-                   help="只导出世界坐标区域。含负数时必须用 = 形式，"
-                        "如 --region=850,-900,1366,768"
-                        "（客户端画面就是固定分辨率窗口，常见 1366×768 / 1024×768 / 800×600）")
+                        "输出 window_nobg.png")
+    p.add_argument("--view", metavar="X,Y",
+                   help="导出窗口左上角的世界坐标（默认地图正中）。导出图固定 1366×768 —— "
+                        "和客户端画面同尺寸，只此一种；含负数时必须用 = 形式，如 --view=-1500,300")
     _j(p); p.set_defaults(fn=cmd_map_export)
 
     p = sub.add_parser("map-minimap",

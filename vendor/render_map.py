@@ -105,7 +105,7 @@ def draw_back(canvas, b, tex, origin, bounds, parallax=1.0):
 @dataclass
 class RenderOpts:
     scale: float = 1.0
-    max_width: int = 1600
+    max_width: int | None = 1600   # None = 不缩限（按真实尺寸 1:1 渲染）
     parallax: float = 1.0     # 背景视差系数（1.0 = 世界坐标直贴，仅预览用）
     bounds: tuple | None = None
     view: tuple | None = None    # (x, y, w, h)：按「相机取景框」渲染，背景才是游戏里的样子
@@ -168,7 +168,7 @@ def render_map(map_json: dict, img_dirs: list[str], opts: RenderOpts | None = No
         bw += opts.pad * 2
         bh += opts.pad * 2
 
-    s = min(opts.scale, opts.max_width / max(1.0, bw))
+    s = min(opts.scale, opts.max_width / max(1.0, bw)) if opts.max_width else opts.scale
     W, H = max(1, int(bw * s)), max(1, int(bh * s))
     # no_bg：跳过所有 back 层（天幕/云/山），画布留全透明——只留地形与物件，
     # 透明 PNG 还能直接叠到别的底图上（做对比图 / 素材用）

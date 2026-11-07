@@ -115,14 +115,19 @@
             max-height: 320px; width: 340px; overflow: auto; box-shadow: 0 8px 30px #000a; }
   .browse div { padding: 4px 10px; cursor: pointer; border-radius: 5px; }
   .browse div:hover { background: #0e3b35; }
-  .mapimg { max-width: 100%; max-height: 430px; width: auto; display: block;
-            border-radius: 6px; border: 1px solid var(--line);
-            image-rendering: pixelated; cursor: zoom-in; }
-  /* 刷怪点叠加：百分比定位（和图片一起缩放），红=普通怪 橙=BOSS 品红=大BOSS */
-  .mapwrap { position: relative; display: inline-block; max-width: 100%; }
-  .rgrow input[type=number] { width: 76px; padding: 2px 4px; }
-  #rgsel { position: absolute; display: none; pointer-events: none;
-           border: 1.5px dashed #378add; background: #378add1f; }
+  .mapimg { display: block; image-rendering: pixelated; cursor: zoom-in; }
+  /* 1:1 地图放在可滚动容器里；蓝框 = 导出窗口（1366×768，客户端画面），可拖动 */
+  .mapscroll { position: relative; max-height: 560px; overflow: auto;
+               background: #0b0f14; border: 1px solid var(--line); border-radius: 6px; }
+  .mapwrap { position: relative; display: inline-block; }
+  .expthumb { display: block; max-width: 340px; max-height: 200px; margin-top: 4px;
+              border: 1px solid var(--line); border-radius: 4px; image-rendering: pixelated; }
+  #vpframe { position: absolute; width: 1366px; height: 768px; z-index: 4;
+             border: 2px solid #3ba7ff; box-shadow: 0 0 0 4000px #00000066;
+             cursor: move; }
+  #vpframe .vp-tag { position: absolute; left: -2px; top: -2px; background: #3ba7ffd9;
+             color: #001322; font-size: 11px; line-height: 16px; padding: 0 6px;
+             border-radius: 2px 0 4px 0; pointer-events: none; white-space: nowrap; }
   .lifedots { position: absolute; inset: 0; pointer-events: none; }
   .ldot { position: absolute; width: 8px; height: 8px; border-radius: 50%;
           background: #ff5d5d; border: 1px solid #000c; transform: translate(-50%, -50%);
@@ -298,61 +303,37 @@ let NOBG = false;       // 预览/导出不画背景（back 层全跳过，画�
 let YOLOSHOT = false;   // 一次性：这次 mapLoad 顺带产出 YOLO 数据集
 let DENSITY = 1;        // 怪物密度倍数（页面叠加与导出合成共用）
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
-let REGION = null;      // 导出区域 {x, y, w, h} 世界坐标（null = 整图）
-let RGDRAG = null;       // 拖框进行中的状态 {x, y, moved}
-let RGJUSTDRAGGED = false;
+const VPW = 1366, VPH = 768;   // 客户端画面窗口，也是唯一的导出尺寸
+let VIEWPOS = null;     // 导出窗口左上角（整图内的像素坐标）；null = 地图正中
+let VPDRAG = null;      // 拖窗口进行中 {dx, dy}（指针在框内的偏移）
 
-/* 图上拖框选区域：mousedown 在 #mapsel（mapLoad 里绑定），move/up 在 window（只绑一次） */
+/* 拖动导出窗口（蓝框）：mousedown 在 #vpframe（mapLoad 里绑定），move/up 在 window */
 window.addEventListener("mousemove", (e) => {
-  if (!RGDRAG) return;
-  const wrap = $("#mapsel");
-  if (!wrap) { RGDRAG = null; return; }
-  const img = wrap.querySelector("img.mapimg");
-  if (!img) return;
-  if (Math.abs(e.clientX - RGDRAG.x) + Math.abs(e.clientY - RGDRAG.y) > 4) RGDRAG.moved = true;
-  if (!RGDRAG.moved) return;
-  const r = img.getBoundingClientRect();
-  const cx = (v) => Math.min(Math.max(v, r.left), r.right);
-  const cy = (v) => Math.min(Math.max(v, r.top), r.bottom);
-  const sel = $("#rgsel");
-  if (sel) {
-    sel.style.display = "";
-    sel.style.left = (Math.min(cx(RGDRAG.x), cx(e.clientX)) - r.left) + "px";
-    sel.style.top = (Math.min(cy(RGDRAG.y), cy(e.clientY)) - r.top) + "px";
-    sel.style.width = Math.abs(cx(e.clientX) - cx(RGDRAG.x)) + "px";
-    sel.style.height = Math.abs(cy(e.clientY) - cy(RGDRAG.y)) + "px";
-  }
+  if (!VPDRAG) return;
+  const f = $("#vpframe");
+  if (!f) { VPDRAG = null; return; }
+  const wrap = f.parentElement;          // .mapwrap = 整张 1:1 地图
+  const r = wrap.getBoundingClientRect();
+  const sc = $("#mapscroll");
+  const x = Math.max(0, Math.min(e.clientX - r.left + (sc ? sc.scrollLeft : 0) - VPDRAG.dx,
+                                 Math.max(0, wrap.offsetWidth - VPW)));
+  const y = Math.max(0, Math.min(e.clientY - r.top + (sc ? sc.scrollTop : 0) - VPDRAG.dy,
+                                 Math.max(0, wrap.offsetHeight - VPH)));
+  f.style.left = x + "px"; f.style.top = y + "px";
+  VIEWPOS = { x, y };
 });
-window.addEventListener("mouseup", (e) => {
-  if (!RGDRAG) return;
-  const drag = RGDRAG;
-  RGDRAG = null;
-  const sel = $("#rgsel");
-  if (sel) sel.style.display = "none";
-  if (!drag.moved || !mapData) return;
-  const wrap = $("#mapsel");
-  const img = wrap && wrap.querySelector("img.mapimg");
-  if (!img) return;
-  const r = img.getBoundingClientRect();
-  const o = mapData.overlay;
-  const cx = (v) => Math.min(Math.max(v, r.left), r.right);
-  const cy = (v) => Math.min(Math.max(v, r.top), r.bottom);
-  // 显示像素 → 世界坐标（overlay.w/s 是窗口对应的世界宽度）
-  const wx = (v) => o.minx + (cx(v) - r.left) / r.width * o.w / o.s;
-  const wy = (v) => o.miny + (cy(v) - r.top) / r.height * o.h / o.s;
-  REGION = {
-    x: Math.round(Math.min(wx(drag.x), wx(e.clientX))),
-    y: Math.round(Math.min(wy(drag.y), wy(e.clientY))),
-    w: Math.round(Math.abs(wx(e.clientX) - wx(drag.x))),
-    h: Math.round(Math.abs(wy(e.clientY) - wy(drag.y))),
-  };
-  const rgx = $("#rg-x"), rgy = $("#rg-y"), rgw = $("#rg-w"), rgh = $("#rg-h");
-  if (rgx) rgx.value = REGION.x;
-  if (rgy) rgy.value = REGION.y;
-  if (rgw) rgw.value = REGION.w;
-  if (rgh) rgh.value = REGION.h;
-  RGJUSTDRAGGED = true;   // 抑制随后而来的 click 放大
-});
+window.addEventListener("mouseup", () => { VPDRAG = null; });
+function vpPlace() {   // 摆窗口：缺省居中；换图后夹在地图范围内
+  const f = $("#vpframe"), wrap = $("#mapsel");
+  if (!f || !wrap) return;
+  const maxX = Math.max(0, wrap.offsetWidth - VPW);
+  const maxY = Math.max(0, wrap.offsetHeight - VPH);
+  if (!VIEWPOS) VIEWPOS = { x: Math.round(maxX / 2), y: Math.round(maxY / 2) };
+  VIEWPOS = { x: Math.min(VIEWPOS.x, maxX), y: Math.min(VIEWPOS.y, maxY) };
+  f.style.left = VIEWPOS.x + "px"; f.style.top = VIEWPOS.y + "px";
+  const sc = $("#mapscroll");
+  if (sc) { sc.scrollLeft = Math.max(0, VIEWPOS.x - 40); sc.scrollTop = Math.max(0, VIEWPOS.y - 40); }
+}
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
 async function boot() {
@@ -886,7 +867,7 @@ function mmHudHTML(d) {
     </div></div>`;
 }
 function mmHudPlace() {
-  const hud = $("#mm-hud"), wrap = $("#mapsel");
+  const hud = $("#mm-hud"), wrap = $("#vpframe");   // HUD 的视口 = 导出窗口（客户端画面）
   if (!hud || !wrap) return;
   const sel = $("#mm-hud-anchor");
   if (sel) sel.value = MMHUD.anchor;
@@ -903,7 +884,7 @@ function mmHudPlace() {
 }
 function bindMmHud(d) {
   if (!d.minimap || !$("#mm-hud")) return;
-  const hud = $("#mm-hud"), wrap = $("#mapsel");
+  const hud = $("#mm-hud"), wrap = $("#vpframe");
   mmHudPlace();
   const sel = $("#mm-hud-anchor");
   if (sel) sel.onchange = () => {
@@ -950,14 +931,14 @@ function bindMmHud(d) {
 }
 
 async function mapLoad(id, preview) {
-  if (mapRef && mapRef.id !== id) REGION = null;   // 换图清掉旧区域
+  if (mapRef && mapRef.id !== id) VIEWPOS = null;   // 换图：窗口回地图正中
   mapRef = { id, preview };
   const det = $("#detail");
   det.innerHTML = `<div>地图 <b>${id}</b><br><span class="muted">导出 + 渲染中（大图要几秒）…</span></div>`;
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, region: REGION, yolo: YOLOSHOT, no_boss: NOBOSS, no_bg: NOBG }),
+      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, yolo: YOLOSHOT, no_boss: NOBOSS, no_bg: NOBG }),
     });
     YOLOSHOT = false;
     const kinds = (d.life_kinds || []).map((k) =>
@@ -993,44 +974,30 @@ async function mapLoad(id, preview) {
             <option value="tr">小地图 HUD：右上</option>
             <option value="free">小地图 HUD：拖动的位置</option>
           </select></label>` : ""}
-        ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}
-        <button class="mini" id="do-yolo" title="产出 YOLO 训练集（exports/yolo/：图片+标注 txt+classes.txt+dataset.yaml；每只怪一个框、绳/梯各一类；区域/密度/导出带怪设置同样生效）">导出YOLO</button>
+        <button class="primary mini" id="do-export" title="把蓝框里的 1366×768 画面导出到 exports/maps/&lt;id&gt;/window.png（导出带怪物/不含大BOSS/不显示背景同样生效）">导出窗口</button>
+        <button class="mini" id="do-yolo" title="产出 YOLO 训练集（exports/yolo/：图片+标注 txt+classes.txt+dataset.yaml；每只怪一个框、绳/梯各一类；蓝框窗口/密度/导出带怪设置同样生效）">导出YOLO</button>
       </div></div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}${d.yolo ? ` · <b>YOLO ${d.yolo.boxes} 框已导出</b>（${d.yolo.image}）` : ""}</div>
       <div style="margin-bottom:6px">${kinds || '<span class="muted">这张图没有怪物</span>'}</div>
-      <div class="row rgrow" style="margin-bottom:4px">
-        <span class="muted">导出区域</span>
-        X <input type="number" id="rg-x" value="${REGION ? REGION.x : ""}" />
-        Y <input type="number" id="rg-y" value="${REGION ? REGION.y : ""}" />
-        宽 <input type="number" id="rg-w" value="${REGION ? REGION.w : ""}" placeholder="1366" />
-        高 <input type="number" id="rg-h" value="${REGION ? REGION.h : ""}" placeholder="768" />
-        <select id="rg-preset" title="常见客户端分辨率">
-          <option value="">预设…</option>
-          <option value="1366,768">1366×768</option>
-          <option value="1024,768">1024×768</option>
-          <option value="800,600">800×600</option>
-        </select>
-        <button class="mini" id="rg-clear" title="清空区域，恢复整图导出">清除</button>
+      <div class="muted" style="margin:0 0 6px">地图按 <b>1:1 真实尺寸</b>显示（滚轮/滚动条平移）。<b style="color:#3ba7ff">蓝框 = 导出窗口</b>（1366×768，客户端画面），<b>拖动蓝框</b>选位置，导出/YOLO 都是这个窗口里的画面；窗口超出地图的部分留空。</div>
+      <div class="mapscroll" id="mapscroll">
+        <span class="mapwrap" id="mapsel">
+          <a href="${pvUrl}" title="点开放大查看（怪物/刷怪点叠加同样显示）" id="mz-open">
+            <img class="mapimg" src="${pvUrl}" loading="lazy">
+          </a>
+          <span class="lifedots" id="lifedots"></span>
+          <div id="vpframe"><span class="vp-tag">导出窗口 1366×768 · 拖动</span>
+            ${d.minimap ? mmHudHTML(d) : ""}
+          </div>
+        </span>
       </div>
-      <div class="muted" style="margin:0 0 6px">留空导出整图；也可以直接在下面的图上<b>拖框</b>选区域（世界坐标，游戏客户端画面就是固定分辨率的窗口）</div>
-      <span class="mapwrap" id="mapsel">
-        <a href="${pvUrl}" title="点开放大查看（怪物/刷怪点叠加同样显示）" id="mz-open">
-          <img class="mapimg" src="${pvUrl}" loading="lazy">
-        </a>
-        <span class="lifedots" id="lifedots"></span>
-        <span id="rgsel"></span>
-        ${d.minimap ? mmHudHTML(d) : ""}
-      </span>
-      <div class="muted" style="margin-top:4px">竖长地图已等比缩放，点图放大（适应 / 1x / 2x / 4x）</div>`;
+      <div id="export-out" style="margin-top:6px"></div>`;
     mapData = d;
     bindMinimap(d);
     bindMmHud(d);
+    vpPlace();
     const mo = $("#mz-open");
-    if (mo) mo.onclick = (e) => {
-      e.preventDefault();
-      if (RGJUSTDRAGGED) { RGJUSTDRAGGED = false; return; }  // 刚拖完框，别触发放大
-      mzOpen();
-    };
+    if (mo) mo.onclick = (e) => { e.preventDefault(); mzOpen(); };
     const lt = $("#life-toggle");
     if (lt) lt.onchange = renderLifeDots;
     const mt = $("#mob-toggle");
@@ -1061,34 +1028,41 @@ async function mapLoad(id, preview) {
         else renderLifeDots();
       };
     }
+    // 导出 = 蓝框里的 1366×768 画面（不重建面板，结果展示在 #export-out）
     const b = $("#do-export");
-    if (b) b.onclick = () => mapLoad(id, false);
+    if (b) b.onclick = () => exportWindow(false);
     const yb = $("#do-yolo");
-    if (yb) yb.onclick = () => { YOLOSHOT = true; mapLoad(id, false); };
-    // 区域导出：预设 / 清除 / 手填，与图上拖框（见下方 window 级拖框逻辑）
-    const rgx = $("#rg-x"), rgy = $("#rg-y"), rgw = $("#rg-w"), rgh = $("#rg-h");
-    const rgRead = () => {
-      const x = parseFloat(rgx.value), y = parseFloat(rgy.value);
-      const w = parseFloat(rgw.value), h = parseFloat(rgh.value);
-      REGION = (Number.isFinite(x) && Number.isFinite(y) &&
-                Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0)
-        ? { x, y, w, h } : null;
-    };
-    [rgx, rgy, rgw, rgh].forEach((el) => { if (el) el.onchange = rgRead; });
-    const rgp = $("#rg-preset");
-    if (rgp) rgp.onchange = () => {
-      if (!rgp.value) return;
-      const [w, h] = rgp.value.split(",").map(Number);
-      rgw.value = w; rgh.value = h;
-      rgRead();
-    };
-    const rgc = $("#rg-clear");
-    if (rgc) rgc.onclick = () => { REGION = null; mapLoad(mapRef.id, mapRef.preview); };
-    const msel = $("#mapsel");
-    if (msel) msel.onmousedown = (e) => {
-      if (e.button === 0) RGDRAG = { x: e.clientX, y: e.clientY, moved: false };
+    if (yb) yb.onclick = () => exportWindow(true);
+    // 拖动导出窗口（蓝框）；小地图 HUD/标记有自己的拖动，不抢
+    const fr = $("#vpframe");
+    if (fr) fr.onmousedown = (e) => {
+      if (e.button !== 0 || e.target.closest(".mm-hud") || e.target.closest(".mmd")) return;
+      e.preventDefault(); e.stopPropagation();
+      const r = fr.getBoundingClientRect();
+      VPDRAG = { dx: e.clientX - r.left, dy: e.clientY - r.top };
     };
   } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
+}
+
+/* 把蓝框窗口导出成 1366×768（yolo=true 时顺带产出 YOLO 训练集） */
+async function exportWindow(yolo) {
+  if (!mapData || !mapRef) return;
+  const ov = mapData.overlay;
+  const view = VIEWPOS ? { x: ov.minx + VIEWPOS.x, y: ov.miny + VIEWPOS.y } : null;
+  const out = $("#export-out");
+  out.innerHTML = '<span class="muted">导出中…</span>';
+  try {
+    const d = await api("/api/map/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: mapRef.id, preview: false, mobs: EXPORTMOBS,
+                             density: DENSITY, yolo, no_boss: NOBOSS, no_bg: NOBG, view }),
+    });
+    const w = d.window || {};
+    let html = `✅ 已导出 <b>${w.w || 1366}×${w.h || 768}</b>（窗口世界坐标 ${w.x},${w.y}）→ <code>${d.preview_path}</code>`;
+    if (d.yolo) html += `<br>YOLO: ${d.yolo.boxes} 框 · 图 ${d.yolo.image} · 数据集 ${d.yolo.dataset}`;
+    html += `<img class="expthumb" src="${d.preview_url}?v=${Date.now()}">`;
+    out.innerHTML = html;
+  } catch (e) { out.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
 }
 
 /* 目录浏览 */
