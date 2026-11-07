@@ -10,14 +10,18 @@
     --mut: #8b949e; --acc: #4ee0c8; --acc2: #ffd166; --err: #ff7b72;
   }
   * { box-sizing: border-box; }
+  /* 整页撑满浏览器：wrap 占满 100vh，第②张卡片吃掉剩余高度（窗口太小时页面照常滚动） */
+  html { height: 100%; }
   body { margin: 0; background: var(--bg); color: var(--fg);
-         font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; }
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 60px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
+         font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; min-height: 100%; }
+  .wrap { max-width: none; width: 100%; min-height: 100vh;
+          padding: 12px 16px 12px; display: flex; flex-direction: column; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
   h1 b { color: var(--acc); }
-  .sub { color: var(--mut); font-size: 12.5px; margin-bottom: 18px; }
+  .sub { color: var(--mut); font-size: 12.5px; margin-bottom: 12px; }
   .card { background: var(--panel); border: 1px solid var(--line);
           border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .card.grow { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .card h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
   .step { display: inline-flex; width: 22px; height: 22px; border-radius: 50%;
           background: var(--acc); color: #04211c; font-weight: 700; font-size: 13px;
@@ -42,8 +46,10 @@
   .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
   .tabs button { border-radius: 7px 7px 0 0; }
   .tabs button.on { background: #0e3b35; color: var(--acc); border-color: var(--acc); }
-  .cols { display: grid; grid-template-columns: 300px 1fr; gap: 14px; }
-  .list { border: 1px solid var(--line); border-radius: 8px; height: 520px;
+  .cols { display: grid; grid-template-columns: 300px 1fr; gap: 14px;
+          flex: 1; min-height: 0; }
+  .col-left { display: flex; flex-direction: column; min-height: 0; }
+  .list { border: 1px solid var(--line); border-radius: 8px; flex: 1; min-height: 0;
           overflow: auto; background: #0b0f14; }
   .list .it { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid #1c2128;
               display: flex; gap: 8px; align-items: baseline; }
@@ -70,7 +76,7 @@
   .filters button { font-size: 12px; padding: 1px 9px; }
   .filters button.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
   .detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
-            height: 520px; overflow: auto; background: #0b0f14; }
+            min-height: 0; overflow: auto; background: #0b0f14; }
   .frames { display: flex; flex-wrap: wrap; gap: 8px; }
   .frames img { background: repeating-conic-gradient(#1c2128 0 25%, #10151b 0 50%) 0 0 / 16px 16px;
                 border: 1px solid var(--line); border-radius: 4px; height: 110px; }
@@ -116,8 +122,10 @@
   .browse div { padding: 4px 10px; cursor: pointer; border-radius: 5px; }
   .browse div:hover { background: #0e3b35; }
   .mapimg { display: block; image-rendering: pixelated; cursor: zoom-in; }
-  /* 1:1 地图放在可滚动容器里；蓝框 = 导出窗口（1366×768，客户端画面），可拖动 */
-  .mapscroll { position: relative; max-height: 560px; overflow: auto;
+  /* 1:1 地图放在固定 1366×768 的可滚动容器里（viewer 可视范围 = 导出窗口大小）；
+     蓝框 = 导出窗口（1366×768，客户端画面），可拖动 */
+  .mapscroll { position: relative; width: 1366px; height: 768px; flex: none;
+               overflow: auto;
                background: #0b0f14; border: 1px solid var(--line); border-radius: 6px; }
   .mapwrap { position: relative; display: inline-block; }
   .expthumb { display: block; max-width: 340px; max-height: 200px; margin-top: 4px;
@@ -217,14 +225,14 @@
   </div>
 
   <!-- ② 浏览 / 导出 -->
-  <div class="card">
+  <div class="card grow">
     <h2><span class="step">2</span> 浏览 &amp; 导出</h2>
     <div class="tabs">
       <button id="tab-mob" class="on">怪物</button>
       <button id="tab-map">地图</button>
     </div>
     <div class="cols">
-      <div>
+      <div class="col-left">
         <input type="text" id="q" placeholder="搜索 id 或名字 …" style="width:100%;margin-bottom:8px" />
         <div class="filters" id="filters">
           <button class="flt on" data-f="all">全部</button>
