@@ -109,6 +109,37 @@ static int64_t jget_int(nl::node n, const char * k, int64_t def = 0) {
     return c.get_integer();
 }
 
+// ---------------------------------------------------------------- 地图名缓存
+// String/Map.img/<分类>/<mapid>/{mapName,streetName}。小地图标题栏和传送门
+// tooltip 都要用（客户端 UIMiniMap::update_text 读的是同一份数据）。
+struct MapName { std::string name, street; };
+static std::map<std::string, MapName> g_map_names;
+static bool g_map_names_loaded = false;
+
+static void load_map_names() {
+    if (g_map_names_loaded) return;
+    g_map_names_loaded = true;
+    if (!nl::nx::String) return;
+    nl::node strMap = nl::nx::String["Map.img"];
+    for (auto cat = strMap.begin(); cat != strMap.end(); ++cat) {
+        nl::node c = *cat;
+        for (auto mi = c.begin(); mi != c.end(); ++mi) {
+            nl::node m = *mi;
+            std::string id = m.name();
+            if (id.size() > 4 && id.compare(id.size() - 4, 4, ".img") == 0)
+                id = id.substr(0, id.size() - 4);
+            g_map_names[id] = MapName{jget_str(m, "mapName"), jget_str(m, "streetName")};
+        }
+    }
+}
+
+static const MapName & map_name_of(const std::string & id) {
+    static const MapName empty;
+    load_map_names();
+    auto it = g_map_names.find(id);
+    return it == g_map_names.end() ? empty : it->second;
+}
+
 // ---------------------------------------------------------------- life 全库导出
 // 每张图的 life 节点就是官方刷怪表：怪物 id + 出生坐标 + 所站地面 + 重生时间。
 // 反向聚合即可得到「怪物 → 出现地图」对照（boss 的 mobTime > 0 是重生秒数）。
@@ -211,6 +242,9 @@ int main(int argc, char ** argv) {
     // id 必须写成字符串：有些地图 id 带前导零（000000001、001000005…），
     // 直接当数字输出就是 000000001 → 非法 JSON，整个 map.json 解析失败。
     meta << "  \"id\": \"" << json_escape(mapid) << "\",\n";
+    const MapName & mn = map_name_of(mapid);
+    meta << "  \"name\": \"" << json_escape(mn.name) << "\",\n";
+    meta << "  \"streetName\": \"" << json_escape(mn.street) << "\",\n";
 
     nl::node info = img["info"];
     meta << "  \"info\": {";
@@ -387,13 +421,53 @@ int main(int argc, char ** argv) {
             nl::node p = *it;
             if (!first) meta << ",";
             first = false;
+            // tm 是目标地图 id：客户端在小地图上悬停传送门时显示它的 mapName，
+            // 这里直接把名字查好，前端就不用再问一次 String.nx。
+            const int64_t tm = jget_int(p, "tm");
+            std::string tmn;
+            if (tm > 0) {
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), "%09lld", static_cast<long long>(tm));
+                tmn = map_name_of(buf).name;
+            }
             meta << "\n    {\"pn\":\"" << json_escape(jget_str(p, "pn")) << "\",\"pt\":" << jget_int(p, "pt")
                  << ",\"x\":" << jget_int(p, "x") << ",\"y\":" << jget_int(p, "y")
-                 << ",\"tm\":" << jget_int(p, "tm") << ",\"tn\":\"" << json_escape(jget_str(p, "tn")) << "\""
+                 << ",\"tm\":" << tm << ",\"tn\":\"" << json_escape(jget_str(p, "tn")) << "\""
+                 << ",\"tmn\":\"" << json_escape(tmn) << "\""
                  << ",\"index\":" << json_escape(p.name()) << "}";
         }
         meta << "\n  ],\n";
     }
+
+    // ---- miniMap（客户端 UIMiniMap 用的那份预烘焙小图 + 坐标换算参数） ----
+    // canvas 是 WZ 里已经缩好的小图；真实地图坐标 p 映射到画布像素的规则是
+    //   px = (p.x + centerX) / 2^mag,  py = (p.y + centerY) / 2^mag
+    // 与 UIMiniMap::draw_movable_markers / update_static_markers 完全一致。
+    meta << "  \"miniMap\": ";
+    {
+        nl::node mm = img["miniMap"];
+        // 不是所有图都有 miniMap（hideMinimap / 部分副本图），先判空再取下标，
+        // 否则 NoLifeNx 会在无效节点上 abort。
+        nl::node canvas = mm ? mm["canvas"] : nl::node();
+        std::string png = canvas ? export_bitmap(canvas, "minimap") : "";
+        if (!mm || png.empty()) {
+            meta << "null";
+        } else {
+            nl::bitmap bmp = canvas.get_bitmap();
+            int64_t w = jget_int(mm, "width");
+            int64_t h = jget_int(mm, "height");
+            if (w <= 0) w = bmp ? bmp.width() : 0;
+            if (h <= 0) h = bmp ? bmp.height() : 0;
+            meta << "{\"img\":\"" << json_escape(png) << "\""
+                 << ",\"w\":" << w << ",\"h\":" << h
+                 << ",\"cw\":" << (bmp ? bmp.width() : 0)
+                 << ",\"ch\":" << (bmp ? bmp.height() : 0)
+                 << ",\"centerX\":" << jget_int(mm, "centerX")
+                 << ",\"centerY\":" << jget_int(mm, "centerY")
+                 << ",\"mag\":" << jget_int(mm, "mag") << "}";
+        }
+    }
+    meta << ",\n";
 
     // ---- life (npcs/mobs placed on the map) ----
     meta << "  \"life\": [";
