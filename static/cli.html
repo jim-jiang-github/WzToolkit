@@ -135,6 +135,22 @@
   /* 工作区选择弹窗：占满卡片宽 */
   .wspop { left: 16px; right: 16px; top: 46px; width: auto; max-height: 70vh;
            overflow: auto; }
+  /* 怪物图鉴弹窗：立绘卡片网格 */
+  .dexpop { position: absolute; right: 0; top: 32px; z-index: 30; width: 460px;
+            max-height: 70vh; overflow: auto;
+            background: var(--panel); border: 1px solid var(--acc); border-radius: 8px;
+            padding: 10px 12px; box-shadow: 0 8px 30px #000a; }
+  .dexpop[hidden] { display: none; }
+  .dexpop .dexgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+                     gap: 8px; }
+  .dexit { border: 1px solid var(--line); border-radius: 8px; padding: 6px 6px 7px;
+           text-align: center; background: #0b0f14; }
+  .dexit .dimg { height: 84px; display: flex; align-items: flex-end; justify-content: center; }
+  .dexit img { max-height: 80px; max-width: 116px; image-rendering: pixelated; }
+  .dexit .dnm { font-size: 12.5px; margin-top: 5px; white-space: nowrap;
+                overflow: hidden; text-overflow: ellipsis; }
+  .dexit .did { font: 11px Consolas, monospace; color: var(--acc2); }
+  .dexit .tier { margin-left: 3px; }
   /* 游戏窗口：CSS 固定 1366×768（= 客户端画面 = 导出尺寸）。DPI 由浏览器自然处理：
      系统 125% 缩放时它在屏幕上的物理大小 = 1366×1.25，和真实客户端窗口完全一致。
      里面的地图是"画布"，按住拖动平移（不缩放）；小地图 HUD 贴在窗口上，所以不动。 */
@@ -405,9 +421,9 @@ window.addEventListener("mouseup", () => {
   const gv = $("#gameview");
   if (gv) gv.classList.remove("dragging");
 });
-/* 点弹窗外面 = 关闭（「显示设置」「选择工作区」通用；按钮自己的 onclick 已 stopPropagation） */
+/* 点弹窗外面 = 关闭（「显示设置」「选择工作区」「怪物图鉴」通用；按钮自己的 onclick 已 stopPropagation） */
 document.addEventListener("click", (e) => {
-  for (const id of ["opt-pop", "ws-pop"]) {
+  for (const id of ["opt-pop", "ws-pop", "dex-pop"]) {
     const p = document.getElementById(id);
     if (p && !p.hidden && !e.target.closest("#" + id)) p.hidden = true;
   }
@@ -1017,8 +1033,7 @@ async function mapLoad(id, preview) {
       body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, yolo: YOLOSHOT, no_boss: NOBOSS, no_bg: NOBG }),
     });
     YOLOSHOT = false;
-    const kinds = (d.life_kinds || []).map((k) =>
-      `<span class="pill ${k.tier === "big" ? "bigboss" : k.tier === "boss" ? "bossmob" : ""}">${k.name || k.id} <b>${k.id}</b>${k.tier === "big" ? " 大BOSS" : k.tier === "boss" ? " BOSS" : ""}</span>`).join("");
+    const nKinds = (d.life_kinds || []).length;
     // 链接图：自己的 img 是空的，客户端渲染 link 指向的那张 —— 后端已顺着导出目标图
     const linkNote = d.link
       ? ` <span class="pill" title="这种图自己的 img 是空的，客户端渲染时加载 link 指向的图">链接图 → 画面同 <b>${d.link.to}</b></span>` : "";
@@ -1029,6 +1044,7 @@ async function mapLoad(id, preview) {
     det.innerHTML = `<div class="flexline" style="position:relative"><div>地图 <b>${id}</b>${linkNote} ·
       ${d.preview.w}×${d.preview.h}${preview ? "（预览）" : ""}</div>
       <div class="row">
+        ${nKinds ? `<button class="mini" id="dex-btn" title="这只地图出现的怪物，带立绘的图鉴">👾 怪物图鉴（${nKinds} 种）</button>` : ""}
         <button class="mini" id="opt-btn" title="显示叠加层与导出选项">⚙ 显示设置</button>
         <button class="primary mini" id="do-export" title="把游戏窗口里的 1366×768 画面导出到 exports/maps/&lt;id&gt;/window.png（导出带怪物/不含大BOSS/不显示背景同样生效）">导出窗口</button>
         <button class="mini" id="do-yolo" title="产出 YOLO 训练集（exports/yolo/：图片+标注 txt+classes.txt+dataset.yaml；每只怪一个框、绳/梯各一类；窗口位置/密度/导出带怪设置同样生效）">导出YOLO</button>
@@ -1051,9 +1067,10 @@ async function mapLoad(id, preview) {
         <label title="怪物密度倍数：影响页面叠加与导出合成的怪物数量" style="cursor:default">密度
           <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:110px" />
           ×<b id="density-val">${DENSITY}</b></label>` : ""}
-      </div></div>
+      </div>
+      ${nKinds ? `<div class="dexpop" id="dex-pop" hidden></div>` : ""}
+      </div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}${d.yolo ? ` · <b>YOLO ${d.yolo.boxes} 框已导出</b>（${d.yolo.image}）` : ""}</div>
-      <div style="margin-bottom:6px">${kinds || '<span class="muted">这张图没有怪物</span>'}</div>
       <div class="gvbox" id="gvbox">
         <div class="gameview" id="gameview">
           <span class="mapwrap" id="mapsel">
@@ -1077,6 +1094,28 @@ async function mapLoad(id, preview) {
     if (img && !img.complete) img.onload = () => vpPlace();   // 图加载完再按真实尺寸夹一次
     const ob = $("#opt-btn"), op = $("#opt-pop");
     if (ob && op) ob.onclick = (e) => { e.stopPropagation(); op.hidden = !op.hidden; };
+    const db = $("#dex-btn"), dp = $("#dex-pop");
+    if (db && dp) db.onclick = async (e) => {
+      e.stopPropagation();
+      if (!dp.hidden) { dp.hidden = true; return; }
+      dp.hidden = false;
+      dp.innerHTML = '<span class="muted">加载立绘中…</span>';
+      const kinds2 = (mapData.life_kinds || []).filter((k) => k && k.id);
+      const cards = await Promise.all(kinds2.map(async (k) => {
+        const ic = await mobIcon(k.id);
+        const tier = k.tier === "big" ? '<span class="tier big">大BOSS</span>'
+                   : k.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
+        const img = ic ? `<img src="${ic.url}" alt="${k.name || k.id}">`
+                       : '<span class="muted" style="font-size:11px">无图</span>';
+        return `<div class="dexit" title="${k.name || k.id}（${k.id}）">
+          <div class="dimg">${img}</div>
+          <div class="dnm" title="${k.name || k.id}">${k.name || k.id}</div>
+          <div class="did">${k.id}${tier}</div></div>`;
+      }));
+      dp.innerHTML = cards.length
+        ? `<div class="dexgrid">${cards.join("")}</div>`
+        : '<span class="muted">这只地图没有怪物的图片资源</span>';
+    };
     const mo = $("#mz-open");
     if (mo) mo.onclick = (e) => {
       e.preventDefault();
