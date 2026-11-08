@@ -603,7 +603,7 @@ async function imgDoSearch(seq) {
     });
     if (seq !== IMGSEQ) return;                    // 弹窗已重开，丢弃过期响应
     if (d.building) {
-      st.textContent = "正在建立小地图索引（首次约 10 秒）…";
+      st.textContent = "正在建立小地图识别索引（首次要几分钟，之后每次秒出）…";
       setTimeout(() => imgDoSearch(seq), 1000);
       return;
     }

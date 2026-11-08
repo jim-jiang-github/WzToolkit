@@ -33,6 +33,7 @@ import csv
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import random
 import re
@@ -40,6 +41,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # 图片找图只用到 cv2 + numpy；缺了别拦着其它功能，调用时再报错
@@ -686,34 +688,132 @@ def _minimap_build() -> None:
             drop_dir(MMIDX)
         tmp.rename(MMIDX)
         _mmjob["error"] = ""
+        # 顺手把识别索引也建好（每张小地图压成 64×64 签名），
+        # 这样第一次「找图」不用再等一次全库解码
+        _thumbs_build()
     except Exception as exc:                   # noqa: BLE001
         _mmjob["error"] = str(exc)
     finally:
         _mmjob["running"] = False
 
 
+# 小地图识别索引 --------------------------------------------------------------
+# index.json 是「目录」：map id → 小地图 PNG 路径；真搜索时逐张 imread 14451 张
+# 要 10 秒以上（冷缓存更久）。所以在目录之上再叠一层「识别索引」：
+# 每张 PNG 压成 64×64 灰度、按自身均值/标准差归一化，存成 int8 矩阵
+# （14451×64×64 ≈ 59MB）。搜索时先做一次矩阵乘打分粗筛，只有候选才读原图
+# 做精确模板匹配 —— 索引常驻内存，每次搜索 1 秒内。
+THUMB_PX = 64
+THUMBS_NPZ = MMIDX / "thumbs.npz"
+_thumbs: dict = {"state": None, "building": False}
+
+
+def _thumbs_stale() -> bool:
+    """签名索引不存在 / 与当前小地图索引不同源（Map.nx 换过）。"""
+    mapnx = _nx_dir() / "Map.nx"
+    if not mapnx.exists() or not THUMBS_NPZ.exists():
+        return True
+    try:
+        with np.load(THUMBS_NPZ, allow_pickle=False) as z:
+            return float(z["mtime"]) != mapnx.stat().st_mtime
+    except Exception:
+        return True
+
+
+def _thumbs_build() -> None:
+    """把每张小地图压成 64×64 归一化签名，存 thumbs.npz（约 59MB）。"""
+    if cv2 is None or np is None:
+        return
+    if _thumbs["building"]:
+        return
+    _thumbs["building"] = True
+    try:
+        index = json.loads((MMIDX / "index.json").read_text(encoding="utf-8"))
+        mapnx = _nx_dir() / "Map.nx"
+        mids = sorted(index.keys())
+        arr = np.zeros((len(mids), THUMB_PX, THUMB_PX), dtype=np.int8)
+        kept: list[str] = []
+        for mid in mids:
+            g = cv2.imread(str(MMIDX / f"{mid}.png"), cv2.IMREAD_GRAYSCALE)
+            if g is None:
+                continue
+            t = cv2.resize(g, (THUMB_PX, THUMB_PX),
+                           interpolation=cv2.INTER_AREA).astype(np.float32)
+            t -= t.mean()
+            std = float(t.std())
+            if std >= 1e-3:            # 纯色图留全 0：能进候选但分数为 0
+                arr[len(kept)] = np.clip(t / std * 127.0, -127, 127).astype(np.int8)
+            kept.append(mid)
+        tmp = MMIDX / "thumbs.npz.tmp"
+        with open(tmp, "wb") as f:
+            np.savez_compressed(f, mids=np.array(kept), thumbs=arr[:len(kept)],
+                                mtime=np.float64(mapnx.stat().st_mtime))
+        os.replace(tmp, THUMBS_NPZ)
+        _thumbs["state"] = None        # 让下一次 _thumbs_load 重新读盘
+    except Exception:                  # noqa: BLE001
+        pass                           # 建不出来就退回「全库逐张扫」的老路径
+    finally:
+        _thumbs["building"] = False
+
+
+def _thumbs_load():
+    """返回 (mids, float32 签名矩阵)；未就绪返回 None（后台建，下次再用）。"""
+    if cv2 is None or np is None:
+        return None
+    try:
+        map_mtime = (_nx_dir() / "Map.nx").stat().st_mtime
+    except OSError:
+        return None
+    st = _thumbs["state"]
+    if st is not None and st["mtime"] == map_mtime:
+        return st["mids"], st["arr"]
+    if _thumbs_stale():
+        if not _thumbs["building"]:
+            threading.Thread(target=_thumbs_build, daemon=True).start()
+        return None
+    try:
+        with np.load(THUMBS_NPZ, allow_pickle=False) as z:
+            st = {"mtime": float(z["mtime"]), "mids": z["mids"],
+                  "arr": z["thumbs"].astype(np.float32)}
+    except Exception:                  # noqa: BLE001
+        return None
+    _thumbs["state"] = st
+    return st["mids"], st["arr"]
+
+
 def c_map_imgindex() -> dict:
     return {"building": _mmjob["running"], "ready": _minimap_ready(),
+            "thumbs": bool(_thumbs["state"] is not None) or not _thumbs_stale(),
             "error": _mmjob["error"]}
 
 
 def _mm_score_one(qg, cg) -> tuple[float, float] | None:
-    """查询图和一张 canvas 双向模板匹配，返回 (加权分, 原始分)。
+    """查询图 vs 一张 canvas：先按面积比把 canvas 缩到和查询同尺度，再双向匹配。
 
-    模板远小于另一边时容易在平坦区假阳性满分（比如纯色天空），按两边
-    较小边之比打折压下去；截整窗时 canvas ⊆ 截图，截小地图时截图 ⊆ canvas。
+    为什么不再用「尺寸比例打折」：截图可能是被 DPI/窗口缩放过的，比 canvas 大；
+    旧算法对这种图乘 0.667 惩罚，反而让长得像的别的图排前面——实测放大 1.5×
+    的截图会直接搜不到正确地图。现在用 f = sqrt(查询面积/canvas 面积) 把 canvas
+    归一到查询尺度，两边尺寸自然吻合，无需惩罚；长宽比不一致的候选会落到「一边
+    大一边小」的空中区间，直接判 None 淘汰。
     """
     qh, qw = qg.shape
     ch, cw = cg.shape
-    if qh <= ch and qw <= cw:
-        raw = float(cv2.matchTemplate(cg, qg, cv2.TM_CCOEFF_NORMED).max())
-        ratio = min(qh / ch, qw / cw)
-    elif ch <= qh and cw <= qw:
-        raw = float(cv2.matchTemplate(qg, cg, cv2.TM_CCOEFF_NORMED).max())
-        ratio = min(ch / qh, cw / qw)
-    else:
+    if qh < 2 or qw < 2 or ch < 2 or cw < 2:
         return None
-    return raw * max(0.5, min(1.0, ratio)), raw
+    f = math.sqrt((qw * qh) / float(cw * ch))
+    nw = max(1, int(round(cw * f)))
+    nh = max(1, int(round(ch * f)))
+    if nw < 2 or nh < 2:
+        return None
+    c2 = cv2.resize(cg, (nw, nh),
+                    interpolation=cv2.INTER_AREA if f < 1 else cv2.INTER_LINEAR)
+    if nh <= qh and nw <= qw:              # canvas 落在截图里（整窗截图 / 缩小的画布）
+        raw = float(cv2.matchTemplate(qg, c2, cv2.TM_CCOEFF_NORMED).max())
+    elif nh >= qh and nw >= qw:            # 截的是画布的一部分（小地图被窗口裁掉）
+        raw = float(cv2.matchTemplate(c2, qg, cv2.TM_CCOEFF_NORMED).max())
+    else:
+        return None                        # 长宽比差太多，不是同一张图
+    return raw, raw
 
 
 def c_map_imgsearch(image: str) -> dict:
@@ -733,26 +833,36 @@ def c_map_imgsearch(image: str) -> dict:
     qg = cv2.cvtColor(q, cv2.COLOR_BGR2GRAY)
     index = json.loads((MMIDX / "index.json").read_text(encoding="utf-8"))
 
-    # 第一遍：原尺寸（客户端截图就是 1:1）全库扫，留 top 24
-    cand: list[list] = []
-    for mid, meta in index.items():
+    # 第一级：识别索引粗筛。每条候选自带 64×64 归一化签名，
+    # 一次矩阵乘就打完 14451 张的分（毫秒级），只留前 500 进精匹配。
+    th = _thumbs_load()
+    if th is None:
+        return {"building": True}      # 索引还在建，前端轮询
+    mids, arr = th
+    q64 = cv2.resize(qg, (THUMB_PX, THUMB_PX),
+                     interpolation=cv2.INTER_AREA).astype(np.float32)
+    q64 -= q64.mean()
+    qn = float(q64.std())
+    if qn < 1e-3:
+        raise CliError("截图几乎是纯色（没有可识别的地形），换一张小地图截图", 2)
+    q64 /= qn
+    coarse = arr.reshape(len(mids), -1) @ q64.reshape(-1)
+    top = np.argsort(coarse)[::-1][:500]
+    cand_mids = [str(mids[i]) for i in top]
+
+    # 第二级：只对候选解密原图做同尺度双向模板匹配（多线程并行解码+匹配）
+    def scan(mid: str):
         cg = cv2.imread(str(MMIDX / f"{mid}.png"), cv2.IMREAD_GRAYSCALE)
         if cg is None:
-            continue
+            return None
         r = _mm_score_one(qg, cg)
-        if r:
-            cand.append([r[0], r[1], mid, 1.0])
-    cand.sort(reverse=True)
+        if not r:
+            return None
+        f = math.sqrt((qg.shape[1] * qg.shape[0]) / float(cg.shape[1] * cg.shape[0]))
+        return [r[0], r[1], mid, round(f, 2)]
 
-    # 第二遍：只对 top 24 试缩放（客户端被系统 DPI/窗口缩放过的截图）
-    for row in cand[:24]:
-        for s in (0.6, 0.75, 1.25, 1.5, 2.0):
-            q2 = cv2.resize(qg, None, fx=s, fy=s,
-                            interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
-            cg = cv2.imread(str(MMIDX / f"{row[2]}.png"), cv2.IMREAD_GRAYSCALE)
-            r = _mm_score_one(q2, cg)
-            if r and r[0] > row[0]:
-                row[0], row[1], row[3] = r[0], r[1], s
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        cand = [c for c in ex.map(scan, cand_mids) if c]
     cand.sort(reverse=True)
 
     out = []
