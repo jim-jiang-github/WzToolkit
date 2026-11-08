@@ -55,7 +55,7 @@ python -m PyInstaller --clean --noconfirm --onefile --name wztool ^
     --distpath "%ROOT%\bin" ^
     --workpath "%ROOT%\build_wztool" ^
     --specpath "%ROOT%\build_wztool" ^
-    "%ROOT%\wztool.py"
+    "%ROOT%\src\wztool.py"
 set "RC=%ERRORLEVEL%"
 
 echo.
