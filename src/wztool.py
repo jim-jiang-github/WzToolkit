@@ -800,15 +800,118 @@ def minimap_warmup(delay: float = 0.0) -> None:
         if delay > 0:
             time.sleep(delay)
         try:
-            if _minimap_ready():
-                return
+            if not _minimap_ready():
+                _minimap_build()               # 全库索引不在/过期：先建
+            if _minimap_fallback_stale():
+                _minimap_fallback_build()      # 退化 canvas 的兜底图：补建
         except CliError:                       # 没有 Map.nx：还没转换，不用建
             return
         except Exception:                      # noqa: BLE001
             return
-        _minimap_build()
 
     threading.Thread(target=run, daemon=True).start()
+
+
+# 退化 canvas 的兜底小地图 -----------------------------------------------------
+# WZ 里约 0.4%（63/14449）的图 miniMap/canvas 是 1×1 占位（老彩虹岛屋内景等），
+# 客户端进这些图同样只有名字条。给找图索引和 HUD 补一张自动生成的：
+#   canvas 尺寸 = miniMap w/h ÷ 2^mag，内容 = 无背景渲染图缩到 1/2^mag 后
+#   贴在 (minx+centerX, miny+centerY) / 2^mag 处 —— canvas 覆盖的世界矩形是
+#   [-centerX, -centerX+w] × [-centerY, -centerY+h]（UIMiniMap.cpp 的
+#   (世界+center)/2^mag 反推），标记只画 pt=2 传送口，黑底。
+
+
+def _minimap_fallback_stale() -> bool:
+    """兜底小地图：没建过 / Map.nx 换过 / 全库索引还没建，都不用做或重做。"""
+    try:
+        mapnx = _nx_dir() / "Map.nx"
+        if not mapnx.exists() or not (MMIDX / "index.json").exists():
+            return False
+        if not MMAUTO.exists():
+            return True
+        return json.loads(MMAUTO.read_text(encoding="utf-8")).get("mtime") \
+            != mapnx.stat().st_mtime
+    except Exception:                          # noqa: BLE001
+        return False
+
+
+def _minimap_fallback_one(mid: str, tmp: Path) -> bool:
+    """一张图的兜底小地图 → MMIDX/<id>.png。成功返回 True。"""
+    from PIL import Image, ImageDraw
+    outdir = tmp / mid
+    _run(["nxmap", mid, str(outdir)], _nx_dir(), timeout=300)
+    mjp = outdir / "map.json"
+    if not mjp.exists():
+        return False
+    mj = json.loads(mjp.read_text(encoding="utf-8"))
+    mm = mj.get("miniMap") or {}
+    if not mm.get("w") or not mm.get("h"):
+        return False
+    R = _render_mod()
+    minx, miny, bw, bh = R.map_bounds(mj)
+    if bw <= 0 or bh <= 0:
+        return False
+    pv = R.render_file(str(outdir), str(outdir / "nobg.png"),
+                       no_bg=True, max_width=None, pad=40)
+    scale = 2.0 ** float(mm.get("mag", 0) or 0)
+    cx, cy = float(mm.get("centerX", 0) or 0), float(mm.get("centerY", 0) or 0)
+    cw, ch = max(1, round(mm["w"] / scale)), max(1, round(mm["h"] / scale))
+    canvas = Image.new("RGBA", (cw, ch), (0, 0, 0, 255))       # 黑底
+    pad = (pv.width - round(bw)) / 2.0          # 渲染器四周的 pad（默认 40）
+    if pad < 0 or pv.width <= 2 * pad or pv.height <= 2 * pad:
+        return False
+    content = pv.crop((round(pad), round(pad),
+                       round(pad) + round(bw), round(pad) + round(bh)))
+    small = content.resize((max(1, round(bw / scale)), max(1, round(bh / scale))),
+                           Image.LANCZOS)
+    canvas.alpha_composite(small, (round((minx + cx) / scale),
+                                   round((miny + cy) / scale)))
+    dr = ImageDraw.Draw(canvas)
+    for p in mj.get("portal", []):
+        if p.get("pt") != 2:
+            continue
+        x, y = (p["x"] + cx) / scale, (p["y"] + cy) / scale
+        dr.ellipse([x - 2, y - 2, x + 2, y + 2], outline=(64, 160, 255, 255), width=1)
+    canvas.save(MMIDX / f"{mid}.png")
+    return True
+
+
+def _minimap_fallback_build() -> None:
+    """全库扫 index.json 里 cw≤1 的退化 canvas，逐张生成兜底小地图。
+
+    慢活（每张 = nxmap 全量导出 + 无背景渲染，几十秒到几分钟的总耗时）：
+    后台线程跑，单张失败就跳过（payload 里兜底图不存在时回落到 1×1 原图）。
+    全部做完写 auto.meta.json 戳 + 重建识别签名（把 1×1 的全 0 签名换掉）。
+    """
+    if not _mmauto_lock.acquire(blocking=False):
+        return
+    tmp = CACHE / "minimap-auto.building"
+    try:
+        if tmp.exists():
+            drop_dir(tmp)
+        tmp.mkdir(parents=True)
+        index = json.loads((MMIDX / "index.json").read_text(encoding="utf-8"))
+        deg = [mid for mid, e in index.items() if (e.get("cw") or 0) <= 1]
+        _mmauto.update(running=True, done=0, total=len(deg))
+        done = 0
+        for i, mid in enumerate(deg):
+            try:
+                if _minimap_fallback_one(mid, tmp):
+                    index[mid]["auto"] = 1
+                    done += 1
+            except Exception:                  # noqa: BLE001
+                pass                           # 单张失败不影响其它
+            _mmauto["done"] = i + 1
+        (MMIDX / "index.json").write_text(json.dumps(index), encoding="utf-8")
+        MMAUTO.write_text(
+            json.dumps({"mtime": (_nx_dir() / "Map.nx").stat().st_mtime,
+                        "auto": done, "total": len(deg)}), encoding="utf-8")
+        _thumbs_build()                        # 全 0 签名换成真图签名
+    except Exception as exc:                   # noqa: BLE001
+        _mmjob["error"] = str(exc)
+    finally:
+        _mmauto.update(running=False)
+        _mmauto_lock.release()
 
 
 # 小地图识别索引 --------------------------------------------------------------
@@ -914,7 +1017,9 @@ def _thumbs_load():
 def c_map_imgindex() -> dict:
     return {"building": _mmjob["running"], "ready": _minimap_ready(),
             "thumbs": bool(_thumbs["state"] is not None) or not _thumbs_stale(),
-            "error": _mmjob["error"]}
+            "error": _mmjob["error"],
+            "auto": {"running": _mmauto["running"], "done": _mmauto["done"],
+                     "total": _mmauto["total"]}}
 
 
 def _mm_score_one(qg, cg) -> tuple[float, float] | None:
@@ -1720,6 +1825,17 @@ def _minimap_payload(outdir: Path, root: Path, mj: dict, meta: dict) -> dict | N
     if not (mm and mm.get("img")):
         return None
     canvas = outdir / "img" / str(mm["img"])
+    auto = False
+    if (mm.get("cw") or 0) <= 1:
+        # 退化 canvas：有自动生成的兜底图就用它（找图索引/HUD/导出三处共用）
+        fb = MMIDX / f"{outdir.name}.png"
+        try:
+            from PIL import Image as _Img
+            if fb.exists() and _Img.open(fb).size > (1, 1):
+                canvas = fb
+                auto = True
+        except Exception:                      # noqa: BLE001
+            pass
     if not canvas.exists():
         return None
     try:
@@ -1733,30 +1849,42 @@ def _minimap_payload(outdir: Path, root: Path, mj: dict, meta: dict) -> dict | N
                 "y": round((float(y) + cy) / scale, 1)}
 
     prefix = "/preview/" if root is CACHE else "/exports/"
+    if auto:
+        url = f"/preview/minimap/{outdir.name}.png"   # 兜底图在 CACHE/minimap/，不在 root 下
+        try:
+            from PIL import Image as _Img
+            cw, ch = _Img.open(canvas).size           # 兜底图的真实尺寸（≠ WZ 里的 1×1）
+        except Exception:                             # noqa: BLE001
+            cw, ch = mm.get("cw") or 0, mm.get("ch") or 0
+    else:
+        url = prefix + canvas.relative_to(root).as_posix()
+        cw, ch = mm.get("cw") or 0, mm.get("ch") or 0
     portals = [{"pn": p.get("pn", ""),
                 **px(p.get("x", 0), p.get("y", 0)),
                 "tm": p.get("tm", 0), "tmn": p.get("tmn", "")}
                for p in mj.get("portal", []) if p.get("pt") == 2]
     npcs, mobs = [], []
-    for l in mj.get("life", []):
-        t = l.get("type")
-        if t not in ("m", "n"):
-            continue
-        y = l.get("cy") if l.get("fh") and l.get("cy") is not None else l.get("y", 0)
-        k = str(l.get("id", "")).lstrip("0")
-        q = px(l.get("x", 0), y)
-        if t == "m":
-            mobs.append({**q, "id": k,
-                         "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
-                         "tier": meta.get(k, {}).get("tier", "normal")})
-        else:
-            npcs.append({**q, "id": k})
-    return {"url": prefix + canvas.relative_to(root).as_posix(),
+    if not auto:                                      # 自动生成的图只留传送点
+        for l in mj.get("life", []):
+            t = l.get("type")
+            if t not in ("m", "n"):
+                continue
+            y = l.get("cy") if l.get("fh") and l.get("cy") is not None else l.get("y", 0)
+            k = str(l.get("id", "")).lstrip("0")
+            q = px(l.get("x", 0), y)
+            if t == "m":
+                mobs.append({**q, "id": k,
+                             "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
+                             "tier": meta.get(k, {}).get("tier", "normal")})
+            else:
+                npcs.append({**q, "id": k})
+    return {"url": url,
             "img_file": str(canvas),
             "w": mm.get("w"), "h": mm.get("h"),
-            "cw": mm.get("cw"), "ch": mm.get("ch"),
+            "cw": cw, "ch": ch,
             "center_x": mm.get("centerX"), "center_y": mm.get("centerY"),
             "mag": mm.get("mag"), "scale": scale,
+            "auto": auto,
             "portals": portals, "npcs": npcs, "mobs": mobs}
 
 
