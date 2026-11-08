@@ -368,8 +368,8 @@ let WS = null, MOBS = [], MAPS = [], TAB = "mob", TIMER = null;
 let mobSel = null, mapSel = null;
 let MOBFILT = "all";   // all | boss | big
 let MAPFILT = "all";   // all | mob | empty
-let EXPORTMOBS = false; // 导出的地图图里是否把怪物画进去
-let NOBOSS = false;     // 合成/标注时跳过大BOSS(HP≥1000万)，高阶怪照常出现（挂机升级用）
+let EXPORTMOBS = false; // =「显示怪物」开关：勾选后页面与导出图都把怪物合成进去
+let NOBOSS = true;      // 大BOSS(HP≥1000万)一律不合成/不标注（挂机不打，无开关）
 let NOBG = false;       // 预览/导出不画背景（back 层全跳过，画布透明）
 let YOLOSHOT = false;   // 一次性：这次 mapLoad 顺带产出 YOLO 数据集
 let DENSITY = 1;        // 怪物密度倍数（页面叠加与导出合成共用）
@@ -1167,7 +1167,7 @@ async function mapLoad(id, preview) {
   if (mapRef && mapRef.id !== id) VIEWPOS = null;   // 换图：窗口回地图正中
   // 换图时配置全部回到默认（不延续上一张图的设置）
   if (!mapRef || mapRef.id !== id) {
-    NOBG = false; EXPORTMOBS = false; NOBOSS = false; DENSITY = 1;
+    NOBG = false; EXPORTMOBS = false; DENSITY = 1;
     MMSHOW.p = true; MMSHOW.n = true; MMSHOW.m = true;
   }
   mapRef = { id, preview };
@@ -1192,13 +1192,13 @@ async function mapLoad(id, preview) {
       <div class="row">
         ${nKinds ? `<button class="mini" id="dex-btn" title="这只地图出现的怪物，带立绘的图鉴">👾 怪物图鉴（${nKinds} 种）</button>` : ""}
         <button class="mini" id="opt-btn" title="显示叠加层与导出选项">⚙ 显示设置</button>
-        <button class="primary mini" id="do-export" title="导出 WebUI 里游戏窗口当前显示的那块画面（1366×768，拖动画布到哪就导哪）→ exports/maps/&lt;id&gt;/window.png（导出带怪物/不含大BOSS/不显示背景同样生效）">导出窗口</button>
+        <button class="primary mini" id="do-export" title="导出 WebUI 里游戏窗口当前显示的那块画面（1366×768，拖动画布到哪就导哪）→ exports/maps/&lt;id&gt;/window.png；是否带怪物由「显示怪物」开关决定，不显示背景同样生效">导出窗口</button>
         <button class="mini" id="do-yolo" title="按游戏窗口当前显示的画面产出 YOLO 训练集（exports/yolo/：图片+标注 txt+classes.txt+dataset.yaml；每只怪一个框、绳/梯各一类）">导出YOLO</button>
       </div>
       <div class="optpop" id="opt-pop" hidden>
         <div class="optgrp">叠加显示（只影响画面标注，不影响导出图）</div>
-        ${d.life_count ? `<label title="红点=每只怪的刷新位置（大BOSS品红、BOSS橙）"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
-        <label><input type="checkbox" id="mob-toggle" /> 显示怪物</label>` : ""}
+        ${d.life_count ? `        <label title="红点=每只怪的刷新位置（大BOSS品红、BOSS橙）。勾选「显示怪物」后页面与导出图都会把怪物合成进去（是否带怪物跟着这个开关走）"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
+        <label title="把怪物按巡逻区间随机摆进画面（与导出合成同款规则）：页面上这样显示，导出/导出YOLO 的图里也同样带怪物"><input type="checkbox" id="mob-toggle" ${EXPORTMOBS ? "checked" : ""} /> 显示怪物</label>` : ""}
         ${d.footholds ? `<label title="青色线=每一段可站立的地面（foothold，含斜坡）；看人物能走哪、哪里会掉下去、怎么跳到下个平台"><input type="checkbox" id="fh-toggle" /> 显示地面（${d.footholds}）</label>` : ""}
         <label title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上"><input type="checkbox" id="nobg-toggle" ${NOBG ? "checked" : ""} /> 不显示背景</label>
         ${nRope ? `<label title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" /> 显示绳索（${nRope}）</label>` : ""}
@@ -1208,9 +1208,7 @@ async function mapLoad(id, preview) {
         <label><input type="checkbox" id="mm-n" ${MMSHOW.n ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>
         <label><input type="checkbox" id="mm-m" ${MMSHOW.m ? "checked" : ""} /> 刷怪点 ${d.minimap.mobs.length}</label>` : ""}
         ${d.life_count ? `<div class="optgrp">导出选项（影响导出 / 导出YOLO）</div>
-        <label title="勾选后导出/预览的图片会直接把怪物画进去"><input type="checkbox" id="export-mobs" ${EXPORTMOBS ? "checked" : ""} /> 导出带怪物</label>
-        <label title="不合成/标注大BOSS（HP≥1000万，挂机升级不打）；高阶怪(BOSS标记但血量低)照常出现；只刷大BOSS的图会得到没有怪的图"><input type="checkbox" id="export-noboss" ${NOBOSS ? "checked" : ""} /> 不含大BOSS</label>
-        <label title="怪物密度倍数：影响页面叠加与导出合成的怪物数量" style="cursor:default">密度
+        <label title="怪物密度倍数：影响页面叠加与导出合成的怪物数量；是否带怪物由上面的「显示怪物」开关决定" style="cursor:default">密度
           <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:110px" />
           ×<b id="density-val">${DENSITY}</b></label>` : ""}
       </div>
@@ -1271,7 +1269,11 @@ async function mapLoad(id, preview) {
     const lt = $("#life-toggle");
     if (lt) lt.onchange = renderLifeDots;
     const mt = $("#mob-toggle");
-    if (mt) mt.onchange = renderLifeDots;
+    if (mt) mt.onchange = () => {
+      // 显示怪物 = 导出带怪物：勾选后直接服务端合成（页面所见 = 导出所得，同 seed）
+      EXPORTMOBS = mt.checked;
+      mapLoad(mapRef.id, mapRef.preview);
+    };
     const rr = $("#rope-rope");
     if (rr) rr.onchange = renderLifeDots;
     const rl = $("#rope-lad");
@@ -1280,20 +1282,12 @@ async function mapLoad(id, preview) {
     if (fh) fh.onchange = renderLifeDots;
     const nb2 = $("#nobg-toggle");
     if (nb2) nb2.onchange = () => { NOBG = nb2.checked; mapLoad(mapRef.id, mapRef.preview); };
-    const em = $("#export-mobs");
-    if (em) em.onchange = () => EXPORTMOBS = em.checked;
-    const nb = $("#export-noboss");
-    if (nb) nb.onchange = () => {
-      NOBOSS = nb.checked;
-      // 勾了导出带怪物 → 立刻按新过滤重新合成图；否则只影响下次导出/YOLO
-      if (EXPORTMOBS) mapLoad(mapRef.id, mapRef.preview);
-    };
     const ds = $("#density");
     if (ds) {
       ds.oninput = () => $("#density-val").textContent = ds.value;
       ds.onchange = () => {
         DENSITY = Number(ds.value);
-        // 勾了导出带怪物 → 重新合成图（按 seed 稳定复现）；否则只重画页面叠加层
+        // 勾了显示怪物（图里已合成怪）→ 重新合成图（按 seed 稳定复现）；否则只重画页面叠加层
         if (EXPORTMOBS) mapLoad(mapRef.id, mapRef.preview);
         else renderLifeDots();
       };
