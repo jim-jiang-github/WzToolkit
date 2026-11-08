@@ -242,3 +242,4 @@ tmp/
 /.panel_run.log
 /debug.log
 /run.log
+bin/wztool.exe
