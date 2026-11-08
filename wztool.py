@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import hashlib
 import importlib.util
 import json
 import os
@@ -71,7 +72,7 @@ if not STATIC.exists() and getattr(sys, "frozen", False):   # 举例：exe 单�
     STATIC = Path(getattr(sys, "_MEIPASS", ROOT)) / "static"
 STATE = ROOT / "workspace.json"                # 记住上次选的工作区
 
-TOOLS = ("NoLifeWzToNx", "nxmap", "nxmob", "nxscan")
+TOOLS = ("NoLifeWzToNx", "nxmap", "nxmob", "nxscan", "nxchar")
 
 
 class CliError(Exception):
@@ -114,7 +115,7 @@ def tools_ok() -> bool:
 
 def _need_tools() -> None:
     if not tools_ok():
-        raise CliError("bin\\ 里缺工具（NoLifeWzToNx/nxmap/nxmob/nxscan）—— 先跑 scripts\\build.bat 编译", 1)
+        raise CliError("bin\\ 里缺工具（NoLifeWzToNx/nxmap/nxmob/nxscan/nxchar）—— 先跑 scripts\\build.bat 编译", 1)
 
 
 def _need_ws() -> Path:
@@ -819,6 +820,286 @@ def c_mob_export(raw: str, preview: bool = False) -> dict:
             "preview": preview, "link": link_info}
 
 
+# ---------------------------------------------------------------- 人物素材（角色）
+
+#: 部位 -> Character.nx 里的目录名。skin（肤色）比较特殊：身体 000020XX / 头 000120XX
+CHAR_CATS = {
+    "skin": "Skin", "hair": "Hair", "face": "Face", "cap": "Cap",
+    "coat": "Coat", "pants": "Pants", "longcoat": "Longcoat", "shoes": "Shoes",
+    "glove": "Glove", "cape": "Cape", "shield": "Shield", "weapon": "Weapon",
+}
+CHAR_SLOTS = ("hair", "face", "cap", "coat", "pants", "longcoat",
+              "shoes", "glove", "cape", "shield", "weapon")
+
+#: 客户端 Body.cpp 里的肤色名（String.nx 里没有 Skin 段）
+CHAR_SKINS = ["Light", "Tan", "Dark", "Pale", "Ashen", "Green", "", "", "",
+              "Ghostly", "Pale Pink", "Clay", "Alabaster"]
+
+#: 图层顺序：照着客户端 CharLook::draw 的绘制顺序抄的（z 名字 -> 序号）
+CHAR_ZRANK = {
+    "backHair": 2, "backHairBelowCap": 2, "backHairBelowCapNarrow": 2,
+    "backHairBelowCapWide": 2, "hairBelowBody": 3,
+    "cape": 5,
+    "shieldBelowBody": 6, "weaponBelowBody": 7, "capBelowBody": 8,
+    "body": 10, "backBody": 10,
+    "gloveOverBody": 11, "wristOverBody": 11,
+    "shoes": 12,
+    "armBelowHead": 13,
+    "pantsDefault": 14, "pants": 15, "topDefault": 16,
+    "mail": 17, "mailChest": 17, "top": 17, "longcoat": 17,
+    "armBelowHeadOverMailChest": 18,
+    "shieldOverHair": 19,
+    "head": 20,
+    "humanEar": 21, "ear": 21,
+    "hairShade": 22,
+    "hair": 23,
+    "face": 24,
+    "shield": 25,
+    "cap": 26,
+    "hairOverHead": 27,
+    "weaponBelowArm": 28,
+    "arm": 29,
+    "mailArm": 30,
+    "weapon": 31,
+    "glove": 32, "wrist": 32,
+    "weaponOverGlove": 33,
+    "handBelowWeapon": 34,
+    "armOverHair": 35,
+    "armOverHairBelowWeapon": 36,
+    "weaponOverHand": 37,
+    "weaponOverBody": 38,
+    "handOverHair": 39,
+    "handOverWeapon": 40,
+    "gloveOverHair": 41, "wristOverHair": 41,
+}
+CHAR_ZSLOT = {"body": 10, "head": 20, "hair": 23, "face": 24, "cap": 26,
+              "coat": 17, "longcoat": 17, "pants": 15, "shoes": 12,
+              "glove": 32, "cape": 5, "shield": 25, "weapon": 31}
+
+_char_cache: dict = {"lists": {}}
+
+
+def _char_nx() -> Path:
+    ws = _need_ws()
+    ch = ws / "Character.nx"
+    if not ch.exists():
+        raise CliError("工作区里没有 Character.nx —— 先把 Character.wz 转成 nx", 1)
+    return ch
+
+
+def c_char_parts(cat: str = "hair") -> dict:
+    """某个部位的全部可选素材：{cat, items:[{id,name}]}。"""
+    cat = (cat or "hair").lower()
+    if cat not in CHAR_CATS:
+        raise CliError(f"未知部位 {cat}（可选：{'/'.join(CHAR_CATS)}）", 2)
+    ch = _char_nx()
+    key = f"{cat}:{ch.stat().st_mtime}"
+    lists = _char_cache["lists"]
+    if key not in lists:
+        if len(lists) > 30:
+            lists.clear()
+        out = _run(["nxchar", "list", CHAR_CATS[cat]], ch.parent, timeout=300)
+        i = out.find("{")
+        items = json.loads(out[i:]).get("items", []) if i >= 0 else []
+        for it in items:
+            it["id"] = str(it.get("id", "")).replace(".img", "")
+            if cat == "skin":
+                s = int(it.get("skin", 0))
+                if not it.get("name"):
+                    it["name"] = CHAR_SKINS[s] if s < len(CHAR_SKINS) and CHAR_SKINS[s] else f"Skin {s}"
+        lists[key] = items
+    return {"cat": cat, "items": lists[key]}
+
+
+def c_char_icon(cat: str, iid: str) -> Path:
+    """素材列表的小缩略图（stand1 第 0 帧的第一张图），缓存到 .cache/char/icon/。"""
+    cat = (cat or "hair").lower()
+    if cat not in CHAR_CATS or cat == "skin":
+        raise CliError(f"没有 {cat} 的缩略图", 2)
+    ch = _char_nx()
+    iid = re.sub(r"\D", "", iid)[:8]
+    if not iid:
+        raise CliError("id 不合法", 2)
+    out = CACHE / "char" / "icon" / f"{cat}_{iid}.png"
+    if not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        _run(["nxchar", "icon", CHAR_CATS[cat], iid, str(out)], ch.parent, timeout=120)
+    if not out.exists():
+        raise CliError(f"{cat} {iid} 没有图片", 1)
+    return out
+
+
+def _char_spec(spec: dict) -> dict:
+    """前端选装 -> nxchar 参数（顺手把 id 洗成 8 位数字）。"""
+    out = {"skin": int(spec.get("skin") or 0),
+           "actions": [str(a) for a in (spec.get("actions") or ["stand1"]) if a]}
+    for k in CHAR_SLOTS:
+        out[k] = re.sub(r"\D", "", str(spec.get(k) or ""))[:8]
+    if not out["actions"]:
+        out["actions"] = ["stand1"]
+    if out["longcoat"]:                      # 套服盖住上衣+裤裙（客户端 has_overall 行为）
+        out["coat"] = ""
+        out["pants"] = ""
+    return out
+
+
+def _char_layer_xy(L: dict, A: dict) -> tuple[int, int]:
+    """一层图层在角色坐标系里的左上角（与客户端 Texture::shift 同一套锚点算法）。
+
+    角色坐标系 = 身体图 body 部件的 origin 为 (0,0)；
+    各部位按 map 里的锚点（navel/neck/brow/hand/handMove）对齐到身体/头/手的对应点。
+    """
+    mp = L.get("map") or {}
+    ox, oy = int(L.get("ox") or 0), int(L.get("oy") or 0)
+    slot, z = L.get("slot"), (L.get("z") or "")
+
+    def ref(name: str) -> list:
+        return A.get(name) or [0, 0]
+
+    def vec(name: str) -> list:
+        return mp.get(name) or [0, 0]
+
+    if slot == "body":
+        if z == "handBelowWeapon" or "handMove" in mp:
+            r, a = ref("handMove"), vec("handMove")
+        else:
+            r, a = ref("navel"), vec("navel")
+        return r[0] - a[0] - ox, r[1] - a[1] - oy
+
+    if slot == "head":                       # 头：neck 对齐，再按 headNeck 摆
+        r, hn = ref("neck"), ref("headNeck")
+        return r[0] - hn[0] - ox, r[1] - hn[1] - oy
+
+    if slot in ("hair", "face", "cap") or z.startswith("cap"):
+        r = (ref("neck")[0] - ref("headNeck")[0] + ref("headBrow")[0],
+             ref("neck")[1] - ref("headNeck")[1] + ref("headBrow")[1])
+        a = vec("brow") if "brow" in mp else [0, 0]
+        return r[0] - a[0] - ox, r[1] - a[1] - oy
+
+    if slot in ("shield", "weapon"):         # 武器/盾：看它挂在 handMove / hand / navel
+        if "handMove" in mp:
+            r, a = ref("handMove"), mp["handMove"]
+        elif "hand" in mp:
+            r, a = ref("armHand"), mp["hand"]
+        else:
+            r, a = ref("navel"), vec("navel")
+        return r[0] - a[0] - ox, r[1] - a[1] - oy
+
+    if "navel" in mp:                        # 衣服类：都挂在腰（navel）上
+        r, a = ref("navel"), mp["navel"]
+        return r[0] - a[0] - ox, r[1] - a[1] - oy
+
+    return -ox, -oy
+
+
+def _char_rank(L: dict) -> int:
+    return CHAR_ZRANK.get(L.get("z") or "", CHAR_ZSLOT.get(L.get("slot"), 50))
+
+
+def _char_dump(spec: dict) -> tuple[dict, Path, str]:
+    """跑 nxchar dump，拿到每一帧的图层表 + 锚点（结果按选装哈希缓存）。"""
+    sp = _char_spec(spec)
+    ws = _char_nx().parent
+    raw = json.dumps({**sp, "actions": sorted(sp["actions"])}, sort_keys=True)
+    key = hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
+    outdir = CACHE / "char" / key
+    jf = outdir / "layers.json"
+    if jf.exists():
+        try:
+            return json.loads(jf.read_text(encoding="utf-8")), outdir, key
+        except Exception:                     # noqa: BLE001
+            pass
+
+    outdir.mkdir(parents=True, exist_ok=True)
+    args = ["nxchar", "dump", "--out", str(outdir), "--skin", str(sp["skin"]),
+            "--actions", ",".join(sp["actions"])]
+    for k in CHAR_SLOTS:
+        if sp[k]:
+            args += [f"--{k}", sp[k]]
+    out = _run(args, ws, timeout=600)
+    i = out.find("{")
+    if i < 0:
+        raise CliError("nxchar 没有输出（Character.nx 可能不完整）", 1)
+    data = json.loads(out[i:])
+    jf.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return data, outdir, key
+
+
+def c_char_render(spec: dict) -> dict:
+    """把一套选装渲染成动画帧 PNG（1x 客户端像素），返回帧表 + 公共画布。"""
+    from PIL import Image
+
+    sp = _char_spec(spec)
+    data, outdir, key = _char_dump(sp)
+    frames = data.get("frames") or []
+    if not frames:
+        raise CliError("这套选装没有可渲染的帧（检查发型/身体 id 是否存在）", 1)
+
+    plans = []
+    for fr in frames:
+        A = fr.get("anchors") or {}
+        layers = []
+        for L in fr.get("layers") or []:
+            x, y = _char_layer_xy(L, A)
+            layers.append((_char_rank(L), x, y, outdir / L["img"], L))
+        layers.sort(key=lambda t: t[0])       # 稳定排序：同层保持 dump 顺序
+        plans.append((fr, layers))
+
+    x0 = min(x for _, ls in plans for _, x, _, _, _ in ls)
+    y0 = min(y for _, ls in plans for _, _, y, _, _ in ls)
+    x1 = max(x + L["w"] for _, ls in plans for _, x, _, _, L in ls)
+    y1 = max(y + L["h"] for _, ls in plans for _, _, y, _, L in ls)
+    bw, bh = max(1, x1 - x0), max(1, y1 - y0)
+
+    out = []
+    for fr, layers in plans:
+        im = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+        for _, x, y, png, _L in layers:
+            try:
+                with Image.open(png) as src:
+                    im.alpha_composite(src.convert("RGBA"), (x - x0, y - y0))
+            except Exception:                 # noqa: BLE001
+                continue
+        name = f"f_{fr['action']}_{fr['frame']}.png"
+        im.save(outdir / name)
+        out.append({"action": fr["action"], "frame": fr["frame"],
+                    "delay": max(20, int(fr.get("delay") or 100)),
+                    "url": f"/preview/char/{key}/{name}", "w": bw, "h": bh})
+
+    return {"key": key, "spec": sp, "box": [x0, y0, bw, bh],
+            "frames": out, "dir": str(outdir)}
+
+
+def c_char_export(spec: dict) -> dict:
+    """导出这套选装的全部动画帧到 exports/chars/<slug>/（附 manifest.csv）。"""
+    res = c_char_render(spec)
+    sp = res["spec"]
+    slug = "s%d_%s_%s_%s_%s" % (sp["skin"], sp["hair"] or "nohair",
+                                sp["face"] or "noface", sp["coat"] or "noco",
+                                sp["pants"] or "nopants")
+    outdir = EXPORTS / "chars" / re.sub(r"[^0-9A-Za-z_]+", "_", slug)
+    if outdir.exists():
+        drop_dir(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    src = Path(res["dir"])
+    rows = ["action,frame,delay,file,w,h,ox,oy"]
+    files = []
+    for f in res["frames"]:
+        p = src / Path(f["url"]).name
+        if not p.exists():
+            continue
+        (outdir / p.name).write_bytes(p.read_bytes())
+        files.append(p.name)
+        rows.append(f"{f['action']},{f['frame']},{f['delay']},{p.name},"
+                    f"{f['w']},{f['h']},{res['box'][0]},{res['box'][1]}")
+    (outdir / "manifest.csv").write_text("\r\n".join(rows) + "\r\n", encoding="utf-8")
+    (outdir / "look.json").write_text(json.dumps(sp, ensure_ascii=False, indent=2),
+                                      encoding="utf-8")
+    return {"dir": str(outdir), "count": len(files), "files": files,
+            "box": res["box"], "spec": sp}
+
+
 def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
                    density: int = 1, no_bg: bool = False):
     """把这张图的怪随机贴到地面上，产出 preview_mobs.png（脚底落在 foothold 地面）。
@@ -1393,6 +1674,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     # ---- 路由 ----
     # POST-only 路由集合：GET 打过来回 405（与旧 FastAPI 行为一致），别的才 404
     _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert", "/api/mob/export",
+                   "/api/char/render", "/api/char/export",
                    "/api/map/export", "/api/map/imgsearch", "/api/export/clear-cache"}
 
     def do_GET(self):
@@ -1414,6 +1696,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_mob_maps, path[len("/api/mob/"):-len("/maps")])
         elif path == "/api/maps":
             self._api(c_maps)
+        elif path == "/api/char/parts":
+            qs = urllib.parse.parse_qs(u.query)
+            self._api(c_char_parts, (qs.get("cat") or ["hair"])[0])
+        elif path.startswith("/api/char/icon/"):
+            rest = path[len("/api/char/icon/"):]
+            cat, _, iid = rest.partition("/")
+            try:
+                self._send_file(c_char_icon(cat, iid), "image/png")
+            except CliError as e:
+                self._send_json(404, {"detail": str(e)})
+            except Exception:                 # noqa: BLE001
+                self._send_json(404, {"detail": "no icon"})
         elif path == "/api/map/imgindex":
             self._api(c_map_imgindex)
         elif path.startswith("/preview/"):
@@ -1445,6 +1739,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(_web_convert, b.get("files") or [], bool(b.get("force")))
         elif path == "/api/mob/export":
             self._api(c_mob_export, str(b.get("raw") or ""), bool(b.get("preview")))
+        elif path == "/api/char/render":
+            self._api(c_char_render, b)
+        elif path == "/api/char/export":
+            self._api(c_char_export, b)
         elif path == "/api/map/export":
             vp = b.get("view")      # 导出窗口左上角世界坐标 {x, y}；缺省地图正中
             view = None
@@ -1466,7 +1764,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_map_imgsearch, str(img))
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
-        elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps") \
+        elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps", "/api/char/parts") \
                 or path.startswith("/api/mob/icon/") \
                 or (path.startswith("/api/mob/") and path.endswith("/maps")):
             self._send_json(405, {"detail": f"Method Not Allowed: {path} 是 GET 接口"})
@@ -1659,6 +1957,23 @@ def cmd_mob_export(a) -> int:
     return 0
 
 
+def cmd_char_parts(a) -> int:
+    _out(c_char_parts(a.cat), a.json)
+    return 0
+
+
+def cmd_char_export(a) -> int:
+    spec = {k: getattr(a, k) for k in CHAR_SLOTS if getattr(a, k, None)}
+    spec["skin"] = a.skin
+    spec["actions"] = [x for x in (a.actions or "stand1,walk1").split(",") if x]
+    d = c_char_export(spec)
+    if a.json:
+        _out(d, True)
+    else:
+        print(f"已导出 {d['count']} 帧 → {d['dir']}")
+    return 0
+
+
 def cmd_mob_frames(a) -> int:
     """列出一只怪有哪些动画（stand/move/jump/hit/die1…）与帧数。"""
     d = c_mob_export(a.id, preview=True)
@@ -1781,6 +2096,22 @@ def build_parser() -> argparse.ArgumentParser:
                               "导出图固定 1366×768（客户端画面），--view 选窗口位置。")
     p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
     _j(p); p.set_defaults(fn=cmd_map_info)
+
+    p = sub.add_parser("char-parts", help="某个部位的人物素材列表（skin/hair/face/cap/coat/…）",
+                       epilog="配合 char-export 拼一套选装；id 都是 8 位（如 00030000）。")
+    p.add_argument("cat", nargs="?", default="hair",
+                   help="部位：" + "/".join(CHAR_CATS) + "（默认 hair）")
+    _j(p); p.set_defaults(fn=cmd_char_parts)
+
+    p = sub.add_parser("char-export", help="按选装导出人物动画帧 PNG（默认 stand1+walk1）",
+                       epilog="例：wztool char-export --hair 00030000 --face 00020000 "
+                              "--coat 01040000 --pants 01060000 --shoes 01070000\n"
+                              "输出 exports/chars/<slug>/：逐帧 PNG + manifest.csv + look.json")
+    p.add_argument("--skin", type=int, default=0, help="肤色编号（0=Light，见 char-parts skin）")
+    for _s in CHAR_SLOTS:
+        p.add_argument(f"--{_s}", default="", metavar="ID", help=f"{_s} 素材 id")
+    p.add_argument("--actions", default="stand1,walk1", help="逗号分隔的动作名")
+    _j(p); p.set_defaults(fn=cmd_char_export)
 
     p = sub.add_parser("mob-frames", help="列出一只怪的动画列表与帧数（stand/move/die1…）")
     p.add_argument("id", help="怪 id")
