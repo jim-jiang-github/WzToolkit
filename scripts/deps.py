@@ -48,6 +48,23 @@ def log(msg: str = "") -> None:
     print(msg, flush=True)
 
 
+def _fix_stream() -> None:
+    """输出被重定向（管道/文件）时按 GBK 写。
+
+    cmd 窗口里 Python 直接走 Unicode 控制台接口，中文没问题；但输出被接走时
+    Python 会用它自己的默认编码（PYTHONUTF8 一开就是 UTF-8），和 bat 输出的
+    GBK 混在一起就成了乱码。统一成 cp936，和 scripts\\*.bat 保持一致。
+    """
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if not stream.isatty():
+                stream.reconfigure(encoding="cp936", errors="replace")
+        except Exception:
+            pass
+
+
 def req_digest() -> str:
     h = hashlib.sha256()
     h.update(REQ.read_bytes() if REQ.exists() else b"")
@@ -86,6 +103,8 @@ def probe() -> dict:
 def main() -> int:
     force = "--force" in sys.argv
     check_only = "--check" in sys.argv
+
+    _fix_stream()
 
     if not REQ.exists():
         log(f"[错误] 找不到 {REQ}")

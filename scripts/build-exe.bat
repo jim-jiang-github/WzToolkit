@@ -20,10 +20,12 @@ cd /d "%~dp0.."
 set "ROOT=%CD%"
 set "OUT=%ROOT%\bin\wztool.exe"
 set "PYLIBS=%ROOT%\.pylibs"
+set "SYS32=%SystemRoot%\System32"
 rem 只认项目内的依赖，不去翻用户目录 / 系统 Python 的 site-packages
 set "PYTHONNOUSERSITE=1"
 
-where python >nul 2>nul
+rem 系统工具一律写全路径：PATH 里要是排着 Git/MSYS 的同名工具会被抢先调走
+"%SYS32%\where.exe" python >nul 2>nul
 if errorlevel 1 (
     echo [错误] 找不到 python，需要一个 3.9+ 的解释器在 PATH 里。
     echo.
@@ -44,7 +46,7 @@ if errorlevel 1 (
 echo.
 
 rem 正在运行的 wztool.exe 会锁住文件，先问一下要不要关掉
-tasklist /FI "IMAGENAME eq wztool.exe" 2>nul | find /I "wztool.exe" >nul
+"%SYS32%\tasklist.exe" /FI "IMAGENAME eq wztool.exe" /NH 2>nul | "%SYS32%\findstr.exe" /I "wztool.exe" >nul
 if errorlevel 1 goto pack
 echo [提示] wztool.exe 正在运行（8000 端口的 WebUI），重新打包前要先关掉它。
 choice /C YN /N /M "现在关掉? [Y/N] "
@@ -54,8 +56,8 @@ if errorlevel 2 (
     pause
     exit /b 1
 )
-taskkill /F /IM wztool.exe >nul 2>nul
-timeout /t 2 /nobreak >nul
+"%SYS32%\taskkill.exe" /F /IM wztool.exe >nul 2>nul
+"%SYS32%\timeout.exe" /t 2 /nobreak >nul
 
 :pack
 if not exist "%ROOT%\bin" mkdir "%ROOT%\bin"
