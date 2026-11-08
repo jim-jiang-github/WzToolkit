@@ -1,15 +1,20 @@
 # WzToolkit
 
-把冒险岛的地图 `.wz` 资源**导入 → 转换 → 浏览 → 导出**的工具：
+把冒险岛的地图 / 怪物 `.wz` 资源**导入 → 转换 → 浏览 → 导出**的工具：
 **CLI 优先**（`wztool`，供 AI / 其他程序直接调用），附带可选 Web 页面。
-只做**地图导出**（含小地图、截图找图），不含训练集/自动打怪之类的功能。
+做**怪物素材导出**（逐帧动画 + 锚点 manifest）与**地图导出**
+（map.json / 贴图 / 1366×768 画面窗口 / 小地图 / 截图找图），
+不含训练集、自动打怪之类的功能。
 
 ```
 选一个放 .wz 的目录（工作区）
    │  wztool convert …  把选中的 .wz 转成 .nx（.nx 落在 .wz 旁边）
    ▼
-wztool maps          列出全部地图（--json 全字段）
+wztool mobs / maps    列出全部怪物 / 地图（--json 全字段）
    ▼
+wztool mob-export 0100100
+   └─ exports\mobs\<id>\{逐帧 PNG, manifest.csv}   manifest 含 anim/frame/w/h/ox/oy/delay
+
 wztool map-export
    └─ exports\maps\<id>\{map.json, img\, window.png}
                                     map.json 含 life（刷怪表）/ foothold / ladderRope / portal；
@@ -26,6 +31,8 @@ powershell -File build.ps1
 # 2) CLI（推荐 / 自动化入口；已附带编译好的 wztool.exe）
 wztool --help                           # 全部子命令与示例（面向 AI/程序编写）
 wztool workspace "D:\MapleStory\nxrun"   # 设置工作区
+wztool mobs --json                      # 全部怪物（tier/level/hp/link/frames）
+wztool mob-export 0100100               # 导出一只怪的全部动画帧（逐帧 PNG + manifest.csv）
 wztool maps --json                      # 机器可读输出
 wztool map-info 000050000               # 查地图尺寸/世界坐标/刷怪数（不渲染，秒级）
 wztool map-export 000050000 --mobs      # 导出地图并把怪物画进预览图
@@ -50,6 +57,17 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
 - **缓存**：预览产物放 `.cache\`（可随时清：`wztool clear-cache` 或
   接口 `POST /api/export/clear-cache`），正式导出放 `exports\`。
 - 转换 `Map.wz`（约 640MB）需要几分钟，页面会显示进度日志。
+
+## 怪物素材
+
+- `wztool mob-export <id>`：把一只怪的全部动作（stand/move/attack/hit/die…）
+  逐帧导出 PNG + `manifest.csv`（anim/frame/w/h/**ox/oy**/delay）；
+  `ox/oy` 是锚点（脚底中心），把各帧对齐到同一画布就得到游戏内的真实包围盒。
+- 链接怪（`info/link`、自身无帧）自动顺链导出目标怪，返回 JSON 带 `link` 字段。
+- Web 页面「👾 怪物素材」：按 id/名字搜索全部怪物（可筛 BOSS / 大BOSS），
+  右侧按锚点对齐展示每个动作的逐帧网格 + 动画播放器（可切动作、1x/2x/4x 缩放，
+  蓝线=站地线），一键导出到 `exports/mobs/<id>/`。
+- 地图详情的「怪物图鉴」点卡片也可直接跳进素材查看器。
 
 ## 怪物 / BOSS 判定
 
