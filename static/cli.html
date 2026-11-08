@@ -181,6 +181,44 @@
                      background: #3b82f6aa; }
   .mb-stage .adot { position: absolute; width: 5px; height: 5px; border-radius: 50%;
                     background: #3b82f6; box-shadow: 0 0 0 1px #0008; }
+  /* 人物素材（角色）：左边部位+素材列表，右边按选装实时合成动画 */
+  #chardex { position: fixed; inset: 0; background: #000d; z-index: 999;
+             display: flex; flex-direction: column; }
+  #chardex[hidden] { display: none; }
+  #chardex .cd-bar { padding: 8px 14px; display: flex; gap: 10px; align-items: center;
+                     flex-wrap: wrap; background: var(--panel);
+                     border-bottom: 1px solid var(--line); }
+  #chardex .cd-bar input[type=text] { min-width: 200px; padding: 5px 10px; }
+  #chardex .cd-body { flex: 1; min-height: 0; display: grid;
+                      grid-template-columns: 340px 1fr; gap: 12px; padding: 12px 14px; }
+  #chardex .cd-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  #chardex .cd-slots { display: flex; flex-wrap: wrap; gap: 4px; }
+  #chardex .cd-slots button { font-size: 12px; padding: 3px 9px; }
+  #chardex .cd-slots button.on { background: var(--acc); color: #04130f; border-color: var(--acc); }
+  #chardex .cd-list { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line);
+                      border-radius: 8px; background: #0b0f14; }
+  #chardex .cd-list .it { display: flex; gap: 8px; align-items: center; padding: 3px 8px;
+                          cursor: pointer; border-bottom: 1px solid #1c2128; }
+  #chardex .cd-list .it:hover { background: #161b22; }
+  #chardex .cd-list .it.on { background: #0e3b35; }
+  #chardex .cd-list img { width: 30px; height: 30px; object-fit: contain; flex: none;
+                          image-rendering: pixelated; }
+  #chardex .cd-list .noimg { width: 30px; height: 30px; flex: none; }
+  #chardex .cd-list .id { font: 12px Consolas, monospace; color: var(--acc2); flex: none; }
+  #chardex .cd-list .nm { color: var(--mut); font-size: 12.5px; overflow: hidden;
+                          white-space: nowrap; text-overflow: ellipsis; }
+  #chardex .cd-main { display: flex; flex-direction: column; min-height: 0;
+                      border: 1px solid var(--line); border-radius: 8px;
+                      background: #0b0f14; overflow: hidden; }
+  #chardex .cd-acts { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px;
+                      border-bottom: 1px solid var(--line); align-items: center; }
+  #chardex .cd-stagewrap { flex: 1; min-height: 0; overflow: auto; display: flex;
+                           align-items: center; justify-content: center; padding: 18px;
+                           background: repeating-conic-gradient(#1c2128 0 25%, #10151b 0 50%) 0 0 / 16px 16px; }
+  #chardex .cd-stage { position: relative; }
+  #chardex .cd-stage img { position: absolute; left: 0; top: 0; image-rendering: pixelated; }
+  #chardex .cd-foot { padding: 8px 10px; border-top: 1px solid var(--line); }
+  #chardex .cd-look { font: 12px Consolas, monospace; color: var(--mut); }
   /* 游戏窗口：CSS 固定 1366×768（= 客户端画面 = 导出尺寸）。DPI 由浏览器自然处理：
      系统 125% 缩放时它在屏幕上的物理大小 = 1366×1.25，和真实客户端窗口完全一致。
      里面的地图是"画布"，按住拖动平移（不缩放）；小地图 HUD 贴在窗口上，所以不动。 */
@@ -303,6 +341,7 @@
     <h2><span class="step">2</span> 浏览 &amp; 导出
       <span style="flex:1"></span>
       <button class="mini" id="md-open" title="怪物素材：按 id/名字浏览全部怪物，看每个动作的逐帧动画，导出逐帧 PNG（带锚点 manifest）">👾 怪物素材</button>
+      <button class="mini" id="cd-open" title="人物素材：肤色/发型/脸/帽子/衣服/武器随便配，实时合成动画并导出逐帧 PNG">🧑 人物素材</button>
     </h2>
     <div class="cols">
       <div class="col-left">
@@ -371,6 +410,43 @@
   <div class="md-body">
     <div class="md-list" id="md-list"></div>
     <div class="md-detail" id="md-detail"><span class="muted">左侧选一只怪：看全部动作帧（按锚点对齐、可播放），导出逐帧 PNG 素材。</span></div>
+  </div>
+</div>
+
+<!-- 人物素材（角色）：选装 + 实时合成 + 导出（Esc 关闭） -->
+<div id="chardex" hidden>
+  <div class="cd-bar">
+    <b style="color:var(--acc)">🧑 人物素材</b>
+    <span class="muted" id="cd-sum"></span>
+    <span style="flex:1"></span>
+    <span class="muted">缩放</span>
+    <div class="filters" id="cd-zoom" style="margin:0">
+      <button class="flt" data-z="1">1x</button>
+      <button class="flt" data-z="2">2x</button>
+      <button class="flt on" data-z="3">3x</button>
+      <button class="flt" data-z="4">4x</button>
+      <button class="flt" data-z="6">6x</button>
+      <button class="flt" data-z="8">8x</button>
+    </div>
+    <button class="primary mini" id="cd-export"
+            title="把当前这套选装的全部动作帧导出成 PNG + manifest.csv → exports/chars/&lt;slug&gt;/">⬇ 导出到 exports</button>
+    <button id="cd-close">✕ 关闭 (Esc)</button>
+  </div>
+  <div class="cd-body">
+    <div class="cd-side">
+      <div class="cd-slots" id="cd-slots"></div>
+      <input type="text" id="cd-q" placeholder="搜索素材 id 或名字 …" />
+      <div class="row" style="margin:0"><span class="muted" id="cd-count"></span></div>
+      <div class="cd-list" id="cd-list"></div>
+    </div>
+    <div class="cd-main">
+      <div class="cd-acts" id="cd-acts"></div>
+      <div class="cd-stagewrap"><div class="cd-stage" id="cd-stage"></div></div>
+      <div class="cd-foot">
+        <div class="cd-look" id="cd-look"></div>
+        <div class="muted" id="cd-out" style="margin-top:4px"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -974,6 +1050,180 @@ function mdClose() {
   MD.gen++;
   $("#mobdex").hidden = true;
 }
+
+/* ---------------- 人物素材（角色）：选装 → 实时合成 → 导出 ---------------- */
+const CH_META = [["skin", "肤色"], ["hair", "发型"], ["face", "脸"], ["cap", "帽子"],
+  ["coat", "上衣"], ["pants", "裤裙"], ["longcoat", "套服"], ["shoes", "鞋"],
+  ["glove", "手套"], ["cape", "披风"], ["shield", "盾牌"], ["weapon", "武器"]];
+const CH_DEF = { skin: 0, hair: "00030000", face: "00020000", cap: "", coat: "01040000",
+  pants: "01060000", longcoat: "", shoes: "01070000", glove: "", cape: "",
+  shield: "", weapon: "" };
+const CH_ACTS = [["stand1", "站立"], ["walk1", "走"], ["stand2", "站立2"], ["walk2", "走2"],
+  ["alert", "警戒"], ["jump", "跳"], ["prone", "趴"], ["rope", "爬绳"]];
+const CH = { spec: { ...CH_DEF }, slot: "hair", parts: {}, data: null, act: "stand1",
+  zoom: 3, timer: 0, gen: 0, seq: 0 };
+
+function chOpen() {
+  $("#chardex").hidden = false;
+  $("#cd-out").textContent = "";
+  chSlots(); chActs(); chList(); chRender();
+}
+
+function chSlots() {
+  $("#cd-slots").innerHTML = CH_META.map(([k, label]) => {
+    const v = k === "skin" ? `${CH.spec.skin}` : (CH.spec[k] || "无");
+    return `<button class="mini ${k === CH.slot ? "on" : ""}" data-k="${k}"
+      title="${label}：${v}">${label}</button>`;
+  }).join("");
+  $$("#cd-slots button").forEach((b) => b.onclick = () => {
+    CH.slot = b.dataset.k; $("#cd-q").value = ""; chSlots(); chList();
+  });
+}
+
+async function chParts(cat) {
+  if (CH.parts[cat]) return CH.parts[cat];
+  const d = await api("/api/char/parts?cat=" + encodeURIComponent(cat));
+  CH.parts[cat] = d.items || [];
+  return CH.parts[cat];
+}
+
+async function chList() {
+  const cat = CH.slot;
+  const el = $("#cd-list");
+  el.innerHTML = '<span class="muted" style="padding:10px;display:block">读取素材列表…</span>';
+  let items;
+  try { items = await chParts(cat); }
+  catch (e) {
+    el.innerHTML = `<span class="miss" style="padding:10px;display:block">读取失败：${e.message}</span>`;
+    return;
+  }
+  chPaintList(items, cat);
+  $("#cd-q").oninput = () => chPaintList(items, cat);
+}
+
+function chPaintList(items, cat) {
+  const q = ($("#cd-q").value || "").trim().toLowerCase();
+  const list = q ? items.filter((it) => it.id.includes(q) || (it.name || "").toLowerCase().includes(q))
+                 : items;
+  const cur = cat === "skin" ? CH.spec.skin : CH.spec[cat];
+  $("#cd-count").textContent = `${list.length} 个`;
+  const none = cat === "skin" ? "" :
+    '<div class="it" data-id=""><span class="noimg"></span><span class="id">—</span><span class="nm">无（不穿）</span></div>';
+  const rows = list.slice(0, 1500).map((it) => {
+    const on = cat === "skin" ? it.skin === cur : it.id === cur;
+    const icon = cat === "skin" ? '<span class="noimg"></span>'
+      : `<img loading="lazy" src="/api/char/icon/${cat}/${it.id}" alt=""
+              onerror="this.style.visibility='hidden'">`;
+    return `<div class="it ${on ? "on" : ""}" data-id="${it.id}" data-skin="${it.skin ?? ""}">
+      ${icon}<span class="id">${it.id}</span><span class="nm">${it.name || ""}</span></div>`;
+  }).join("");
+  const el = $("#cd-list");
+  el.innerHTML = none + rows;
+  el.querySelectorAll(".it").forEach((row) => {
+    row.onclick = () => {
+      if (cat === "skin") {
+        CH.spec.skin = row.dataset.skin === "" ? 0 : +row.dataset.skin;
+      } else {
+        CH.spec[cat] = row.dataset.id;
+        if (cat === "longcoat" && row.dataset.id) { CH.spec.coat = ""; CH.spec.pants = ""; }
+        if ((cat === "coat" || cat === "pants") && row.dataset.id) CH.spec.longcoat = "";
+      }
+      el.querySelectorAll(".it").forEach((x) => x.classList.toggle("on", x === row));
+      chSlots(); chRender();
+    };
+  });
+}
+
+function chActs() {
+  $("#cd-acts").innerHTML = '<span class="muted">动作</span>' +
+    CH_ACTS.map(([k, label]) =>
+      `<button class="flt ${k === CH.act ? "on" : ""}" data-a="${k}">${label}</button>`).join("");
+  $$("#cd-acts .flt").forEach((b) => b.onclick = () => {
+    CH.act = b.dataset.a; chActs(); chPlay();
+  });
+}
+
+async function chRender() {
+  const seq = ++CH.seq;
+  $("#cd-stage").innerHTML = '<span class="muted">合成中…</span>';
+  try {
+    const d = await api("/api/char/render", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...CH.spec, actions: CH_ACTS.map(([k]) => k) }),
+    });
+    if (seq !== CH.seq) return;
+    CH.data = d;
+    $("#cd-sum").textContent =
+      `肤色 ${d.spec.skin} · 发型 ${d.spec.hair || "无"} · 脸 ${d.spec.face || "无"}`;
+    $("#cd-look").textContent = CH_META.filter(([k]) => k !== "skin")
+      .map(([k]) => `${k}=${CH.spec[k] || "-"}`).join("  ");
+    chPlay();
+  } catch (e) {
+    if (seq === CH.seq) {
+      $("#cd-stage").innerHTML = `<span class="miss">合成失败：${e.message}</span>`;
+    }
+  }
+}
+
+function chPlay() {
+  clearTimeout(CH.timer);
+  const st = $("#cd-stage");
+  const frames = ((CH.data && CH.data.frames) || []).filter((f) => f.action === CH.act);
+  if (!frames.length) {
+    st.style.width = st.style.height = "auto";
+    st.innerHTML = '<span class="muted">这个动作没有帧</span>';
+    return;
+  }
+  const Z = CH.zoom, w = frames[0].w * Z, h = frames[0].h * Z;
+  st.style.width = w + "px";
+  st.style.height = h + "px";
+  st.innerHTML = frames.map((f, i) =>
+    `<img src="${f.url}" style="width:${w}px;height:${h}px;visibility:${i ? "hidden" : "visible"}">`).join("");
+  const ims = [...st.querySelectorAll("img")];
+  const gen = ++CH.gen;
+  let i = 0;
+  const step = () => {
+    if (gen !== CH.gen) return;
+    ims.forEach((im, k) => { im.style.visibility = k === i ? "visible" : "hidden"; });
+    CH.timer = setTimeout(() => { i = (i + 1) % frames.length; step(); },
+                          Math.max(40, frames[i].delay || 120));
+  };
+  step();
+}
+
+async function chExport(btn) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "导出中…";
+  try {
+    const d = await api("/api/char/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...CH.spec, actions: CH_ACTS.map(([k]) => k) }),
+    });
+    $("#cd-out").innerHTML = `✅ 已导出 <b>${d.count}</b> 帧 → <code>${d.dir}</code>`;
+  } catch (e) {
+    $("#cd-out").innerHTML = `<span class="miss">导出失败：${e.message}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+$("#cd-open").onclick = chOpen;
+$("#cd-close").onclick = () => { clearTimeout(CH.timer); $("#chardex").hidden = true; };
+$("#cd-export").onclick = (e) => chExport(e.currentTarget);
+$$("#cd-zoom .flt").forEach((b) => b.onclick = () => {
+  $$("#cd-zoom .flt").forEach((x) => x.classList.remove("on"));
+  b.classList.add("on");
+  CH.zoom = +b.dataset.z;
+  chPlay();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#chardex").hidden) {
+    clearTimeout(CH.timer);
+    $("#chardex").hidden = true;
+  }
+});
 
 async function mobIcon(kindId) {
   if (!MOBICON[kindId]) {
