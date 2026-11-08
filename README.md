@@ -25,20 +25,22 @@ wztool map-minimap 101040000        渲染游戏内小地图（miniMap canvas + 
 ## 首次使用
 
 ```powershell
-# 1) 编译四个原生工具（需要 VS 的 C++ 工具集；一次即可）
-#    双击 scripts\build.bat 即可；命令行等价：
-scripts\build.bat                # 全量（已有产物会跳过）
-scripts\build.bat -Clean         # 先清 bin\ .build\
-scripts\build.bat -Only nxmap    # 只编一个：wz2nx / nxmap / nxmob / nxscan
+# 1) 直接用：五个原生工具（NoLifeWzToNx / nxmap / nxmob / nxscan / nxchar）和
+#    打包好的 bin\wztool.exe 都随仓库提供，不用编译任何东西，双击 bin\wztool.exe 即可。
 
-# 1b) 改了 src/wztool.py / webui / vendor 之后，重新打包 wztool.exe
-#     双击 scripts\build-exe.bat；等价：
-scripts\build-exe.bat            # PyInstaller onefile → bin\wztool.exe
-#     Python 依赖写在 requirements.txt，首次打包会自动装进项目内 .pylibs\
-#     （不碰系统 Python，换台电脑 clone 下来直接能编；需要联网，约 200MB）
+# 2) 只有改了 src/wztool.py / webui / vendor 之后，才需要重新打包 wztool.exe：
+#    双击 scripts\build.bat —— 仓库里唯一的构建脚本，三步全包：
+#      ① 依赖装进 .pylibs\   ② bin\ 里缺原生工具就现编（有 VS 用的 C++ 工具集才行）
+#      ③ PyInstaller onefile → bin\wztool.exe
+scripts\build.bat                # 平时只需要这一条
+#    Python 依赖写在 requirements.txt，首次打包自动装进项目内 .pylibs\
+#    （不碰系统 Python，换台电脑 clone 下来直接能编；需要联网，约 200MB）
 python scripts\deps.py           # 只同步依赖、不打包（--check 只检查，--force 重装）
 
-# 2) CLI（推荐 / 自动化入口；已附带编译好的 bin\wztool.exe）
+# 只想单独重编原生工具（改了 vendor\cpp 时）：
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\_compile-tools.ps1
+
+# 3) CLI（推荐 / 自动化入口）
 #    下面用 wztool 代指 bin\wztool.exe；把 bin\ 加进 PATH 后可以直接敲 wztool
 bin\wztool --help                       # 全部子命令与示例（面向 AI/程序编写）
 wztool workspace "D:\MapleStory\nxrun"   # 设置工作区
@@ -147,16 +149,15 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
 ## 目录
 
 ```
-scripts\build.bat       双击即编译原生工具（cl.exe 直接编，不依赖 msbuild；调 build.ps1）
-scripts\build.ps1       原生工具编译逻辑（PowerShell；由 build.bat 带 Bypass 调用）
-scripts\build-exe.bat   双击即打包 wztool.exe（PyInstaller onefile，含 vendor\ + webui\）
+scripts\build.bat       双击即构建：装依赖 → 缺原生工具就编 → 打包 bin\wztool.exe（唯一入口）
+scripts\_compile-tools.ps1  原生工具编译逻辑（内部脚本，build.bat 缺 exe 时自动调用）
 scripts\deps.py         把 requirements.txt 装进 .pylibs\（打包前自动调用，可单独跑）
 requirements.txt        Python 依赖（pyinstaller / pillow / numpy / opencv-headless）
 src/wztool.py    CLI 主程序（bin\wztool.exe 由 PyInstaller 打包，含 CLI + web 两用）
 vendor\          全部源码与依赖（NoLifeWzToNx、nxmap/nxmob/nxscan/nxchar、NoLifeNx、render_map、Mob.txt）
-bin\             原生工具编译产物（含 nxchar.exe）+ 打包好的 wztool.exe（双击它 = WebUI）
+bin\             原生工具（随仓库提供，直接能用）+ 打包好的 wztool.exe（双击它 = WebUI）
 webui\cli.html   Web UI 页面（wztool web 服务的前端，浏览/导出/图鉴都在这一页）
-.build\          编译/打包中间产物（obj\ rsp\ wztool\），可随时整个删掉
+.build\          打包中间产物（wztool\ rsp\ 等），可随时整个删掉
 .pylibs\         Python 依赖安装目录（由 requirements.txt 生成，可随时删掉重装）
 ```
 

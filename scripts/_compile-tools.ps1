@@ -1,10 +1,10 @@
-# WzToolkit one-shot build: compiles all four native tools into bin\.
-# Pure ASCII on purpose (PowerShell 5.1 decodes BOM-less files as GBK).
+# Internal helper: compiles the native C++ tools into bin\.
+# Pure ASCII on purpose (5.1 decodes BOM-less files as the system ANSI code page).
 #
-#   scripts\build.bat        -> double-click wrapper around this script
-#   build.ps1                -> build everything (skips what is already built)
-#   build.ps1 -Clean         -> wipe bin\ and .build\ first
-#   build.ps1 -Only name     -> build just one of: wz2nx, nxmap, nxmob, nxscan
+# Not a user-facing entry point any more. scripts\build.bat calls this by itself
+# when any of bin\*.exe is missing. To run it by hand:
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\_compile-tools.ps1
+# Options: -Clean (wipe bin\ and .build\ first), -Only <wz2nx|nxmap|nxmob|nxscan|nxchar>
 #
 # Toolchain is discovered without vcvars (same trick as the original MapleStory
 # repo scripts: vswhere + cl.exe + link.exe directly, no msbuild).

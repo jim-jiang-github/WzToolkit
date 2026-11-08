@@ -701,7 +701,7 @@ async function boot() {
     if (st.workspace) { $("#ws-path").value = st.workspace; await scan(); }
     if (!st.tools_ok) {
       errBox.style.display = "block";
-      errBox.textContent = "⚠ bin\\ 里缺编译好的工具 —— 先在 WzToolkit 目录跑一次 build.ps1";
+      errBox.textContent = "⚠ bin\\ 里缺原生工具（nxmap / nxmob / nxscan / nxchar）—— 在项目目录跑一次 scripts\\build.bat，它会自动编译缺失的几个";
     }
     if (st.ui) watchUi(st.ui);
   } catch (e) { fail(e); }
