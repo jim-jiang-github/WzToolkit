@@ -237,3 +237,7 @@ train/batch_*.json
 train/*.log
 train/ov_*.log
 train/train_report.md
+
+# 训练权重（25M 的 .pt，不入库）与误建的空文件
+/models/
+/nul
