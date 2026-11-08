@@ -24,6 +24,7 @@
 #include <nlnx/bitmap.hpp>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -34,6 +35,20 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+
+// nlnx's load_all() insists on a fixed file set (Base.nx, ...) next to the exe
+// and dereferences null nodes when one is missing. The CN client ships
+// self-contained Character.nx / String.nx, so open them by name instead.
+namespace nl { namespace nx { node add_file(std::string name); } }
+
+static bool load_char() {
+    if (nl::nx::Character) return true;              // load_all already set it
+    nl::node f = nl::nx::add_file("Character.nx");
+    if (f) nl::nx::Character = f["Character"] ? f["Character"] : f;
+    nl::node s = nl::nx::add_file("String.nx");
+    if (s) nl::nx::String = s["String"] ? s["String"] : s;
+    return static_cast<bool>(nl::nx::Character);
+}
 
 static std::string g_out;
 static std::map<std::string, std::string> g_png;   // key -> png file name
@@ -444,7 +459,10 @@ int main(int argc, char ** argv) {
                      "  nxchar dump --out DIR [--skin N] [--hair ID] ... [--actions a,b] [--frames 0,1]\n";
         return 1;
     }
-    nl::nx::load_all();
+    if (!load_char()) {
+        std::cerr << "Character.nx not found in cwd\n";
+        return 2;
+    }
     std::string cmd = argv[1];
     if (cmd == "list") return cmd_list(argc > 2 ? argv[2] : "");
     if (cmd == "icon" && argc >= 5) return cmd_icon(argv[2], argv[3], argv[4]);
