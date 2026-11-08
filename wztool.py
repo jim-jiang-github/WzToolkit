@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import importlib.util
 import json
@@ -30,6 +31,14 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+# 图片找图只用到 cv2 + numpy；缺了别拦着其它功能，调用时再报错
+try:
+    import cv2
+    import numpy as np
+except ImportError:                            # pragma: no cover
+    cv2 = None
+    np = None
 
 # ---------------------------------------------------------------- 路径与常量
 
@@ -459,6 +468,122 @@ def c_maps() -> dict:
         life_maps = sorted({m["mapid"] for rows in life.values() for m in rows})
         _lists.update(key=key, maps=ids, life_maps=life_maps)
     return {"maps": _lists["maps"], "life_maps": _lists.get("life_maps", [])}
+
+
+# 图片找图 --------------------------------------------------------------------
+# 粘贴一张游戏截图（或直接截小地图），和全库地图的 miniMap/canvas 做模板匹配，
+# 找出它对应哪张地图。索引由 `nxmap mini-all` 一次建好（.cache/minimap/）。
+
+MMIDX = CACHE / "minimap"
+_mmjob: dict = {"running": False, "error": ""}
+
+
+def _minimap_ready() -> bool:
+    ws = _need_ws()
+    mapnx = ws / "Map.nx"
+    if not mapnx.exists():
+        raise CliError("工作区里没有 Map.nx —— 先转换 Map.wz", 1)
+    meta = MMIDX / "index.meta.json"
+    if not (MMIDX / "index.json").exists() or not meta.exists():
+        return False
+    try:
+        return json.loads(meta.read_text(encoding="utf-8")).get("mtime") \
+            == mapnx.stat().st_mtime
+    except (OSError, ValueError):
+        return False
+
+
+def _minimap_build() -> None:
+    """后台线程：mini-all 全库导小地图（先写临时目录，成功后整体替换）。"""
+    ws = _need_ws()
+    tmp = CACHE / "minimap.building"
+    try:
+        if tmp.exists():
+            drop_dir(tmp)
+        _run(["nxmap", "mini-all", str(tmp)], ws, timeout=1800)
+        (tmp / "index.meta.json").write_text(
+            json.dumps({"mtime": (ws / "Map.nx").stat().st_mtime}), encoding="utf-8")
+        if MMIDX.exists():
+            drop_dir(MMIDX)
+        tmp.rename(MMIDX)
+        _mmjob["error"] = ""
+    except Exception as exc:                   # noqa: BLE001
+        _mmjob["error"] = str(exc)
+    finally:
+        _mmjob["running"] = False
+
+
+def c_map_imgindex() -> dict:
+    return {"building": _mmjob["running"], "ready": _minimap_ready(),
+            "error": _mmjob["error"]}
+
+
+def _mm_score_one(qg, cg) -> tuple[float, float] | None:
+    """查询图和一张 canvas 双向模板匹配，返回 (加权分, 原始分)。
+
+    模板远小于另一边时容易在平坦区假阳性满分（比如纯色天空），按两边
+    较小边之比打折压下去；截整窗时 canvas ⊆ 截图，截小地图时截图 ⊆ canvas。
+    """
+    qh, qw = qg.shape
+    ch, cw = cg.shape
+    if qh <= ch and qw <= cw:
+        raw = float(cv2.matchTemplate(cg, qg, cv2.TM_CCOEFF_NORMED).max())
+        ratio = min(qh / ch, qw / cw)
+    elif ch <= qh and cw <= qw:
+        raw = float(cv2.matchTemplate(qg, cg, cv2.TM_CCOEFF_NORMED).max())
+        ratio = min(ch / qh, cw / qw)
+    else:
+        return None
+    return raw * max(0.5, min(1.0, ratio)), raw
+
+
+def c_map_imgsearch(image: str) -> dict:
+    """image = base64（可带 data:image/...;base64, 前缀）的截图，返回 top 匹配。"""
+    if cv2 is None or np is None:
+        raise CliError("缺依赖：pip install opencv-python-headless numpy", 1)
+    if not _minimap_ready():
+        if not _mmjob["running"]:
+            _mmjob.update(running=True, error="")
+            threading.Thread(target=_minimap_build, daemon=True).start()
+        return {"building": True}
+    raw_b64 = image.split(",", 1)[-1] if image.startswith("data:") else image
+    buf = np.frombuffer(base64.b64decode(raw_b64), dtype=np.uint8)
+    q = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    if q is None:
+        raise CliError("图片解析失败 —— 确认粘贴的是截图", 2)
+    qg = cv2.cvtColor(q, cv2.COLOR_BGR2GRAY)
+    index = json.loads((MMIDX / "index.json").read_text(encoding="utf-8"))
+
+    # 第一遍：原尺寸（客户端截图就是 1:1）全库扫，留 top 24
+    cand: list[list] = []
+    for mid, meta in index.items():
+        cg = cv2.imread(str(MMIDX / f"{mid}.png"), cv2.IMREAD_GRAYSCALE)
+        if cg is None:
+            continue
+        r = _mm_score_one(qg, cg)
+        if r:
+            cand.append([r[0], r[1], mid, 1.0])
+    cand.sort(reverse=True)
+
+    # 第二遍：只对 top 24 试缩放（客户端被系统 DPI/窗口缩放过的截图）
+    for row in cand[:24]:
+        for s in (0.6, 0.75, 1.25, 1.5, 2.0):
+            q2 = cv2.resize(qg, None, fx=s, fy=s,
+                            interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
+            cg = cv2.imread(str(MMIDX / f"{row[2]}.png"), cv2.IMREAD_GRAYSCALE)
+            r = _mm_score_one(q2, cg)
+            if r and r[0] > row[0]:
+                row[0], row[1], row[3] = r[0], r[1], s
+    cand.sort(reverse=True)
+
+    out = []
+    for score, raw, mid, s in cand[:9]:
+        meta = index[mid]
+        out.append({"id": mid, "score": round(score, 3), "scale": s,
+                    "name": meta.get("name") or "", "street": meta.get("street") or "",
+                    "w": meta.get("cw"), "h": meta.get("ch"),
+                    "thumb": f"/preview/minimap/{mid}.png"})
+    return {"building": False, "results": out}
 
 
 # 导出 ----------------------------------------------------------------------
@@ -1426,7 +1551,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     # ---- 路由 ----
     # POST-only 路由集合：GET 打过来回 405（与旧 FastAPI 行为一致），别的才 404
     _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert", "/api/mob/export",
-                   "/api/map/export", "/api/export/clear-cache"}
+                   "/api/map/export", "/api/map/imgsearch", "/api/export/clear-cache"}
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
@@ -1445,6 +1570,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_mob_maps, path[len("/api/mob/"):-len("/maps")])
         elif path == "/api/maps":
             self._api(c_maps)
+        elif path == "/api/map/imgindex":
+            self._api(c_map_imgindex)
         elif path.startswith("/preview/"):
             self._send_file(CACHE / urllib.parse.unquote(path[len("/preview/"):]),
                             "image/png")
@@ -1488,6 +1615,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       bool(b.get("yolo")),
                       str(b["seed"]) if b.get("seed") else None,
                       bool(b.get("no_boss")), no_bg=bool(b.get("no_bg")))
+        elif path == "/api/map/imgsearch":
+            img = b.get("image")
+            if not img:
+                self._send_json(400, {"detail": "image 必填（base64 截图）"})
+                return
+            self._api(c_map_imgsearch, str(img))
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
         elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps") \
