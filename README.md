@@ -77,6 +77,26 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
   蓝线=站地线），一键导出到 `exports/mobs/<id>/`。
 - 地图详情的「怪物图鉴」点卡片也可直接跳进素材查看器。
 
+## 人物素材（角色）
+
+和怪物、地图并列的第三块：把所有人物外观素材（肤色 / 发型 / 脸 / 帽子 / 上衣 /
+裤裙 / 套服 / 鞋 / 手套 / 披风 / 盾牌 / 武器）拆开自由组合，实时合成动画。
+
+- 底层 `nxchar.exe`（新增，`vendor/cpp/nxchar.cpp`）只负责把一帧拆成图层：
+  `nxchar list <部位>` 列素材（id+名字），`nxchar icon` 出列表缩略图，
+  `nxchar dump` 输出每层 PNG + `origin` / `map` 锚点 + 每帧 `delay`
+  （`synchronized` 与客户端 `Character/Look/*.cpp` 一致）。
+- 合成在 Python 里做：按 `map` 锚点把部件对到身体 / 头 / 手（navel / neck / brow /
+  hand / handMove），再按 `CharLook::draw` 的图层顺序叠（头发→头→脸→帽子→武器…），
+  所以换装不会出现头飞出去、衣服穿反这类问题。
+- Web 页面「🧑 人物素材」：左边选部位、搜素材（带缩略图），右边实时看动画
+  （站立 / 走 / 警戒 / 跳 / 趴 / 爬绳，1x~8x 缩放），一键导出到
+  `exports/chars/<slug>/`（逐帧 PNG + `manifest.csv` + `look.json`）。
+- CLI 等价：`wztool char-parts hair`、`wztool char-export --skin 0 --hair 00030000
+  --face 00020000 --coat 01040000 --pants 01060000 --shoes 01070000`。
+- 需要工作区里有 `Character.nx`（由 `Character.wz` 转换而来，约 380MB）。
+  注意：这套 WZ 的武器帧是**横放**的原始素材，这里按图层位置直出、没有做手部角度旋转。
+
 ## 怪物 / BOSS 判定
 
 怪物的 BOSS 档位只用 WZ 官方字段判定（`nxmob info` 一次全量导出）：
@@ -128,8 +148,8 @@ scripts\build.bat       双击即编译原生工具（cl.exe 直接编，不依�
 scripts\build.ps1       原生工具编译逻辑（PowerShell；由 build.bat 带 Bypass 调用）
 scripts\build-exe.bat   双击即打包 wztool.exe（PyInstaller onefile，含 vendor\ + static\）
 wztool.py        CLI 主程序（bin\wztool.exe 由 PyInstaller 打包，含 CLI + web 两用）
-vendor\          全部源码与依赖（NoLifeWzToNx、nxmap/nxmob/nxscan、NoLifeNx、render_map、Mob.txt）
-bin\             原生工具编译产物 + 打包好的 wztool.exe（双击它 = WebUI）
+vendor\          全部源码与依赖（NoLifeWzToNx、nxmap/nxmob/nxscan/nxchar、NoLifeNx、render_map、Mob.txt）
+bin\             原生工具编译产物（含 nxchar.exe）+ 打包好的 wztool.exe（双击它 = WebUI）
 static\cli.html  Web 页面（wztool web 服务的可视化壳，与 CLI 交互）
 ```
 
