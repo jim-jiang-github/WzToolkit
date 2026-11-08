@@ -47,9 +47,17 @@ except ImportError:                            # pragma: no cover
 
 # ---------------------------------------------------------------- 路径与常量
 
-if getattr(sys, "frozen", False):              # PyInstaller 打包后：exe 旁就是项目
-    ROOT = Path(sys.executable).resolve().parent
+if getattr(sys, "frozen", False):
+    # PyInstaller 打包后：exe 可以在项目根，也可以放在 bin\ 里
+    # （bin\wztool.exe 和 nxmap.exe 这些原生工具放一起）。往上找带 vendor\ / static\
+    # 的那层当项目根，这样只有一份判断、其它路径（bin\.cache\exports）全都对。
+    _exe_dir = Path(sys.executable).resolve().parent
     _ME = getattr(sys, "_MEIPASS", None)        # 打包进去的纯资源走临时解压目录
+    ROOT = _exe_dir
+    for _cand in (_exe_dir, _exe_dir.parent):
+        if (_cand / "vendor").exists() or (_cand / "static").exists():
+            ROOT = _cand
+            break
     VENDOR = Path(_ME) / "vendor" if _ME and (Path(_ME) / "vendor").exists() else ROOT / "vendor"
 else:
     ROOT = Path(__file__).resolve().parent
@@ -59,6 +67,8 @@ BIN = ROOT / "bin"
 CACHE = ROOT / ".cache"
 EXPORTS = ROOT / "exports"
 STATIC = ROOT / "static"
+if not STATIC.exists() and getattr(sys, "frozen", False):   # 举例：exe 单独丢在别处
+    STATIC = Path(getattr(sys, "_MEIPASS", ROOT)) / "static"
 STATE = ROOT / "workspace.json"                # 记住上次选的工作区
 
 TOOLS = ("NoLifeWzToNx", "nxmap", "nxmob", "nxscan")

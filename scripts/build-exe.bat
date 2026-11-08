@@ -3,7 +3,7 @@ rem =====================================================================
 rem  打包 wztool.exe —— 双击本文件即可
 rem
 rem  PyInstaller onefile：wztool.py + vendor\（render_map / Mob.txt）
-rem  + static\（WebUI 页面）-> 项目根目录的 wztool.exe
+rem  + static\（WebUI 页面）-> bin\wztool.exe（和 nxmap.exe 等原生工具放一起）
 rem  改了 wztool.py / static\ / vendor\ 之后跑一次。
 rem
 rem    build-exe.bat              -> 打包（结束停窗口）
@@ -12,6 +12,7 @@ rem =====================================================================
 setlocal
 cd /d "%~dp0.."
 set "ROOT=%CD%"
+set "OUT=%ROOT%\bin\wztool.exe"
 
 where python >nul 2>nul
 if errorlevel 1 (
@@ -45,12 +46,13 @@ taskkill /F /IM wztool.exe >nul 2>nul
 timeout /t 2 /nobreak >nul
 
 :pack
+if not exist "%ROOT%\bin" mkdir "%ROOT%\bin"
 echo === 打包 wztool.exe ===
 echo.
 python -m PyInstaller --clean --noconfirm --onefile --name wztool ^
     --add-data "%ROOT%\vendor;vendor" ^
     --add-data "%ROOT%\static;static" ^
-    --distpath "%ROOT%" ^
+    --distpath "%ROOT%\bin" ^
     --workpath "%ROOT%\build_wztool" ^
     --specpath "%ROOT%\build_wztool" ^
     "%ROOT%\wztool.py"
@@ -58,9 +60,18 @@ set "RC=%ERRORLEVEL%"
 
 echo.
 if "%RC%"=="0" (
-    echo [完成] 打包成功：%ROOT%\wztool.exe
-    for %%F in ("%ROOT%\wztool.exe") do echo         大小 %%~zF 字节
-    echo 双击 wztool.exe 即可启动 WebUI（等效 wztool web）。
+    echo [完成] 打包成功：%OUT%
+    for %%F in ("%OUT%") do echo         大小 %%~zF 字节
+    rem 项目根以前放过一份，留着会让人双击到旧版 —— 提示并清掉
+    if exist "%ROOT%\wztool.exe" (
+        del /q "%ROOT%\wztool.exe" 2>nul
+        if exist "%ROOT%\wztool.exe" (
+            echo [提示] 项目根还有旧的 wztool.exe，删不掉（可能在运行），请手动删掉。
+        ) else (
+            echo [清理] 已删除项目根的旧 wztool.exe（现在统一在 bin\ 里）。
+        )
+    )
+    echo 双击 bin\wztool.exe 即可启动 WebUI（等效 wztool web）。
 ) else (
     echo [失败] PyInstaller 退出码 %RC%
 )

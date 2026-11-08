@@ -33,10 +33,11 @@ scripts\build.bat -Only nxmap    # 只编一个：wz2nx / nxmap / nxmob / nxscan
 
 # 1b) 改了 wztool.py / static / vendor 之后，重新打包 wztool.exe
 #     双击 scripts\build-exe.bat；等价：
-scripts\build-exe.bat            # PyInstaller onefile → 项目根 wztool.exe
+scripts\build-exe.bat            # PyInstaller onefile → bin\wztool.exe
 
-# 2) CLI（推荐 / 自动化入口；已附带编译好的 wztool.exe）
-wztool --help                           # 全部子命令与示例（面向 AI/程序编写）
+# 2) CLI（推荐 / 自动化入口；已附带编译好的 bin\wztool.exe）
+#    下面用 wztool 代指 bin\wztool.exe；把 bin\ 加进 PATH 后可以直接敲 wztool
+bin\wztool --help                       # 全部子命令与示例（面向 AI/程序编写）
 wztool workspace "D:\MapleStory\nxrun"   # 设置工作区
 wztool mobs --json                      # 全部怪物（tier/level/hp/link/frames）
 wztool mob-export 0100100               # 导出一只怪的全部动画帧（逐帧 PNG + manifest.csv）
@@ -126,10 +127,9 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
 scripts\build.bat       双击即编译原生工具（cl.exe 直接编，不依赖 msbuild；调 build.ps1）
 scripts\build.ps1       原生工具编译逻辑（PowerShell；由 build.bat 带 Bypass 调用）
 scripts\build-exe.bat   双击即打包 wztool.exe（PyInstaller onefile，含 vendor\ + static\）
-wztool.py        CLI 主程序（wztool.exe 由 PyInstaller 打包，含 CLI + web 两用）
-wztool.exe       编译好的独立 CLI（放项目根即可找到 bin\ 与 vendor\）
+wztool.py        CLI 主程序（bin\wztool.exe 由 PyInstaller 打包，含 CLI + web 两用）
 vendor\          全部源码与依赖（NoLifeWzToNx、nxmap/nxmob/nxscan、NoLifeNx、render_map、Mob.txt）
-bin\             原生工具编译产物
+bin\             原生工具编译产物 + 打包好的 wztool.exe（双击它 = WebUI）
 static\cli.html  Web 页面（wztool web 服务的可视化壳，与 CLI 交互）
 ```
 

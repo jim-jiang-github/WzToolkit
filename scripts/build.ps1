@@ -148,4 +148,4 @@ Write-Host ''
 Write-Host 'All done. Tools:'
 Get-ChildItem $BIN -Filter *.exe | ForEach-Object { Write-Host ("  {0}  {1} bytes" -f $_.Name, $_.Length) }
 Write-Host ''
-Write-Host 'Start the WebUI:  double-click wztool.exe   (or: wztool.exe web / python wztool.py web)'
+Write-Host 'Start the WebUI:  double-click bin\wztool.exe   (or: bin\wztool.exe web / python wztool.py web)'
