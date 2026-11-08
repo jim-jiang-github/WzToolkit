@@ -1,13 +1,13 @@
 @echo off
 rem =====================================================================
-rem  ´ò°ü wztool.exe ¡ª¡ª Ë«»÷±¾ÎÄ¼þ¼´¿É
+rem  ï¿½ï¿½ï¿½ wztool.exe ï¿½ï¿½ï¿½ï¿½ Ë«ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½ï¿½ï¿½ï¿½
 rem
-rem  PyInstaller onefile£ºwztool.py + vendor\£¨render_map / Mob.txt£©
-rem  + static\£¨WebUI Ò³Ãæ£©-> bin\wztool.exe£¨ºÍ nxmap.exe µÈÔ­Éú¹¤¾ß·ÅÒ»Æð£©
-rem  ¸ÄÁË wztool.py / static\ / vendor\ Ö®ºóÅÜÒ»´Î¡£
+rem  PyInstaller onefileï¿½ï¿½wztool.py + vendor\ï¿½ï¿½render_map / Mob.txtï¿½ï¿½
+rem  + static\ï¿½ï¿½WebUI Ò³ï¿½æ£©-> bin\wztool.exeï¿½ï¿½ï¿½ï¿½ nxmap.exe ï¿½ï¿½Ô­ï¿½ï¿½ï¿½ï¿½ï¿½ß·ï¿½Ò»ï¿½ï¿½
+rem  ï¿½ï¿½ï¿½ï¿½ wztool.py / static\ / vendor\ Ö®ï¿½ï¿½ï¿½ï¿½Ò»ï¿½Î¡ï¿½
 rem
-rem    build-exe.bat              -> ´ò°ü£¨½áÊøÍ£´°¿Ú£©
-rem    build-exe.bat --no-pause   -> ´ò°üºó²»Í£´°¿Ú£¨¸ø±ðµÄ½Å±¾µ÷ÓÃ£©
+rem    build-exe.bat              -> ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í£ï¿½ï¿½ï¿½Ú£ï¿½
+rem    build-exe.bat --no-pause   -> ï¿½ï¿½ï¿½ï¿½ï¿½Í£ï¿½ï¿½ï¿½Ú£ï¿½ï¿½ï¿½ï¿½ï¿½Ä½Å±ï¿½ï¿½ï¿½ï¿½Ã£ï¿½
 rem =====================================================================
 setlocal
 cd /d "%~dp0.."
@@ -16,7 +16,7 @@ set "OUT=%ROOT%\bin\wztool.exe"
 
 where python >nul 2>nul
 if errorlevel 1 (
-    echo [´íÎó] ÕÒ²»µ½ python£¨ÐèÒª 3.9+ ÇÒ×°ºÃ pyinstaller£©¡£
+    echo [ï¿½ï¿½ï¿½ï¿½] ï¿½Ò²ï¿½ï¿½ï¿½ pythonï¿½ï¿½ï¿½ï¿½Òª 3.9+ ï¿½ï¿½×°ï¿½ï¿½ pyinstallerï¿½ï¿½ï¿½ï¿½
     echo.
     pause
     exit /b 1
@@ -24,20 +24,20 @@ if errorlevel 1 (
 
 python -c "import PyInstaller" >nul 2>nul
 if errorlevel 1 (
-    echo [´íÎó] Ã»×° PyInstaller£¬ÏÈÖ´ÐÐ£º
+    echo [ï¿½ï¿½ï¿½ï¿½] Ã»×° PyInstallerï¿½ï¿½ï¿½ï¿½Ö´ï¿½Ð£ï¿½
     echo     python -m pip install pyinstaller
     echo.
     pause
     exit /b 1
 )
 
-rem ÔËÐÐÖÐµÄ wztool.exe Ëø×ÅÎÄ¼þ£¬¸²¸Ç»áÊ§°Ü ¡ª¡ª ÏÈÎÊÒ»¾äÒª²»Òª¹Øµô
+rem ï¿½ï¿½ï¿½ï¿½ï¿½Ðµï¿½ wztool.exe ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç»ï¿½Ê§ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½Òªï¿½ï¿½Òªï¿½Øµï¿½
 tasklist /FI "IMAGENAME eq wztool.exe" 2>nul | find /I "wztool.exe" >nul
 if errorlevel 1 goto pack
-echo [ÌáÊ¾] wztool.exe ÕýÔÚÔËÐÐ£¨8000 ¶Ë¿ÚµÄ WebUI£¿£©£¬ÖØ´ò°üÇ°ÐèÒªÏÈ¹Ø±ÕËü¡£
-choice /C YN /N /M "ÏÖÔÚ¹Ø±Õ? [Y/N] "
+echo [ï¿½ï¿½Ê¾] wztool.exe ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð£ï¿½8000 ï¿½Ë¿Úµï¿½ WebUIï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ø´ï¿½ï¿½Ç°ï¿½ï¿½Òªï¿½È¹Ø±ï¿½ï¿½ï¿½ï¿½ï¿½
+choice /C YN /N /M "ï¿½ï¿½ï¿½Ú¹Ø±ï¿½? [Y/N] "
 if errorlevel 2 (
-    echo ÒÑÈ¡Ïû£¬Î´´ò°ü¡£
+    echo ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½Î´ï¿½ï¿½ï¿½ï¿½ï¿½
     echo.
     pause
     exit /b 1
@@ -47,7 +47,7 @@ timeout /t 2 /nobreak >nul
 
 :pack
 if not exist "%ROOT%\bin" mkdir "%ROOT%\bin"
-echo === ´ò°ü wztool.exe ===
+echo === ï¿½ï¿½ï¿½ wztool.exe ===
 echo.
 python -m PyInstaller --clean --noconfirm --onefile --name wztool ^
     --add-data "%ROOT%\vendor;vendor" ^
@@ -55,25 +55,25 @@ python -m PyInstaller --clean --noconfirm --onefile --name wztool ^
     --distpath "%ROOT%\bin" ^
     --workpath "%ROOT%\build_wztool" ^
     --specpath "%ROOT%\build_wztool" ^
-    "%ROOT%\src\wztool.py"
+    "%ROOT%\wztool.py"
 set "RC=%ERRORLEVEL%"
 
 echo.
 if "%RC%"=="0" (
-    echo [Íê³É] ´ò°ü³É¹¦£º%OUT%
-    for %%F in ("%OUT%") do echo         ´óÐ¡ %%~zF ×Ö½Ú
-    rem ÏîÄ¿¸ùÒÔÇ°·Å¹ýÒ»·Ý£¬Áô×Å»áÈÃÈËË«»÷µ½¾É°æ ¡ª¡ª ÌáÊ¾²¢Çåµô
+    echo [ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½É¹ï¿½ï¿½ï¿½%OUT%
+    for %%F in ("%OUT%") do echo         ï¿½ï¿½Ð¡ %%~zF ï¿½Ö½ï¿½
+    rem ï¿½ï¿½Ä¿ï¿½ï¿½ï¿½ï¿½Ç°ï¿½Å¹ï¿½Ò»ï¿½Ý£ï¿½ï¿½ï¿½ï¿½Å»ï¿½ï¿½ï¿½ï¿½ï¿½Ë«ï¿½ï¿½ï¿½ï¿½ï¿½É°ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½
     if exist "%ROOT%\wztool.exe" (
         del /q "%ROOT%\wztool.exe" 2>nul
         if exist "%ROOT%\wztool.exe" (
-            echo [ÌáÊ¾] ÏîÄ¿¸ù»¹ÓÐ¾ÉµÄ wztool.exe£¬É¾²»µô£¨¿ÉÄÜÔÚÔËÐÐ£©£¬ÇëÊÖ¶¯É¾µô¡£
+            echo [ï¿½ï¿½Ê¾] ï¿½ï¿½Ä¿ï¿½ï¿½ï¿½ï¿½ï¿½Ð¾Éµï¿½ wztool.exeï¿½ï¿½É¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¶ï¿½É¾ï¿½ï¿½ï¿½ï¿½
         ) else (
-            echo [ÇåÀí] ÒÑÉ¾³ýÏîÄ¿¸ùµÄ¾É wztool.exe£¨ÏÖÔÚÍ³Ò»ÔÚ bin\ Àï£©¡£
+            echo [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½É¾ï¿½ï¿½ï¿½ï¿½Ä¿ï¿½ï¿½ï¿½Ä¾ï¿½ wztool.exeï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í³Ò»ï¿½ï¿½ bin\ ï¿½ï£©ï¿½ï¿½
         )
     )
-    echo Ë«»÷ bin\wztool.exe ¼´¿ÉÆô¶¯ WebUI£¨µÈÐ§ wztool web£©¡£
+    echo Ë«ï¿½ï¿½ bin\wztool.exe ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ WebUIï¿½ï¿½ï¿½ï¿½Ð§ wztool webï¿½ï¿½ï¿½ï¿½
 ) else (
-    echo [Ê§°Ü] PyInstaller ÍË³öÂë %RC%
+    echo [Ê§ï¿½ï¿½] PyInstaller ï¿½Ë³ï¿½ï¿½ï¿½ %RC%
 )
 echo.
 if /I "%~1"=="--no-pause" exit /b %RC%
