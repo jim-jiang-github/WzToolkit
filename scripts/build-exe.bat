@@ -66,7 +66,7 @@ echo.
 set "PYTHONPATH=%PYLIBS%"
 python -m PyInstaller --clean --noconfirm --onefile --name wztool ^
     --add-data "%ROOT%\vendor;vendor" ^
-    --add-data "%ROOT%\static;static" ^
+    --add-data "%ROOT%\webui;webui" ^
     --distpath "%ROOT%\bin" ^
     --workpath "%ROOT%\.build\wztool" ^
     --specpath "%ROOT%\.build\wztool" ^

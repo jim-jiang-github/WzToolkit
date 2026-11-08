@@ -31,7 +31,7 @@ scripts\build.bat                # 全量（已有产物会跳过）
 scripts\build.bat -Clean         # 先清 bin\ .build\
 scripts\build.bat -Only nxmap    # 只编一个：wz2nx / nxmap / nxmob / nxscan
 
-# 1b) 改了 src/wztool.py / static / vendor 之后，重新打包 wztool.exe
+# 1b) 改了 src/wztool.py / webui / vendor 之后，重新打包 wztool.exe
 #     双击 scripts\build-exe.bat；等价：
 scripts\build-exe.bat            # PyInstaller onefile → bin\wztool.exe
 #     Python 依赖写在 requirements.txt，首次打包会自动装进项目内 .pylibs\
@@ -149,13 +149,13 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
 ```
 scripts\build.bat       双击即编译原生工具（cl.exe 直接编，不依赖 msbuild；调 build.ps1）
 scripts\build.ps1       原生工具编译逻辑（PowerShell；由 build.bat 带 Bypass 调用）
-scripts\build-exe.bat   双击即打包 wztool.exe（PyInstaller onefile，含 vendor\ + static\）
+scripts\build-exe.bat   双击即打包 wztool.exe（PyInstaller onefile，含 vendor\ + webui\）
 scripts\deps.py         把 requirements.txt 装进 .pylibs\（打包前自动调用，可单独跑）
 requirements.txt        Python 依赖（pyinstaller / pillow / numpy / opencv-headless）
 src/wztool.py    CLI 主程序（bin\wztool.exe 由 PyInstaller 打包，含 CLI + web 两用）
 vendor\          全部源码与依赖（NoLifeWzToNx、nxmap/nxmob/nxscan/nxchar、NoLifeNx、render_map、Mob.txt）
 bin\             原生工具编译产物（含 nxchar.exe）+ 打包好的 wztool.exe（双击它 = WebUI）
-static\cli.html  Web 页面（wztool web 服务的可视化壳，与 CLI 交互）
+webui\cli.html   Web UI 页面（wztool web 服务的前端，浏览/导出/图鉴都在这一页）
 .build\          编译/打包中间产物（obj\ rsp\ wztool\），可随时整个删掉
 .pylibs\         Python 依赖安装目录（由 requirements.txt 生成，可随时删掉重装）
 ```

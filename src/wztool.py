@@ -50,21 +50,21 @@ except ImportError:                            # pragma: no cover
 
 if getattr(sys, "frozen", False):
     # PyInstaller 打包后：exe 可以在项目根，也可以放在 bin\ 里
-    # （bin\wztool.exe 和 nxmap.exe 这些原生工具放一起）。往上找带 vendor\ / static\
+    # （bin\wztool.exe 和 nxmap.exe 这些原生工具放一起）。往上找带 vendor\ / webui\
     # 的那层当项目根，这样只有一份判断、其它路径（bin\.cache\.exports）全都对。
     _exe_dir = Path(sys.executable).resolve().parent
     _ME = getattr(sys, "_MEIPASS", None)        # 打包进去的纯资源走临时解压目录
     ROOT = _exe_dir
     for _cand in (_exe_dir, _exe_dir.parent):
-        if (_cand / "vendor").exists() or (_cand / "static").exists():
+        if (_cand / "vendor").exists() or (_cand / "webui").exists():
             ROOT = _cand
             break
     VENDOR = Path(_ME) / "vendor" if _ME and (Path(_ME) / "vendor").exists() else ROOT / "vendor"
 else:
-    # 源码模式：本文件在 src\ 里，往上找带 vendor\ / static\ 的那层当项目根
+    # 源码模式：本文件在 src\ 里，往上找带 vendor\ / webui\ 的那层当项目根
     ROOT = Path(__file__).resolve().parent
     for _cand in (ROOT, *ROOT.parents):
-        if (_cand / "vendor").exists() or (_cand / "static").exists():
+        if (_cand / "vendor").exists() or (_cand / "webui").exists():
             ROOT = _cand
             break
     VENDOR = ROOT / "vendor"
@@ -72,9 +72,9 @@ else:
 BIN = ROOT / "bin"
 CACHE = ROOT / ".cache"
 EXPORTS = ROOT / ".exports"
-STATIC = ROOT / "static"
-if not STATIC.exists() and getattr(sys, "frozen", False):   # 举例：exe 单独丢在别处
-    STATIC = Path(getattr(sys, "_MEIPASS", ROOT)) / "static"
+WEBUI = ROOT / "webui"                          # Web UI 页面目录（cli.html）
+if not WEBUI.exists() and getattr(sys, "frozen", False):   # 举例：exe 单独丢在别处
+    WEBUI = Path(getattr(sys, "_MEIPASS", ROOT)) / "webui"
 STATE = ROOT / "workspace.json"                # 记住上次选的工作区
 
 TOOLS = ("NoLifeWzToNx", "nxmap", "nxmob", "nxscan", "nxchar")
@@ -236,7 +236,7 @@ def c_ui() -> dict:
     """前端版本戳 = cli.html 的 mtime。页面定时比对，发现新版自动刷新
     （否则重新打包后，开着的旧标签页会一直停在老界面上）。"""
     try:
-        return {"ui": int((STATIC / "cli.html").stat().st_mtime)}
+        return {"ui": int((WEBUI / "cli.html").stat().st_mtime)}
     except OSError:
         return {"ui": 0}
 
@@ -1719,7 +1719,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         path = u.path
         if path == "/" or path == "/index.html":
-            self._send_file(STATIC / "cli.html", "text/html; charset=utf-8")
+            self._send_file(WEBUI / "cli.html", "text/html; charset=utf-8")
         elif path == "/api/state":
             self._api(c_state)
         elif path == "/api/ui":
@@ -1754,10 +1754,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/exports/"):
             self._send_file(EXPORTS / urllib.parse.unquote(path[len("/exports/"):]),
                             "image/png")
-        elif path.startswith("/static/"):
+        elif path.startswith("/webui/"):
             mime = {"png": "image/png", "css": "text/css", "js": "text/javascript",
                     "html": "text/html", "txt": "text/plain"}.get(path.rsplit(".", 1)[-1], "application/octet-stream")
-            self._send_file(STATIC / urllib.parse.unquote(path[len("/static/"):]), mime)
+            self._send_file(WEBUI / urllib.parse.unquote(path[len("/webui/"):]), mime)
         elif path in self._POST_ONLY:
             self._send_json(405, {"detail": f"Method Not Allowed: {path} 是 POST 接口"})
         else:
