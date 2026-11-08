@@ -1,8 +1,13 @@
 # WzToolkit Python dependencies -- needed to pack bin\wztool.exe and to run from source.
 #
-# Do NOT install these into the system Python. scripts\build.bat installs them into
-# <project root>\.pylibs\ and points PYTHONPATH there, so a fresh clone builds without
-# touching C:\Python3xx and without polluting the global environment.
+# Do NOT install these into the system Python. Double-click build.cmd (or run
+# scripts\build.bat): it first downloads a portable CPython into .pyruntime\, then
+# installs these requirements into .pylibs\ with that interpreter via
+# PYTHONPATH. A fresh clone builds on a machine with no Python at all, and the
+# system interpreter is never touched or consulted.
+#
+# First build needs network access (interpreter ~15 MB + wheels ~200 MB).
+# To start over from scratch, delete .pyruntime\ and .pylibs\ and rebuild.
 #
 # KEEP THIS FILE PURE ASCII. pip 24 has no BOM and no coding cookie to go on, so it
 # decodes this file with the system ANSI code page (cp936 on Chinese Windows); UTF-8

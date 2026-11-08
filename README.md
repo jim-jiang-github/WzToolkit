@@ -29,13 +29,16 @@ wztool map-minimap 101040000        渲染游戏内小地图（miniMap canvas + 
 #    打包好的 bin\wztool.exe 都随仓库提供，不用编译任何东西，双击 bin\wztool.exe 即可。
 
 # 2) 只有改了 src/wztool.py / webui / vendor 之后，才需要重新打包 wztool.exe：
-#    双击 scripts\build.bat —— 仓库里唯一的构建脚本，三步全包：
-#      ① 依赖装进 .pylibs\   ② bin\ 里缺原生工具就现编（有 VS 用的 C++ 工具集才行）
-#      ③ PyInstaller onefile → bin\wztool.exe
-scripts\build.bat                # 平时只需要这一条
-#    Python 依赖写在 requirements.txt，首次打包自动装进项目内 .pylibs\
-#    （不碰系统 Python，换台电脑 clone 下来直接能编；需要联网，约 200MB）
-python scripts\deps.py           # 只同步依赖、不打包（--check 只检查，--force 重装）
+#    双击根目录的 build.cmd（等价于 scripts\build.bat）——唯一的构建入口，四步全包：
+#      ① 下载便携版 Python 到 .pyruntime\（项目内，不碰本机 Python；已就绪则跳过）
+#      ② requirements.txt 里的依赖装进 .pylibs\（已就绪则跳过）
+#      ③ bin\ 里缺原生工具就现编（有 VS 用的 C++ 工具集才行）
+#      ④ PyInstaller onefile → bin\wztool.exe
+build.cmd                        # 平时只需要这一条（双击也行）
+#    全新机器 clone 下来直接双击就能编：连 Python 都不用预装，脚本自己下载
+#    解释器（约 15MB）+ 依赖（约 200MB），全部落在项目目录，可随时删掉重来。
+#    想从零重来：删 .pyruntime\ 和 .pylibs\ 再跑一次。
+.pyruntime\python.exe scripts\deps.py          # 只同步依赖、不打包（--check 只检查，--force 重装）
 
 # 只想单独重编原生工具（改了 vendor\cpp 时）：
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\_compile-tools.ps1
@@ -149,7 +152,9 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
 ## 目录
 
 ```
-scripts\build.bat       双击即构建：装依赖 → 缺原生工具就编 → 打包 bin\wztool.exe（唯一入口）
+build.cmd               双击即构建（根目录入口，转调 scripts\build.bat）
+scripts\build.bat       构建主脚本：下解释器 → 装依赖 → 缺原生工具就编 → 打包 wztool.exe
+scripts\_fetch-python.ps1   下载便携版 CPython 到 .pyruntime\（build.bat 自动调用）
 scripts\_compile-tools.ps1  原生工具编译逻辑（内部脚本，build.bat 缺 exe 时自动调用）
 scripts\deps.py         把 requirements.txt 装进 .pylibs\（打包前自动调用，可单独跑）
 requirements.txt        Python 依赖（pyinstaller / pillow / numpy / opencv-headless）
@@ -159,6 +164,7 @@ bin\             原生工具（随仓库提供，直接能用）+ 打包好的 
 webui\cli.html   Web UI 页面（wztool web 服务的前端，浏览/导出/图鉴都在这一页）
 .build\          打包中间产物（wztool\ rsp\ 等），可随时整个删掉
 .pylibs\         Python 依赖安装目录（由 requirements.txt 生成，可随时删掉重装）
+.pyruntime\      便携版 CPython（由 build.cmd 自动下载，可随时删掉；删了会重新拉）
 ```
 
 来源致谢：NoLifeWzToNx（Peter Atashian / Ryan Payton，AGPL）、NoLifeNx、
