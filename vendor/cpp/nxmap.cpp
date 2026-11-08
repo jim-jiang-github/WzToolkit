@@ -44,11 +44,20 @@ static bool load_cn() {
     return true;
 }
 
-// One map img per child when the ids sit flat under Map/ (CN split packages),
-// two levels (Map/Map0/<id>.img) for classic WZ-derived NX files.
+static bool shard_name(const std::string & n) {
+    // "Map0".."Map9" (CN full merge keeps shards as siblings of the assets).
+    return n.size() >= 4 && n.compare(0, 3, "Map") == 0
+        && n.find_first_not_of("0123456789", 3) == std::string::npos;
+}
+
+// Walk every map img in the merged Map tree, whatever the layout:
+//   CN full merge : Map/<id>.img (Map0 flat) + Map/Map{N}/<id>.img
+//   CN single shard: Map/<id>.img
+//   v83 classic   : Map/Map/Map{N}/<id>.img (via the "Map" group folder)
+// "_Canvas" folders are outlink service trees, never real map imgs.
 template <typename Fn>
 static void for_each_map_img(Fn fn) {
-    nl::node root = nl::nx::Map["Map"];
+    nl::node root = nl::nx::Map;
     for (auto it = root.begin(); it != root.end(); ++it) {
         nl::node c = *it;
         std::string n = c.name();
@@ -56,7 +65,20 @@ static void for_each_map_img(Fn fn) {
             fn(c);
             continue;
         }
-        for (auto jt = c.begin(); jt != c.end(); ++jt) fn(*jt);
+        if (n != "Map" && !shard_name(n)) continue;   // Back/Tile/Obj/... skip
+        for (auto jt = c.begin(); jt != c.end(); ++jt) {
+            nl::node g = *jt;
+            std::string gn = g.name();
+            if (gn == "_Canvas") continue;
+            if (gn.size() > 4 && gn.compare(gn.size() - 4, 4, ".img") == 0) {
+                fn(g);
+                continue;
+            }
+            for (auto kt = g.begin(); kt != g.end(); ++kt) {
+                if (std::string(kt.name()) == "_Canvas") continue;
+                fn(*kt);
+            }
+        }
     }
 }
 
@@ -304,13 +326,17 @@ int main(int argc, char ** argv) {
 
     if (!load_cn()) return 2;
 
-    // CN split packages keep every map id flat under Map/, classic NX nests them
-    // as Map/Map0..Map9/<id>.img - accept both.
-    nl::node img = nl::nx::Map["Map"][(mapid + ".img").c_str()];
-    if (!img) img = nl::nx::Map[(mapid + ".img").c_str()];
+    // Map id lookup, accepting every layout we produce:
+    //   full CN merge : Map/Map/Map{N}/<id>.img is the outlink service tree -
+    //                   the real shards sit at Map/Map{N}/<id>.img (Map1..9)
+    //                   with Map0's ids flat at Map/<id>.img;
+    //   single shard  : Map/<id>.img;
+    //   v83 classic   : Map/Map/Map{N}/<id>.img.
+    nl::node img = nl::nx::Map[(mapid + ".img").c_str()];
     for (const char * shard : {"Map0","Map1","Map2","Map3","Map4","Map5","Map6","Map7","Map8","Map9"}) {
         if (img) break;
-        img = nl::nx::Map["Map"][shard][(mapid + ".img").c_str()];
+        img = nl::nx::Map[shard][(mapid + ".img").c_str()];
+        if (!img) img = nl::nx::Map["Map"][shard][(mapid + ".img").c_str()];
     }
     if (!img) { std::cerr << "map " << mapid << " not found\n"; return 2; }
 

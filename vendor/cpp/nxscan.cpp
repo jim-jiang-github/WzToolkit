@@ -9,6 +9,10 @@
 #include <iostream>
 #include <string>
 
+// nlnx only declares load_all(); the CN trial layout ships a single
+// self-contained Map.nx / String.nx, so open files by name directly.
+namespace nl { namespace nx { node add_file(std::string name); } }
+
 static void dump(nl::node n, const std::string & path, int depth, int maxdepth) {
     if (depth > maxdepth || !n) return;
     for (nl::node child : n) {
@@ -40,19 +44,28 @@ static void dump(nl::node n, const std::string & path, int depth, int maxdepth) 
 
 int main(int argc, char ** argv) {
     if (argc < 3) { std::cerr << "usage: nxscan <NxFile> <subpath> [maxdepth]\n"; return 1; }
-    // load_all resolves file names like "Effect" -> Effect.nx
-    nl::nx::load_all();
+    std::string alias(argv[1]);
     nl::node root;
-    if (std::string(argv[1]) == "Effect") root = nl::nx::Effect;
-    else if (std::string(argv[1]) == "Character") root = nl::nx::Character;
-    else if (std::string(argv[1]) == "Sound") root = nl::nx::Sound;
-    else if (std::string(argv[1]) == "UI") root = nl::nx::UI;
-    else if (std::string(argv[1]) == "Mob") root = nl::nx::Mob;
-    else if (std::string(argv[1]) == "Map") root = nl::nx::Map;
-    else if (std::string(argv[1]) == "Item") root = nl::nx::Item;
-    else if (std::string(argv[1]) == "String") root = nl::nx::String;
-    else if (std::string(argv[1]) == "Npc") root = nl::nx::Npc;
-    else { std::cerr << "unknown file alias\n"; return 1; }
+    // CN trial layout first: a self-contained Map.nx / String.nx next to the
+    // exe (no Base.nx set) with everything under one folder named like the file.
+    if (alias == "Map" || alias == "String") {
+        nl::node f = nl::nx::add_file(alias + ".nx");
+        if (f) root = f[alias.c_str()];
+    }
+    if (!root) {
+        // Fall back to the classic set (load_all resolves "Effect" -> Effect.nx).
+        nl::nx::load_all();
+        if (alias == "Effect") root = nl::nx::Effect;
+        else if (alias == "Character") root = nl::nx::Character;
+        else if (alias == "Sound") root = nl::nx::Sound;
+        else if (alias == "UI") root = nl::nx::UI;
+        else if (alias == "Mob") root = nl::nx::Mob;
+        else if (alias == "Map") root = nl::nx::Map;
+        else if (alias == "Item") root = nl::nx::Item;
+        else if (alias == "String") root = nl::nx::String;
+        else if (alias == "Npc") root = nl::nx::Npc;
+        else { std::cerr << "unknown file alias\n"; return 1; }
+    }
 
     std::string p(argv[2]);
     size_t start = 0;

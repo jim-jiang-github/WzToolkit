@@ -8,8 +8,12 @@
 
 常用示例::
 
-    wztool workspace "D:/MapleStory/nxrun"        # 1. 设置工作区（放 .wz/.nx 的目录）
-    wztool convert Map.wz Mob.wz String.wz        # 2. wz → nx（耗时任务，同步执行）
+    wztool workspace "D:/MapleStory/nxrun"        # 1. 设置工作区（放 .wz/.nx 的目录；
+                                                  #    也可以直接选国服客户端目录
+                                                  #    如 ...\\冒险岛online\\mxdclassic，
+                                                  #    会自动定位旁边 mxd\\Data）
+    wztool convert Map.wz Mob.wz String.wz        # 2. wz → nx（耗时任务，同步执行；
+                                                  #    国服模式自动做全量转换到 .cache\\cn）
     wztool mobs --json                            # 3. 列出全部怪物（JSON）
     wztool mob-export 0100100                     # 4. 导出一只怪的全部动画帧
     wztool maps --json                            # 5. 列出全部地图（JSON）
@@ -76,6 +80,7 @@ WEBUI = ROOT / "webui"                          # Web UI 页面目录（cli.html
 if not WEBUI.exists() and getattr(sys, "frozen", False):   # 举例：exe 单独丢在别处
     WEBUI = Path(getattr(sys, "_MEIPASS", ROOT)) / "webui"
 STATE = ROOT / "workspace.json"                # 记住上次选的工作区
+CN_NX = CACHE / "cn"                           # 国服官方数据转换出的 .nx（写安装目录没权限）
 
 TOOLS = ("NoLifeWzToNx", "nxmap", "nxmob", "nxscan", "nxchar")
 
@@ -91,9 +96,11 @@ class CliError(Exception):
 # ---------------------------------------------------------------- 公共状态
 
 _lock = threading.Lock()
-_ws: Path | None = None                        # 工作区（放 .wz / .nx 的目录）
+_ws: Path | None = None                        # 工作区（放 .wz / .nx 的目录，或国服客户端目录）
 _job: dict = {"id": 0, "running": False, "log": [], "done": 0, "total": 0, "error": ""}
 _lists: dict = {}                              # mobs / maps / life 缓存（键: 文件 mtime）
+_UNSET = object()                              # 国服探测哨兵：None=确认不是，对象=还没探测
+_cn_data: Path | None | object = _UNSET
 
 
 def _save_ws() -> None:
@@ -122,6 +129,53 @@ def _need_tools() -> None:
     if not tools_ok():
         raise CliError("bin\\ 里缺原生工具（NoLifeWzToNx/nxmap/nxmob/nxscan/nxchar）—— "
                        "在项目目录跑一次 scripts\\build.bat，它会把缺的编出来", 1)
+
+
+# ---------------------------------------------------------------- 国服官方数据源
+
+def _cn_detect(p: Path | None) -> Path | None:
+    """给定用户选的目录，找出国服官方客户端的 Data 目录（没有则 None）。
+
+    认这几种选法：mxd\\Data 本身、mxd 根、mxdclassic（位图在旁边 mxd\\Data）、
+    冒险岛online 根。判定标志：Map/Map/Map0/Map0_000.wz 存在。
+    """
+    if p is None:
+        return None
+
+    def ok(d: Path) -> bool:
+        return (d / "Map" / "Map" / "Map0" / "Map0_000.wz").is_file()
+
+    cands = [p / "Data", p]
+    up = p
+    for _ in range(3):                          # 向上找几层（覆盖 mxdclassic / 安装根）
+        up = up.parent
+        if up == up.parent:
+            break
+        cands += [up / "mxd" / "Data", up / "Data"]
+    for c in cands:
+        if ok(c):
+            return c
+    return None
+
+
+def _cn_mode() -> Path | None:
+    """当前工作区是不是国服官方数据源；是则返回 Data 目录（带缓存）。"""
+    global _cn_data
+    if _cn_data is _UNSET:
+        _cn_data = _cn_detect(_ws)
+    return _cn_data if isinstance(_cn_data, Path) else None
+
+
+def _nx_dir() -> Path:
+    """原生工具的运行目录（.nx 所在处）。
+
+    classic 模式 = 工作区（用户自己放 .wz 转出来的 .nx）；
+    国服模式 = .cache\\cn（从安装目录转换出来的成品，安装目录只读）。
+    """
+    cn = _cn_mode()
+    if cn is not None:
+        return CN_NX
+    return _need_ws()
 
 
 def _need_ws() -> Path:
@@ -267,17 +321,28 @@ def c_browse(path: str = "") -> dict:
 
 
 def c_workspace(path: str) -> dict:
-    """设为工作区并列出里面的 .wz（含是否已转 .nx）。"""
-    global _ws
+    """设为工作区。classic 模式列里面的 .wz（含是否已转 .nx）；
+    选的是国服官方客户端目录时自动切国服模式（数据源 = 自动定位的 Data 目录）。"""
+    global _ws, _cn_data
     p = Path(path or "")
     if not p.is_dir():
         raise CliError(f"不是目录：{p}", 2)
     _ws = p
+    _cn_data = _UNSET
     _lists.clear()
     try:
         _save_ws()
     except OSError as e:
         raise CliError(f"工作区已设置但没能写入 {STATE.name}: {e}", 1)
+    cn = _cn_mode()
+    if cn is not None:
+        map_nx = CN_NX / "Map.nx"
+        return {"workspace": str(p),
+                "cn": {"data": str(cn),
+                       "nx_dir": str(CN_NX),
+                       "map_nx": map_nx.exists(),
+                       "map_nx_mb": round(map_nx.stat().st_size / 1048576) if map_nx.exists() else 0,
+                       "string_nx": (CN_NX / "String.nx").exists()}}
     files = []
     for f in sorted(p.glob("*.wz")):
         if f.name.endswith(".segs"):           # 下载器没下完的标记
@@ -319,7 +384,12 @@ def _convert_one(wz: Path, log) -> None:
 
 
 def c_convert(names: list[str], force: bool, log) -> dict:
-    """把 .wz 转成 .nx。CLI 同步跑；web 传一个往 _job 里记日志的 log。"""
+    """把 .wz 转成 .nx。CLI 同步跑；web 传一个往 _job 里记日志的 log。
+
+    工作区是国服官方数据源时忽略 names，直接做国服全量转换（Map.nx + String.nx）。
+    """
+    if _cn_mode() is not None:
+        return c_convert_cn(log)
     ws = _need_ws()
     todo = _convert_pick(ws, names, force)
     if not todo:
@@ -327,6 +397,83 @@ def c_convert(names: list[str], force: bool, log) -> dict:
                 "message": "选中的都已是 .nx（要重转加 --force）"}
     for wz in todo:
         _convert_one(wz, log)
+    return {"started": True, "total": len(todo), "done": len(todo)}
+
+
+# 国服官方客户端转换（.cache\cn\）-------------------------------------------
+
+def _cn_wz2nx(work: Path, src: str, out: str, mounts: list[tuple[str, str]],
+              prefix: str, only: str | None, log, timeout: int = 14400) -> None:
+    """调 NoLifeWzToNx 转一个国服 WZ 卷（work 是 ASCII 可见的卷根），产物写到 out。"""
+    exe = BIN / "NoLifeWzToNx.exe"
+    cmd = [str(exe), "-c", src, "--prefix", prefix]
+    for name, path in mounts:
+        cmd += ["--mount", f"{name}={path}"]
+    if only:
+        cmd += ["--only", only]
+    cmd += ["--out", out]
+    log(f"  转换 {src}（挂载 {len(mounts)} 个卷）…")
+    t0 = time.time()
+    r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=timeout)
+    outp = Path(out)
+    if r.returncode != 0 or not outp.exists():
+        tail = "\n".join((r.stdout or "").strip().splitlines()[-5:])
+        raise RuntimeError(f"{src} 转换失败（exit {r.returncode}）\n{tail}")
+    log(f"  OK {outp.name} {outp.stat().st_size / 1048576:.0f} MB，"
+        f"用时 {time.time() - t0:.0f}s")
+
+
+def _cn_workdir(data: Path) -> Path:
+    """wz2nx 用 ANSI 接口打开文件，中文安装路径打不开——
+    非 ASCII 时建一个 ASCII 目录联接（.cache\\cn\\data）指过去再转。"""
+    try:
+        str(data).encode("ascii")
+        return data
+    except UnicodeEncodeError:
+        link = CN_NX / "data"
+        if not link.exists():
+            link.parent.mkdir(parents=True, exist_ok=True)
+            r = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(data)],
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
+            if not link.exists():
+                raise CliError(f"建目录联接失败：{r.stderr.strip()}", 1)
+        return link
+
+
+def c_convert_cn(log) -> dict:
+    """国服官方客户端 → .cache\\cn\\：Map.nx（10 个地图分片 + Back/Tile/Obj 全量位图）
+    + String.nx（地图名等中文表）。产物是 v83 布局，nxmap/nxscan 直接可用。
+    Map.nx 要解压并重压约 9 GB 位图，一次大约 10~40 分钟（做完永久缓存）。"""
+    data = _cn_mode()
+    if data is None:
+        raise CliError("不是国服官方数据源", 1)
+    _need_tools()
+    CN_NX.mkdir(parents=True, exist_ok=True)
+    work = _cn_workdir(data)
+    map_nx = CN_NX / "Map.nx"
+    str_nx = CN_NX / "String.nx"
+    todo = []
+    if not str_nx.exists():
+        todo.append("String.nx")
+    if not map_nx.exists():
+        todo.append("Map.nx")
+    if not todo:
+        return {"started": False, "total": 0,
+                "message": "国服数据已转换完成（.cache\\cn）"}
+    if "String.nx" in todo:
+        _cn_wz2nx(work, "String/String_000.wz", str(str_nx), [], "String", None, log)
+    if "Map.nx" in todo:
+        m = [("Map/Map/Map0/_Canvas", "Map/Map/Map0/_Canvas")]
+        for n in range(1, 10):
+            m += [(f"Map/Map{n}", f"Map/Map{n}/Map{n}_000.wz"),
+                  (f"Map/Map/Map{n}/_Canvas", f"Map/Map{n}/_Canvas")]
+        m += [("Map/Back", "Map/Back/Back_000.wz"), ("Map/Back/_Canvas", "Map/Back/_Canvas"),
+              ("Map/Tile", "Map/Tile/Tile_000.wz"), ("Map/Tile/_Canvas", "Map/Tile/_Canvas"),
+              ("Map/Obj", "Map/Obj/Obj_000.wz"), ("Map/Obj/_Canvas", "Map/Obj/_Canvas")]
+        log("  Map.nx 是全量转换（含全部物件/背景位图），大约 10~40 分钟，请耐心等 …")
+        _cn_wz2nx(data, "Map/Map/Map0/Map0_000.wz", str(map_nx), m, "Map", None, log)
     return {"started": True, "total": len(todo), "done": len(todo)}
 
 
@@ -407,7 +554,7 @@ def life_index(ws: Path, mapnx: Path) -> dict[str, list[dict]]:
         except Exception:
             idx = {}
     if not idx:
-        out = _run(["nxmap", "life"], ws, timeout=300)
+        out = _run(["nxmap", "life"], mapnx.parent, timeout=300)
         agg: dict[str, dict[str, dict]] = {}
         for row in csv.reader(out.splitlines()):
             if len(row) < 8 or row[2] != "m":   # 只算怪物（m），NPC(n) 不算
@@ -437,10 +584,12 @@ def life_index(ws: Path, mapnx: Path) -> dict[str, list[dict]]:
 
 def c_mobs() -> dict:
     """全部怪物列表（图鉴/素材浏览用）：id/name/tier/level/hp/link/frames/img_ok。"""
-    ws = _need_ws()
-    mobnx = ws / "Mob.nx"
+    _need_ws()
+    mobnx = _nx_dir() / "Mob.nx"
     if not mobnx.exists():
-        raise CliError("工作区里没有 Mob.nx —— 先转换 Mob.wz", 1)
+        hint = "国服数据源的怪物转换还没支持（.cache\\cn 里没有 Mob.nx）" \
+            if _cn_mode() is not None else "先转换 Mob.wz"
+        raise CliError(f"没有 Mob.nx —— {hint}", 1)
     key = f"mobs:{mobnx.stat().st_mtime}"
     if _lists.get("key") != key:
         items = mob_meta(ws, mobnx)
@@ -468,38 +617,32 @@ def c_mobs() -> dict:
 
 def c_mob_maps(kid: str) -> dict:
     """这只怪自然刷新在哪些地图（life 反向聚合）。"""
-    ws = _need_ws()
-    mapnx = ws / "Map.nx"
+    mapnx = _nx_dir() / "Map.nx"
     if not mapnx.exists():
-        raise CliError("工作区里没有 Map.nx —— 先转换 Map.wz", 1)
-    idx = life_index(ws, mapnx)
+        raise CliError("没有 Map.nx —— 先转换地图数据", 1)
+    idx = life_index(mapnx.parent, mapnx)
     return {"maps": idx.get(kid.lstrip("0"), [])}
 
 
 def c_maps() -> dict:
-    ws = _need_ws()
-    mapnx = ws / "Map.nx"
+    mapnx = _nx_dir() / "Map.nx"
     if not mapnx.exists():
+        if _cn_mode() is not None:
+            raise CliError("国服数据还没转换：先在工作区卡片点「转换」生成 .cache\\cn\\Map.nx", 1)
         raise CliError("工作区里没有 Map.nx —— 先转换 Map.wz", 1)
     key = f"maps:{mapnx.stat().st_mtime}"
     if _lists.get("key") != key:
-        # Map.nx 根下有 Back/Obj/… 和一个 "Map" 节点；真地图在 Map/Map{0..9}/<id>.img
-        out = _run(["nxscan", "Map", "Map", "1"], ws, timeout=300)
-        groups = []
-        for ln in out.splitlines():
-            m = re.match(r"^Map/Map/(Map\d+) \[none\]", ln)
-            if m:
-                groups.append(m.group(1))
+        # 全量国服 Map.nx：Map0 的图平铺在 Map/ 下（Map//<id>.img），
+        # Map1..Map9 的图在 Map/<shard>/<id>.img；一次 depth=1 扫描全部拿到。
+        out = _run(["nxscan", "Map", "", "1"], mapnx.parent, timeout=600)
         ids: list[str] = []
-        for g in groups:
-            o = _run(["nxscan", "Map", f"Map/{g}", "1"], ws, timeout=300)
-            for ln in o.splitlines():
-                mm = re.search(r"(\d{9})\.img \[none\]", ln)
-                if mm:
-                    ids.append(mm.group(1))
+        for ln in out.splitlines():
+            m = re.match(r"^Map/+(?:Map\d+/)?(\d{9})\.img \[", ln)
+            if m:
+                ids.append(m.group(1))
         ids = sorted(set(ids))
         # 「有怪的图」：life 反向聚合里出现过的 mapid（只算 m=mob，npc 不算）
-        life = life_index(ws, mapnx)
+        life = life_index(mapnx.parent, mapnx)
         life_maps = sorted({m["mapid"] for rows in life.values() for m in rows})
         _lists.update(key=key, maps=ids, life_maps=life_maps)
     return {"maps": _lists["maps"], "life_maps": _lists.get("life_maps", [])}
@@ -514,10 +657,9 @@ _mmjob: dict = {"running": False, "error": ""}
 
 
 def _minimap_ready() -> bool:
-    ws = _need_ws()
-    mapnx = ws / "Map.nx"
+    mapnx = _nx_dir() / "Map.nx"
     if not mapnx.exists():
-        raise CliError("工作区里没有 Map.nx —— 先转换 Map.wz", 1)
+        raise CliError("没有 Map.nx —— 先转换地图数据", 1)
     meta = MMIDX / "index.meta.json"
     if not (MMIDX / "index.json").exists() or not meta.exists():
         return False
@@ -530,14 +672,14 @@ def _minimap_ready() -> bool:
 
 def _minimap_build() -> None:
     """后台线程：mini-all 全库导小地图（先写临时目录，成功后整体替换）。"""
-    ws = _need_ws()
+    nxdir = _nx_dir()
     tmp = CACHE / "minimap.building"
     try:
         if tmp.exists():
             drop_dir(tmp)
-        _run(["nxmap", "mini-all", str(tmp)], ws, timeout=1800)
+        _run(["nxmap", "mini-all", str(tmp)], nxdir, timeout=1800)
         (tmp / "index.meta.json").write_text(
-            json.dumps({"mtime": (ws / "Map.nx").stat().st_mtime}), encoding="utf-8")
+            json.dumps({"mtime": (nxdir / "Map.nx").stat().st_mtime}), encoding="utf-8")
         if MMIDX.exists():
             drop_dir(MMIDX)
         tmp.rename(MMIDX)
@@ -1253,6 +1395,27 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     return out, places
 
 
+def _map_cache_fresh(outdir: Path) -> bool:
+    """导出缓存是否还能用：map.json 可解析且带 miniMap（旧版 nxmap 不导小地图），
+    且数据源戳一致（换了数据源——比如从 v0.83 换国服——旧缓存全部视为过期）。"""
+    try:
+        mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
+        if "miniMap" not in mj:
+            return False
+        stamp = outdir / ".srcstamp"
+        return stamp.read_text().strip() == str((_nx_dir() / "Map.nx").stat().st_mtime)
+    except Exception:
+        return False
+
+
+def _map_cache_stamp(outdir: Path) -> None:
+    try:
+        (outdir / ".srcstamp").write_text(
+            str((_nx_dir() / "Map.nx").stat().st_mtime), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
                  density: int = 1, view: tuple | None = None,
                  seed: str | None = None,
@@ -1280,23 +1443,15 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     root = CACHE if preview else EXPORTS
     outdir = (root / "map" / mid) if preview else (EXPORTS / "maps" / mid)
 
-    def _cached_ok() -> bool:
-        # 缓存要能解析才算数：早期 nxmap 有产出坏 JSON 的情况；
-        # 另外要求带 miniMap 键——旧版 nxmap 不导小地图，命中旧缓存就永远出不来
-        try:
-            mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
-            return "miniMap" in mj
-        except Exception:
-            return False
-
-    if not _cached_ok():
+    if not _map_cache_fresh(outdir):
         outdir.parent.mkdir(parents=True, exist_ok=True)
         # 覆盖式刷新，不整目录重删：nxmap 会重写 map.json 与引用到的贴图，
         # 旧版本缓存的遗留 PNG 留着无害（渲染只按 map.json 引用取图），
         # 而且几百个文件的整目录删除在部分环境会被批量删除保护拦下
-        _run(["nxmap", mid, str(outdir)], ws, timeout=600)
+        _run(["nxmap", mid, str(outdir)], _nx_dir(), timeout=600)
     if not (outdir / "map.json").exists():
         raise CliError(f"nxmap 没产出 map.json（这个 id 存在吗？{mid}）", 1)
+    _map_cache_stamp(outdir)
     mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
 
     # 链接图：拿目标图的数据渲染（客户端同款行为）
@@ -1569,20 +1724,13 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
         raise CliError(f"link 成环了：{' → '.join(sorted(visited))} → {mid}", 1)
     visited.add(mid)
     outdir = CACHE / "map" / mid
-    stale = False
-    if (outdir / "map.json").exists():
-        # 旧版 nxmap 的缓存没有 miniMap/name 字段 → 视为过期重导一次
-        try:
-            stale = "miniMap" not in json.loads(
-                (outdir / "map.json").read_text(encoding="utf-8"))
-        except Exception:
-            stale = True
-    if stale or not (outdir / "map.json").exists():
+    if not _map_cache_fresh(outdir):
         # 同 map-export：覆盖式刷新，不做整目录删除
         outdir.parent.mkdir(parents=True, exist_ok=True)
-        _run(["nxmap", mid, str(outdir)], ws, timeout=600)
+        _run(["nxmap", mid, str(outdir)], _nx_dir(), timeout=600)
     if not (outdir / "map.json").exists():
         raise CliError(f"nxmap 没产出 map.json（这个 id 存在吗？{mid}）", 1)
+    _map_cache_stamp(outdir)
     mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
@@ -2095,8 +2243,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("state", help="查看当前状态（工作区 / 工具是否就绪 / 导出目录）")
     _j(p); p.set_defaults(fn=cmd_state)
 
-    p = sub.add_parser("workspace", help="设置工作区（放 .wz/.nx 的目录）并列出里面的 .wz",
-                       epilog="示例: wztool workspace D:/MapleStory/nxrun")
+    p = sub.add_parser("workspace", help="设置工作区（放 .wz/.nx 的目录，或国服客户端目录）",
+                       epilog="示例: wztool workspace D:/MapleStory/nxrun\n"
+                              "      wztool workspace \"C:/Program Files/上海数龙科技有限公司/冒险岛online/mxdclassic\"  # 国服数据源")
     p.add_argument("path", help="目录绝对路径")
     _j(p); p.set_defaults(fn=cmd_workspace)
 
@@ -2104,9 +2253,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path", nargs="?", default="")
     _j(p); p.set_defaults(fn=cmd_browse)
 
-    p = sub.add_parser("convert", help="把 .wz 转成 .nx（同步执行，逐个打印进度）",
+    p = sub.add_parser("convert", help="把 .wz 转成 .nx（国服模式=全量转换到 .cache\\cn）",
                        epilog="示例: wztool convert Mob.wz Map.wz --force")
-    p.add_argument("files", nargs="+", help=".wz 文件名（相对工作区）")
+    p.add_argument("files", nargs="*", default=[], help=".wz 文件名（相对工作区；国服模式忽略）")
     p.add_argument("--force", action="store_true", help="已转过的也重转")
     _j(p); p.set_defaults(fn=cmd_convert)
 
