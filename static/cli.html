@@ -938,9 +938,7 @@ function mdRenderDetail(det, m) {
   const linkNote = d.link
     ? ` <span class="pill" title="这种怪自己的 img 没有帧，客户端渲染 link 指向的怪">链接怪 → 画面同 <b>${d.link.to}</b></span>` : "";
   det.innerHTML = `<div class="flexline"><div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"}
-      ${tierBadge}${linkNote}<br><span class="muted">${d.count} 帧 · ${groups.size} 个动作${stats}</span></div>
-      <div class="row"><button class="mini" id="md-exp2"
-        title="逐帧导出 PNG + manifest.csv（锚点/延迟）→ exports/mobs/&lt;id&gt;/">⬇ 导出到 exports</button></div></div>
+      ${tierBadge}${linkNote}<br><span class="muted">${d.count} 帧 · ${groups.size} 个动作${stats}</span></div></div>
     <div class="muted" style="margin:4px 0 2px">${d.dir}</div>
     <div class="zoombar"><span class="muted">缩放：</span>
       ${zooms.map((z) => `<button class="zb${z === 1 ? " on" : ""}" data-z="${z}">${z}x</button>`).join("")}
@@ -991,7 +989,6 @@ function mdRenderDetail(det, m) {
     MD.zoom = Z;
     draw();
   });
-  bindExport($("#md-exp2"));
   draw();
   bindExport($("#md-export"));
 }
