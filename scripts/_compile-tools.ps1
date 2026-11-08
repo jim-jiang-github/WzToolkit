@@ -128,12 +128,12 @@ if (-not (Test-Path $lz4obj)) { throw 'missing lz4.obj - build wz2nx first' }
 $nl_inc = @((Join-Path $NLNX_INC 'NoLifeNx'), $NLNX_INC) + $VC_INC
 $nl_lib = @($NLNX_LIB) + $VC_LIB
 
-foreach ($t in @('nxmap','nxmob','nxscan','nxchar')) {
+foreach ($t in @('nxmap','nxmob','nxscan','nxchar','nxskill')) {
     if (-not (Want $t)) { continue }
     $objdir = Join-Path $OBJ $t; New-Item -ItemType Directory -Force -Path $objdir | Out-Null
     $inc_t = $nl_inc
-    if ($t -eq 'nxmob') {
-        # nxmob.cpp includes <lz4.h> directly (it validates frame headers while compositing)
+    if ($t -eq 'nxmob' -or $t -eq 'nxskill') {
+        # these tools include <lz4.h> directly (they validate frame headers while compositing)
         $inc_t = @((Join-Path $NLNX_INC 'NoLifeNx\nlnx\includes\lz4_v1_8_2_win64\include')) + $nl_inc
     }
     Invoke-CC -Src @(Join-Path $ROOT "vendor\cpp\$t.cpp") -ObjDir $objdir -IncDirs $inc_t -Tag $t
