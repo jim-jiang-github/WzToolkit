@@ -27,6 +27,44 @@
 
 namespace fs = std::filesystem;
 
+// nlnx's nx.hpp only declares load_all(), which insists on a fixed set of file
+// names next to the exe (Base.nx, Character.nx, ...). For the CN client we ship
+// a single self-contained Map.nx plus String.nx, so open them explicitly.
+namespace nl { namespace nx { node add_file(std::string name); } }
+
+// CN layout: Map.nx root has one "Map" folder holding Map/<id>.img and the
+// merged Back/Tile/Obj asset trees. String.nx has a "String" folder holding
+// String/Map.img/<category>/<id>/...
+static bool load_cn() {
+    nl::node mapfile = nl::nx::add_file("Map.nx");
+    if (!mapfile) { std::cerr << "Map.nx not found in the working directory\n"; return false; }
+    nl::nx::Map = mapfile["Map"] ? mapfile["Map"] : mapfile;
+    nl::node strfile = nl::nx::add_file("String.nx");
+    if (strfile) nl::nx::String = strfile["String"] ? strfile["String"] : strfile;
+    return true;
+}
+
+// One map img per child when the ids sit flat under Map/ (CN split packages),
+// two levels (Map/Map0/<id>.img) for classic WZ-derived NX files.
+template <typename Fn>
+static void for_each_map_img(Fn fn) {
+    nl::node root = nl::nx::Map["Map"];
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        nl::node c = *it;
+        std::string n = c.name();
+        if (n.size() > 4 && n.compare(n.size() - 4, 4, ".img") == 0) {
+            fn(c);
+            continue;
+        }
+        for (auto jt = c.begin(); jt != c.end(); ++jt) fn(*jt);
+    }
+}
+
+static std::string stem_of(const std::string & n) {
+    if (n.size() > 4 && n.compare(n.size() - 4, 4, ".img") == 0) return n.substr(0, n.size() - 4);
+    return n;
+}
+
 static std::string g_outdir;
 static std::map<std::string, std::string> g_img_done;  // key -> png filename
 static int g_img_written = 0;
@@ -128,7 +166,22 @@ static void load_map_names() {
             std::string id = m.name();
             if (id.size() > 4 && id.compare(id.size() - 4, 4, ".img") == 0)
                 id = id.substr(0, id.size() - 4);
-            g_map_names[id] = MapName{jget_str(m, "mapName"), jget_str(m, "streetName")};
+            MapName mn{jget_str(m, "mapName"), jget_str(m, "streetName")};
+            g_map_names[id] = mn;
+            // CN String keys drop the leading zeros ("1000000") while the map
+            // imgs keep them ("000010000"). Register the numeric forms too so
+            // either spelling resolves.
+            std::string digits;
+            for (char ch : id) {
+                if (ch < '0' || ch > '9') { digits.clear(); break; }
+                digits += ch;
+            }
+            if (!digits.empty()) {
+                size_t nz = digits.find_first_not_of('0');
+                std::string trim = (nz == std::string::npos) ? "0" : digits.substr(nz);
+                g_map_names[trim] = mn;
+                if (trim.size() < 9) g_map_names[std::string(9 - trim.size(), '0') + trim] = mn;
+            }
         }
     }
 }
@@ -152,7 +205,7 @@ static std::string csv_esc(const std::string & s) {
 }
 
 static int cmd_life() {
-    nl::nx::load_all();
+    if (!load_cn()) return 2;
     // String/Map.img/<分类>/<mapid>/mapName —— 分类一层（elin、etc、Episode1GL…）
     std::map<std::string, std::string> map_names;
     if (nl::nx::String) {
@@ -167,16 +220,10 @@ static int cmd_life() {
     }
     std::cout << "\xEF\xBB\xBF" << "mapid,mapname,type,id,x,y,fh,mobtime\n";
     int maps = 0, rows = 0;
-    for (const char * shard : {"Map0","Map1","Map2","Map3","Map4","Map5","Map6","Map7","Map8","Map9"}) {
-        nl::node sh = nl::nx::Map["Map"][shard];
-        if (!sh) continue;
-        for (auto it = sh.begin(); it != sh.end(); ++it) {
-            nl::node img = *it;
-            std::string id = img.name();
-            if (id.size() > 4 && id.compare(id.size() - 4, 4, ".img") == 0)
-                id = id.substr(0, id.size() - 4);
+    for_each_map_img([&](nl::node img) {
+            std::string id = stem_of(img.name());
             nl::node lifeRoot = img["life"];
-            if (!lifeRoot) continue;
+            if (!lifeRoot) return;
             ++maps;
             auto found = map_names.find(id);
             std::string mapname = (found != map_names.end()) ? found->second : std::string();
@@ -191,8 +238,7 @@ static int cmd_life() {
                           << "\n";
                 ++rows;
             }
-        }
-    }
+    });
     std::cerr << "maps with life: " << maps << ", life rows: " << rows << "\n";
     return 0;
 }
@@ -204,26 +250,20 @@ static int cmd_life() {
 // 的「粘贴截图找地图」做模板匹配索引用。
 static int cmd_mini_all(const std::string & outdir) {
     fs::create_directories(outdir);
-    nl::nx::load_all();
+    if (!load_cn()) return 2;
     std::ostringstream idx;
     idx << "{\n";
     bool first = true;
     int maps = 0, with_mm = 0;
-    for (const char * shard : {"Map0","Map1","Map2","Map3","Map4","Map5","Map6","Map7","Map8","Map9"}) {
-        nl::node sh = nl::nx::Map["Map"][shard];
-        if (!sh) continue;
-        for (auto it = sh.begin(); it != sh.end(); ++it) {
-            nl::node img = *it;
-            std::string id = img.name();
-            if (id.size() > 4 && id.compare(id.size() - 4, 4, ".img") == 0)
-                id = id.substr(0, id.size() - 4);
+    for_each_map_img([&](nl::node img) {
+            std::string id = stem_of(img.name());
             ++maps;
             nl::node mm = img["miniMap"];
             nl::node canvas = mm ? mm["canvas"] : nl::node();
             nl::bitmap bmp = canvas ? canvas.get_bitmap() : nl::bitmap();
-            if (!bmp) continue;
+            if (!bmp) return;
             ++with_mm;
-            if (!write_png(bmp, (fs::path(outdir) / (id + ".png")).string())) continue;
+            if (!write_png(bmp, (fs::path(outdir) / (id + ".png")).string())) return;
             if (!first) idx << ",\n";
             first = false;
             const MapName & mn = map_name_of(id);
@@ -236,8 +276,7 @@ static int cmd_mini_all(const std::string & outdir) {
                 << ",\"street\":\"" << json_escape(mn.street) << "\"}";
             if ((with_mm % 200) == 0)
                 std::cerr << "minimaps: " << with_mm << "\r";
-        }
-    }
+    });
     idx << "\n}\n";
     std::ofstream f(fs::path(outdir) / "index.json");
     f << idx.str();
@@ -263,30 +302,15 @@ int main(int argc, char ** argv) {
     g_outdir = argv[2];
     fs::create_directories(g_outdir);
 
-    nl::nx::load_all();
+    if (!load_cn()) return 2;
 
-    // Map ids are split across Map/Map0..Map9 by leading digits.
-    std::string mapdir = (mapid.size() >= 2 && mapid[0] == '1' && mapid[1] == '0') ? "Map1" : "Map0";
-    if (mapid.size() >= 3) {
-        // HeavenClient resolves shard by the first three digits; mirror the common cases.
-        const std::string p3 = mapid.substr(0, 3);
-        if (p3 == "100" || p3 == "101" || p3 == "102" || p3 == "103" || p3 == "104") mapdir = "Map1";
-        else if (p3 >= "200" && p3 < "300") mapdir = "Map2";
-        else if (p3 >= "300" && p3 < "400") mapdir = "Map3";
-        else if (p3 >= "500" && p3 < "600") mapdir = "Map5";
-        else if (p3 >= "600" && p3 < "700") mapdir = "Map6";
-        else if (p3 >= "700" && p3 < "800") mapdir = "Map7";
-        else if (p3 >= "800" && p3 < "900") mapdir = "Map8";
-        else if (p3 >= "900") mapdir = "Map9";
-        else mapdir = "Map0";
-    }
-    (void)mapdir;
-
-    nl::node img;
+    // CN split packages keep every map id flat under Map/, classic NX nests them
+    // as Map/Map0..Map9/<id>.img - accept both.
+    nl::node img = nl::nx::Map["Map"][(mapid + ".img").c_str()];
+    if (!img) img = nl::nx::Map[(mapid + ".img").c_str()];
     for (const char * shard : {"Map0","Map1","Map2","Map3","Map4","Map5","Map6","Map7","Map8","Map9"}) {
-        // Layout is Map/Map/<shard>/<id>.img - note the doubled "Map".
-        nl::node cand = nl::nx::Map["Map"][shard][(mapid + ".img").c_str()];
-        if (cand) { img = cand; break; }
+        if (img) break;
+        img = nl::nx::Map["Map"][shard][(mapid + ".img").c_str()];
     }
     if (!img) { std::cerr << "map " << mapid << " not found\n"; return 2; }
 
@@ -391,19 +415,32 @@ int main(int argc, char ** argv) {
             std::string l0 = jget_str(o, "l0");
             std::string l1 = jget_str(o, "l1");
             std::string l2 = jget_str(o, "l2");
-            int no = static_cast<int>(jget_int(o, "no", 0));
-            std::string key = "Obj/" + os + "/" + l0 + "/" + l1 + "/" + l2 + "/" + std::to_string(no);
+            // CN clients dropped "no": the object variant moved into l2, and the
+            // frame index lives in "f". Classic maps still carry "no".
+            nl::node noNode = o["no"];
+            const bool has_no = noNode && noNode.data_type() == nl::node::type::integer;
+            int no = has_no ? static_cast<int>(noNode.get_integer()) : 0;
+            // "f" is the horizontal flip flag in v83 maps, not a frame index.
+            const int frame = 0;
+            std::string key = "Obj/" + os + "/" + l0 + "/" + l1 + "/" + l2;
+            if (has_no) key += "/" + std::to_string(no);
             // l2 is empty for many objects; indexing with "" lands on nothing.
             nl::node objNode = nl::nx::Map["Obj"][img_name(os).c_str()][l0.c_str()][l1.c_str()];
             if (!l2.empty()) objNode = objNode[l2.c_str()];
-            nl::node bmpnode = objNode[std::to_string(no).c_str()];
-            std::string png = bmpnode ? export_bitmap(bmpnode, key) : "";
+            if (has_no && objNode) objNode = objNode[std::to_string(no).c_str()];
+            nl::node bmpnode = objNode;
+            if (bmpnode && bmpnode.data_type() != nl::node::type::bitmap) {
+                nl::node fr = bmpnode[std::to_string(frame).c_str()];
+                if (fr) bmpnode = fr;
+            }
+            std::string png = bmpnode ? export_bitmap(bmpnode, key + "/" + std::to_string(frame)) : "";
             if (png.empty()) {
                 // Animated objs store frames under ani/0..N; use frame 0.
                 nl::node a0 = objNode["ani"]["0"];
                 if (a0) png = export_bitmap(a0, key + "/ani0");
             }
             nl::node origin = bmpnode["origin"];
+            if (!origin) origin = objNode["origin"];
             int ox = origin ? origin.x() : 0;
             int oy = origin ? origin.y() : 0;
             if (!firstO) meta << ",";
