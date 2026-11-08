@@ -46,9 +46,10 @@ int main(int argc, char ** argv) {
     if (argc < 3) { std::cerr << "usage: nxscan <NxFile> <subpath> [maxdepth]\n"; return 1; }
     std::string alias(argv[1]);
     nl::node root;
-    // CN trial layout first: a self-contained Map.nx / String.nx next to the
-    // exe (no Base.nx set) with everything under one folder named like the file.
-    if (alias == "Map" || alias == "String") {
+    // Any layout: try opening <alias>.nx next to the exe first (CN trial layout
+    // ships self-contained X.nx files, everything under one folder named like
+    // the file). Falls back to the classic set below.
+    {
         nl::node f = nl::nx::add_file(alias + ".nx");
         if (f) root = f[alias.c_str()];
     }
