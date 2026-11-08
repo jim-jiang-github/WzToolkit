@@ -141,6 +141,8 @@ def write_viewer(out: Path, rows: list[dict]) -> None:
              linear-gradient(45deg, #0b0e12 25%, transparent 25%, transparent 75%, #0b0e12 75%) 7px 7px/14px 14px,
              #101419; }}
   .shot img {{ max-width: 100%; image-rendering: pixelated; display: block; }}
+  .shot.bad::after {{ content: "图片未随页面加载，请在资源管理器里双击 index.html 打开";
+                      color: #6b7889; font-size: 11px; text-align: center; padding: 0 8px; }}
   .meta {{ padding: 8px 11px 10px; border-top: 1px solid #1d232c; }}
   .nm {{ font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden;
          text-overflow: ellipsis; }}
@@ -202,7 +204,8 @@ let view = D.maps, page = 0;
 function card(r) {{
   const el = document.createElement('div');
   el.className = 'card';
-  el.innerHTML = `<div class="shot"><img loading="lazy" src="${{r.file}}" alt=""></div>
+  el.innerHTML = `<div class="shot"><img loading="lazy" src="${{r.file}}" alt=""
+      onerror="this.parentNode.classList.add('bad'),this.remove()"></div>
     <div class="meta"><div class="nm">${{r.name || '（无名）'}}</div>
     <div class="st">${{r.street || '—'}}</div>
     <div class="dim"><code>${{r.id}}</code><span>${{r.cw}}×${{r.ch}}</span>
