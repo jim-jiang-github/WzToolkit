@@ -15,7 +15,8 @@
     wztool maps --json                            # 5. 列出全部地图（JSON）
     wztool map-export 000050000 --mobs            # 6. 导出地图（预览图带怪物）
     wztool map-minimap 000050000                  # 7. 渲染游戏内小地图
-    wztool web                                    # 8. 启动 Web 页面（人看，可选）
+    wztool web                                    # 8. 启动 Web 页面（人看，可选；
+                                                  #    双击 wztool.exe 不带参数 = 这条）
 
 坐标与文件格式与客户端一致：怪物帧 PNG 带锚点(ox,oy=脚底中心)，
 地图 map.json 含刷怪表(life)/地面(foothold)/绳梯(ladderRope)。
@@ -1790,7 +1791,11 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
     ap = build_parser()
-    args = ap.parse_args(argv)
+    # 不带任何参数 = 双击 wztool.exe 的场景：直接启动 Web 页面（等效 wztool web）
+    if not argv and len(sys.argv) == 1:
+        args = ap.parse_args(["web"])
+    else:
+        args = ap.parse_args(argv)
     if not getattr(args, "cmd", None):
         ap.print_help()
         return 0
