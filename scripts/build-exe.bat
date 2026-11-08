@@ -53,8 +53,8 @@ python -m PyInstaller --clean --noconfirm --onefile --name wztool ^
     --add-data "%ROOT%\vendor;vendor" ^
     --add-data "%ROOT%\static;static" ^
     --distpath "%ROOT%\bin" ^
-    --workpath "%ROOT%\build_wztool" ^
-    --specpath "%ROOT%\build_wztool" ^
+    --workpath "%ROOT%\.build\wztool" ^
+    --specpath "%ROOT%\.build\wztool" ^
     "%ROOT%\src\wztool.py"
 set "RC=%ERRORLEVEL%"
 

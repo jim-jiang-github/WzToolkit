@@ -28,7 +28,7 @@ wztool map-minimap 101040000        渲染游戏内小地图（miniMap canvas + 
 # 1) 编译四个原生工具（需要 VS 的 C++ 工具集；一次即可）
 #    双击 scripts\build.bat 即可；命令行等价：
 scripts\build.bat                # 全量（已有产物会跳过）
-scripts\build.bat -Clean         # 先清 bin\ obj\
+scripts\build.bat -Clean         # 先清 bin\ .build\
 scripts\build.bat -Only nxmap    # 只编一个：wz2nx / nxmap / nxmob / nxscan
 
 # 1b) 改了 src/wztool.py / static / vendor 之后，重新打包 wztool.exe
@@ -151,6 +151,7 @@ src/wztool.py    CLI 主程序（bin\wztool.exe 由 PyInstaller 打包，含 CLI
 vendor\          全部源码与依赖（NoLifeWzToNx、nxmap/nxmob/nxscan/nxchar、NoLifeNx、render_map、Mob.txt）
 bin\             原生工具编译产物（含 nxchar.exe）+ 打包好的 wztool.exe（双击它 = WebUI）
 static\cli.html  Web 页面（wztool web 服务的可视化壳，与 CLI 交互）
+.build\          编译/打包中间产物（obj\ rsp\ wztool\），可随时整个删掉
 ```
 
 来源致谢：NoLifeWzToNx（Peter Atashian / Ryan Payton，AGPL）、NoLifeNx、

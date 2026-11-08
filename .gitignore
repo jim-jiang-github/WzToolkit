@@ -8,7 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
+.build/
 develop-eggs/
 dist/
 downloads/
@@ -223,8 +223,7 @@ __marimo__/
 # WorkBuddy 本地工作数据
 .workbuddy/
 
-# PyInstaller 打包中间产物（dist/ 里按需取，成品是 bin/wztool.exe）
-build_wztool/
+# PyInstaller 打包中间产物（统一在 .build\wztool，成品是 bin/wztool.exe）
 dist/
 
 # 训练 / 挂机遗留（功能已移除，防止再生成）
