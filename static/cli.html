@@ -616,7 +616,19 @@ async function boot() {
       errBox.style.display = "block";
       errBox.textContent = "⚠ bin\\ 里缺编译好的工具 —— 先在 WzToolkit 目录跑一次 build.ps1";
     }
+    if (st.ui) watchUi(st.ui);
   } catch (e) { fail(e); }
+}
+
+/* 页面版号 = cli.html 的 mtime。改了前端（或重新打包）后，开着的旧标签页
+   15 秒内自动刷新 —— 不然会一直停在老界面上，看起来像功能「不见了」。 */
+function watchUi(rev) {
+  setInterval(async () => {
+    try {
+      const s = await api("/api/ui");
+      if (s && s.ui && s.ui !== rev) location.reload();
+    } catch (e) { /* 服务重启中，忽略这一轮 */ }
+  }, 15000);
 }
 
 async function scan() {

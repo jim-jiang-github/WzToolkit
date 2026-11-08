@@ -222,7 +222,17 @@ def mob_names() -> dict[str, str]:
 def c_state() -> dict:
     return {"workspace": str(_ws) if _ws else None,
             "tools_ok": tools_ok(),
-            "exports": str(EXPORTS)}
+            "exports": str(EXPORTS),
+            "ui": c_ui()["ui"]}
+
+
+def c_ui() -> dict:
+    """前端版本戳 = cli.html 的 mtime。页面定时比对，发现新版自动刷新
+    （否则重新打包后，开着的旧标签页会一直停在老界面上）。"""
+    try:
+        return {"ui": int((STATIC / "cli.html").stat().st_mtime)}
+    except OSError:
+        return {"ui": 0}
 
 
 def c_browse(path: str = "") -> dict:
@@ -1324,7 +1334,16 @@ def _pick(obj: dict, keys: list[str]) -> dict:
 # stdlib http.server，无第三方依赖。
 
 import http.server
+import socket
 import urllib.parse
+import urllib.request
+
+
+class _Server(http.server.ThreadingHTTPServer):
+    # Windows 上 SO_REUSEADDR 允许两个进程绑同一个端口，新旧服务各接一半请求
+    # → 页面一会儿新一会儿旧（"功能怎么不见了"）。关掉，第二个实例直接失败。
+    allow_reuse_address = False
+    daemon_threads = True
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -1383,6 +1402,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._send_file(STATIC / "cli.html", "text/html; charset=utf-8")
         elif path == "/api/state":
             self._api(c_state)
+        elif path == "/api/ui":
+            self._api(c_ui)
         elif path == "/api/job":
             self._api(c_job)
         elif path == "/api/mobs":
@@ -1483,10 +1504,42 @@ def _web_convert(names: list[str], force: bool) -> dict:
     return {"started": True, "total": len(todo), "job": _job["id"]}
 
 
+def _port_busy(port: int) -> bool:
+    with socket.socket() as s:
+        s.settimeout(0.6)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _is_wztool(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ui", timeout=1.5) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
 def cmd_web(args) -> int:
     port = args.port
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     url = f"http://127.0.0.1:{port}/"
+
+    # 已经有服务在跑：直接复用（双击第二次不会出现两个服务抢一个端口）
+    if _port_busy(port):
+        if _is_wztool(port):
+            print(f"已有 wztool 服务在跑：{url} —— 直接打开页面，不再起第二个进程。")
+        else:
+            raise CliError(f"端口 {port} 被别的程序占用了，换一个：wztool web --port 8001", 1)
+        if not args.no_open:
+            try:
+                import webbrowser
+                webbrowser.open(url)
+            except Exception:
+                pass
+        return 0
+
+    try:
+        srv = _Server(("127.0.0.1", port), _Handler)
+    except OSError as e:
+        raise CliError(f"端口 {port} 起不来（{e}）；试试 wztool web --port 8001", 1)
     print(f"wztool web 已启动: {url}  （CLI 版页面；Ctrl+C 退出）")
     if not args.no_open:
         try:
