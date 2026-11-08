@@ -309,6 +309,9 @@
             text-shadow: 0 1px 2px #000c; }
   .mm-hud .hud-cap { position: absolute; right: 5px; top: 3px; font-size: 10px;
             color: #cfe0ffb3; pointer-events: none; }
+  .mm-hud .hud-auto { position: absolute; left: 6px; bottom: 2px; font-size: 9px;
+            line-height: 11px; color: #9ecbff; opacity: .85; pointer-events: none;
+            text-shadow: 0 1px 2px #000c; }
   .mm-hud-canvas { position: absolute; background: #000; line-height: 0;
             box-shadow: inset 0 0 0 1px #00000099; }
   .mm-hud-canvas img { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
@@ -1508,7 +1511,7 @@ function mmHudHTML(d) {
   return `<div class="mm-hud" id="mm-hud" hidden data-p="on" data-n="on" data-m="on"
       style="width:${g.winW}px;height:${g.winH}px"
       title="${name}｜拖动可移动（= 客户端PosMINIMAP设置），双击回到 (0,0)">
-    <span class="hud-name">${name}</span><span class="hud-cap">${mm.cw}×${mm.ch}</span>
+    <span class="hud-name">${name}</span><span class="hud-cap">${mm.cw}×${mm.ch}</span>${mm.auto ? '<span class="hud-auto" title="源数据没有小地图，这张是工具自动生成的：黑底无背景，只标传送点">自动</span>' : ""}
     <div class="mm-hud-canvas" style="left:${g.ox}px;top:${g.oy}px;width:${mm.cw}px;height:${mm.ch}px">
       <img src="${mm.url}" alt="minimap">${dots}
     </div></div>`;
