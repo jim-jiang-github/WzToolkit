@@ -13,10 +13,10 @@
 wztool mobs / maps    列出全部怪物 / 地图（--json 全字段）
    ▼
 wztool mob-export 0100100
-   └─ exports\mobs\<id>\{逐帧 PNG, manifest.csv}   manifest 含 anim/frame/w/h/ox/oy/delay
+   └─ .exports\mobs\<id>\{逐帧 PNG, manifest.csv}   manifest 含 anim/frame/w/h/ox/oy/delay
 
 wztool map-export
-   └─ exports\maps\<id>\{map.json, img\, window.png}
+   └─ .exports\maps\<id>\{map.json, img\, window.png}
                                     map.json 含 life（刷怪表）/ foothold / ladderRope / portal；
                                     window.png = 1366×768 导出窗口（--view 选位置）
 wztool map-minimap 101040000        渲染游戏内小地图（miniMap canvas + 标记）→ PNG
@@ -63,7 +63,7 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
 - **常见顺序**：`Map.wz` 必需；想把怪物画进画面/图鉴，再转 `Mob.wz`；
   想要怪物、地图名字显示出来，顺带转 `String.wz`（nxmob / 页面都会用它）。
 - **缓存**：预览产物放 `.cache\`（可随时清：`wztool clear-cache` 或
-  接口 `POST /api/export/clear-cache`），正式导出放 `exports\`。
+  接口 `POST /api/export/clear-cache`），正式导出放 `.exports\`。
 - 转换 `Map.wz`（约 640MB）需要几分钟，页面会显示进度日志。
 
 ## 怪物素材
@@ -74,7 +74,7 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
 - 链接怪（`info/link`、自身无帧）自动顺链导出目标怪，返回 JSON 带 `link` 字段。
 - Web 页面「👾 怪物素材」：按 id/名字搜索全部怪物（可筛 BOSS / 大BOSS），
   右侧按锚点对齐展示每个动作的逐帧网格 + 动画播放器（可切动作、1x/2x/4x 缩放，
-  蓝线=站地线），一键导出到 `exports/mobs/<id>/`。
+  蓝线=站地线），一键导出到 `.exports/mobs/<id>/`。
 - 地图详情的「怪物图鉴」点卡片也可直接跳进素材查看器。
 
 ## 人物素材（角色）
@@ -91,7 +91,7 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
   所以换装不会出现头飞出去、衣服穿反这类问题。
 - Web 页面「🧑 人物素材」：左边选部位、搜素材（带缩略图），右边实时看动画
   （站立 / 走 / 警戒 / 跳 / 趴 / 爬绳，1x~8x 缩放），一键导出到
-  `exports/chars/<slug>/`（逐帧 PNG + `manifest.csv` + `look.json`）。
+  `.exports/chars/<slug>/`（逐帧 PNG + `manifest.csv` + `look.json`）。
 - CLI 等价：`wztool char-parts hair`、`wztool char-export --skin 0 --hair 00030000
   --face 00020000 --coat 01040000 --pants 01060000 --shoes 01070000`。
 - 需要工作区里有 `Character.nx`（由 `Character.wz` 转换而来，约 380MB）。

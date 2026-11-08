@@ -51,7 +51,7 @@ except ImportError:                            # pragma: no cover
 if getattr(sys, "frozen", False):
     # PyInstaller 打包后：exe 可以在项目根，也可以放在 bin\ 里
     # （bin\wztool.exe 和 nxmap.exe 这些原生工具放一起）。往上找带 vendor\ / static\
-    # 的那层当项目根，这样只有一份判断、其它路径（bin\.cache\exports）全都对。
+    # 的那层当项目根，这样只有一份判断、其它路径（bin\.cache\.exports）全都对。
     _exe_dir = Path(sys.executable).resolve().parent
     _ME = getattr(sys, "_MEIPASS", None)        # 打包进去的纯资源走临时解压目录
     ROOT = _exe_dir
@@ -66,7 +66,7 @@ else:
 
 BIN = ROOT / "bin"
 CACHE = ROOT / ".cache"
-EXPORTS = ROOT / "exports"
+EXPORTS = ROOT / ".exports"
 STATIC = ROOT / "static"
 if not STATIC.exists() and getattr(sys, "frozen", False):   # 举例：exe 单独丢在别处
     STATIC = Path(getattr(sys, "_MEIPASS", ROOT)) / "static"
@@ -785,7 +785,7 @@ def _read_manifest(outdir: Path, root: Path, url_prefix: str, pngs: list[Path]) 
 def c_mob_export(raw: str, preview: bool = False) -> dict:
     """导出一只怪的全部动画帧 PNG（逐帧，含锚点 manifest）。
 
-    preview=True 只出预览（.cache，重复调用秒回）；默认导出到 exports/mobs/。
+    preview=True 只出预览（.cache，重复调用秒回）；默认导出到 .exports/mobs/。
     链接怪（info/link）自动顺链导出目标怪。
     """
     ws = _need_ws()
@@ -1104,7 +1104,7 @@ def c_char_render(spec: dict) -> dict:
 
 
 def c_char_export(spec: dict) -> dict:
-    """导出这套选装的全部动画帧到 exports/chars/<slug>/（附 manifest.csv）。"""
+    """导出这套选装的全部动画帧到 .exports/chars/<slug>/（附 manifest.csv）。"""
     res = c_char_render(spec)
     sp = res["spec"]
     slug = "s%d_%s_%s_%s_%s" % (sp["skin"], sp["hair"] or "nohair",
@@ -2067,10 +2067,10 @@ def build_parser() -> argparse.ArgumentParser:
   2. wztool workspace "D:/path/to/nxrun"       # 设置工作区（放 .wz/.nx 的目录）
   3. wztool convert Mob.wz Map.wz String.wz    # wz → nx（需要 bin\\ 里的原生工具）
   4. wztool mobs --json                        # 怪物列表（图鉴/素材浏览）
-  5. wztool mob-export 0100100                 # → exports/mobs/0100100/（逐帧 PNG + manifest.csv）
+  5. wztool mob-export 0100100                 # → .exports/mobs/0100100/（逐帧 PNG + manifest.csv）
   6. wztool maps --json                        # 地图列表（含 life_maps=有怪的图）
   7. wztool map-info 000050000 --json          # 地图元信息（不渲染，含可导窗口范围）
-  8. wztool map-export 000050000 --mobs        # → exports/maps/000050000/（map.json + 贴图 + 窗口图）
+  8. wztool map-export 000050000 --mobs        # → .exports/maps/000050000/（map.json + 贴图 + 窗口图）
   9. wztool map-minimap 000050000              # → 游戏内小地图 PNG
 
 约定:
@@ -2139,7 +2139,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("char-export", help="按选装导出人物动画帧 PNG（默认 stand1+walk1）",
                        epilog="例：wztool char-export --hair 00030000 --face 00020000 "
                               "--coat 01040000 --pants 01060000 --shoes 01070000\n"
-                              "输出 exports/chars/<slug>/：逐帧 PNG + manifest.csv + look.json")
+                              "输出 .exports/chars/<slug>/：逐帧 PNG + manifest.csv + look.json")
     p.add_argument("--skin", type=int, default=0, help="肤色编号（0=Light，见 char-parts skin）")
     for _s in CHAR_SLOTS:
         p.add_argument(f"--{_s}", default="", metavar="ID", help=f"{_s} 素材 id")
@@ -2151,11 +2151,11 @@ def build_parser() -> argparse.ArgumentParser:
     _j(p); p.set_defaults(fn=cmd_mob_frames)
 
     p = sub.add_parser("mob-export", help="导出一只怪的全部动画帧 PNG + manifest.csv",
-                       epilog="输出: exports/mobs/<id>/（--preview 时进 .cache/mob/<id>/）。\n"
+                       epilog="输出: .exports/mobs/<id>/（--preview 时进 .cache/mob/<id>/）。\n"
                               "manifest.csv 列: mob,anim,frame,file,w,h,ox,oy,delay；\n"
                               "ox/oy=锚点(脚底中心)，把各帧对到同一画布用它。")
     p.add_argument("id", help="怪 id（链接怪自动转向目标怪）")
-    p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 exports")
+    p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 .exports")
     _j(p); p.set_defaults(fn=cmd_mob_export)
 
     p = sub.add_parser("mob-icon", help="取一只怪的 stand 帧（路径/尺寸/锚点）",
@@ -2164,12 +2164,12 @@ def build_parser() -> argparse.ArgumentParser:
     _j(p); p.set_defaults(fn=cmd_mob_icon)
 
     p = sub.add_parser("map-export", help="导出一张地图（map.json + 贴图 + 渲染预览图）",
-                       epilog="输出: exports/maps/<id>/（--preview 时进 .cache/map/<id>/）。\n"
+                       epilog="输出: .exports/maps/<id>/（--preview 时进 .cache/map/<id>/）。\n"
                               "map.json: life(刷怪表)/foothold(地面)/ladderRope(绳梯)/portal。\n"
                               "--mobs: 预览图直接把怪随机画上去（preview_mobs.png）。\n"
                               "--json 里的 life_points+overlay 可在任何客户端复现刷怪点。")
     p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
-    p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 exports")
+    p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 .exports")
     p.add_argument("--mobs", action="store_true",
                    help="预览图合成怪物（沿地面随机散布、贴地不悬空；动作状态也随机：站/走/攻击/受击/死亡等，"
                         "默认每次随机，--seed 可复现；大 BOSS 一律不合成）")
@@ -2192,11 +2192,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
     p.add_argument("--zoom", type=int, default=2, metavar="N",
                    help="canvas 放大倍数（1-8，默认 2；1x=WZ 原始尺寸）")
-    p.add_argument("--out", default="", metavar="PATH", help="输出 PNG 路径（默认 exports/maps/<id>/minimap.png）")
-    p.add_argument("--preview", action="store_true", help="数据只进预览缓存，不落 exports")
+    p.add_argument("--out", default="", metavar="PATH", help="输出 PNG 路径（默认 .exports/maps/<id>/minimap.png）")
+    p.add_argument("--preview", action="store_true", help="数据只进预览缓存，不落 .exports")
     _j(p); p.set_defaults(fn=cmd_map_minimap)
 
-    p = sub.add_parser("clear-cache", help="清空 .cache 预览缓存（exports 不动）")
+    p = sub.add_parser("clear-cache", help="清空 .cache 预览缓存（.exports 不动）")
     _j(p); p.set_defaults(fn=cmd_clear_cache)
 
     p = sub.add_parser("web", help="启动本地 Web 页面（浏览器界面，人看；程序调用请用上面的子命令）",
