@@ -43,9 +43,6 @@
   .log { background: #0b0f14; border: 1px solid var(--line); border-radius: 7px;
          padding: 8px 10px; font: 12px/1.5 Consolas, monospace; max-height: 170px;
          overflow: auto; white-space: pre-wrap; margin-top: 10px; }
-  .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
-  .tabs button { border-radius: 7px 7px 0 0; }
-  .tabs button.on { background: #0e3b35; color: var(--acc); border-color: var(--acc); }
   .cols { display: grid; grid-template-columns: 300px 1fr; gap: 14px;
           flex: 1; min-height: 0; }
   .col-left { display: flex; flex-direction: column; min-height: 0; }
@@ -56,17 +53,6 @@
   .list .it:hover { background: #161b22; }
   .list .it.on { background: #0e3b35; }
   .list .id { font: 12.5px Consolas, monospace; color: var(--acc2); }
-  .list .nm { color: var(--mut); font-size: 12.5px; overflow: hidden;
-              text-overflow: ellipsis; white-space: nowrap; }
-  /* BOSS 高亮：大 BOSS 深红底+红字，普通 BOSS 暗橙底+橙字，普通怪不变 */
-  .list .it.big  { background: linear-gradient(90deg, #3d0d14, #1b0b0f 70%); }
-  .list .it.big  .id { color: #ff8f8f; }
-  .list .it.big  .nm { color: #ff6b6b; font-weight: 600; }
-  .list .it.boss { background: linear-gradient(90deg, #2e1c05, #171008 70%); }
-  .list .it.boss .id { color: #d9a441; }
-  .list .it.boss .nm { color: #ffb454; }
-  .list .it.big.on  { background: #521019; }
-  .list .it.boss.on { background: #4a2f08; }
   .tier { font-size: 10px; line-height: 15px; padding: 0 6px; border-radius: 999px;
           border: 1px solid currentColor; white-space: nowrap; }
   .tier.big { color: #ff6b6b; background: #ff6b6b1a; }
@@ -77,32 +63,6 @@
   .filters button.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
   .detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
             min-height: 0; overflow: auto; background: #0b0f14; }
-  .frames { display: flex; flex-wrap: wrap; gap: 8px; }
-  .frames img { background: repeating-conic-gradient(#1c2128 0 25%, #10151b 0 50%) 0 0 / 16px 16px;
-                border: 1px solid var(--line); border-radius: 4px; height: 110px; }
-  /* 动画帧组：所有帧共用一个按 origin 对齐的画布，默认 1x = 客户端真实渲染尺寸 */
-  .animgrp { margin: 10px 0 4px; }
-  .animgrp .ahead { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
-  .animgrp .aname { color: var(--acc2); font: 12.5px Consolas, monospace; }
-  .fgrid { display: flex; flex-wrap: wrap; gap: 8px; }
-  .fcell { border: 1px solid var(--line); border-radius: 4px; padding: 3px;
-           background: repeating-conic-gradient(#1c2128 0 25%, #10151b 0 50%) 0 0 / 16px 16px; }
-  .fcell .fbx { position: relative; }
-  .fcell img { position: absolute; image-rendering: pixelated; }
-  .fcell .fcap { font: 11px Consolas, monospace; color: var(--mut);
-                 text-align: center; padding-top: 2px; }
-  .mb-player { margin: 8px 0 6px; padding: 8px; border: 1px solid var(--line);
-               border-radius: 8px; background: repeating-conic-gradient(#1c2128 0 25%, #10151b 0 50%) 0 0 / 16px 16px; }
-  .pchipbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-  .pstagewrap { display: flex; justify-content: center; align-items: flex-end;
-                min-height: 40px; overflow: auto; max-height: 520px; }
-  .fgrid { overflow: auto; }
-  .mb-stage { position: relative; outline: 1px dashed #2a3a46; }
-  .mb-stage img { position: absolute; image-rendering: pixelated; }
-  .mb-stage .gline { position: absolute; left: 0; right: 0; height: 1px;
-                     background: #3b82f6aa; }
-  .mb-stage .adot { position: absolute; width: 5px; height: 5px; border-radius: 50%;
-                    background: #3b82f6; box-shadow: 0 0 0 1px #0008; }
   .zoombar { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
   .zoombar button { padding: 2px 10px; }
   .zoombar button.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
@@ -286,10 +246,6 @@
   <!-- ② 浏览 / 导出 -->
   <div class="card grow">
     <h2><span class="step">2</span> 浏览 &amp; 导出</h2>
-    <div class="tabs">
-      <button id="tab-mob" class="on">怪物</button>
-      <button id="tab-map">地图</button>
-    </div>
     <div class="cols">
       <div class="col-left">
         <div style="position:relative;display:flex;gap:6px;margin-bottom:8px">
@@ -297,12 +253,7 @@
           <button id="imgsearch-btn" title="粘贴截图找地图：截一张游戏里的小地图（或整窗截图），Ctrl+V 粘贴进来直接搜">🖼 找图</button>
           <div class="optpop imgpop" id="img-pop" hidden></div>
         </div>
-        <div class="filters" id="filters">
-          <button class="flt on" data-f="all">全部</button>
-          <button class="flt" data-f="boss">BOSS</button>
-          <button class="flt" data-f="big">大 BOSS</button>
-        </div>
-        <div class="filters" id="filters-map" style="display:none">
+        <div class="filters" id="filters-map">
           <button class="flt on" data-f="all">全部</button>
           <button class="flt" data-f="mob">有怪</button>
           <button class="flt" data-f="empty">无怪</button>
@@ -311,17 +262,17 @@
         <div class="list" id="list"></div>
       </div>
       <div class="detail" id="detail">
-        <div class="muted">左侧选一个条目开始预览。<br><br>
-          · 怪物：导出全部动画帧 PNG（<b>逐帧</b>，合成训练/图鉴直接能用）<br>
-          · 地图：导出 map.json（含刷怪表 life / 地面 foothold / 绳梯）+ 全部贴图 + 渲染预览大图<br><br>
+        <div class="muted">左侧选一张地图开始预览。<br><br>
+          · 导出 map.json（含刷怪表 life / 地面 foothold / 绳梯 / 传送门）+ 全部贴图 + 渲染大图<br>
+          · 游戏窗口按客户端 1366×768 显示，导出就是这块画面；左上角是同款小地图<br>
+          · 不知道地图 id？点「🖼 找图」粘贴一张小地图截图直接反查<br><br>
           导出目录：<span id="exp-dir" class="pill"></span>
         </div>
       </div>
     </div>
   </div>
 
-  <div class="muted">工具链：NoLifeWzToNx（wz→nx 转换）· nxmap / nxmob / nxscan（导出）· render_map（地图渲染）。
-  导出的坐标与文件格式与 mxd_auto 现用的完全一致。</div>
+  <div class="muted">工具链：NoLifeWzToNx（wz→nx 转换）· nxmap / nxscan（地图导出）· render_map（地图渲染）。</div>
 </div>
 
 <div id="mapzoom" hidden>
@@ -364,14 +315,11 @@ function api(path, opts) {
 }
 function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + e.message; }
 
-let WS = null, MOBS = [], MAPS = [], TAB = "mob", TIMER = null;
-let mobSel = null, mapSel = null;
-let MOBFILT = "all";   // all | boss | big
+let WS = null, MAPS = [], TIMER = null;
+let mapSel = null;
 let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // =「显示怪物」开关：勾选后页面与导出图都把怪物合成进去
-let NOBOSS = true;      // 大BOSS(HP≥1000万)一律不合成/不标注（挂机不打，无开关）
 let NOBG = false;       // 预览/导出不画背景（back 层全跳过，画布透明）
-let YOLOSHOT = false;   // 一次性：这次 mapLoad 顺带产出 YOLO 数据集
 let DENSITY = 1;        // 怪物密度倍数（页面叠加与导出合成共用）
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
 const VPW = 1366, VPH = 768;   // 游戏窗口（= 客户端画面）= 唯一导出尺寸
@@ -506,9 +454,6 @@ async function imgDoSearch(seq) {
       el.onclick = (e) => {
         e.stopPropagation();
         $("#img-pop").hidden = true;
-        TAB = "map";
-        $("#tab-map").classList.add("on"); $("#tab-mob").classList.remove("on");
-        renderList();
         mapLoad(el.dataset.id, true);
       };
     }
@@ -651,8 +596,7 @@ async function pollJob() {
 }
 
 async function loadLists() {
-  MOBS = []; MAPS = []; LIFE = new Set();
-  try { const d = await api("/api/mobs"); MOBS = d.mobs; } catch (e) {}
+  MAPS = []; LIFE = new Set();
   try {
     const d = await api("/api/maps");
     MAPS = d.maps;
@@ -664,38 +608,19 @@ async function loadLists() {
 function renderList() {
   const q = $("#q").value.trim().toLowerCase();
   const box = $("#list");
-  $("#filters").style.display = TAB === "mob" ? "" : "none";
-  $("#filters-map").style.display = TAB === "mob" ? "none" : "";
-  if (TAB === "mob") {
-    let items = MOBS;
-    if (MOBFILT === "boss") items = items.filter((m) => m.tier === "big" || m.tier === "boss");
-    else if (MOBFILT === "big") items = items.filter((m) => m.tier === "big");
-    if (q) items = items.filter((m) => m.id.includes(q) || (m.name || "").toLowerCase().includes(q));
-    const top = items.slice(0, 400);
-    $("#listcount").textContent = `${items.length} 只`;
-    box.innerHTML = top.map((m) => {
-      const badge = m.tier === "big" ? '<span class="tier big">大BOSS</span>'
-        : m.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
-      return `<div class="it ${m.tier}" data-raw="${m.raw}" data-id="${m.id}" data-tier="${m.tier}"
-          title="Lv ${m.level} · HP ${m.hp.toLocaleString()}">
-         <span class="id">${m.id}</span><span class="nm">${m.name || ""}</span>${badge}
-       </div>`;
-    }).join("") || '<div class="muted" style="padding:10px">没有匹配（或还没转换 Mob.wz）</div>';
-  } else {
-    let items = MAPS;
-    if (MAPFILT === "mob") items = items.filter((m) => LIFE.has(m));
-    else if (MAPFILT === "empty") items = items.filter((m) => !LIFE.has(m));
-    if (q) items = items.filter((m) => m.includes(q));
-    const top = items.slice(0, 400);
-    // 有怪/无怪全都是 5262 张 = 后端没返回刷怪数据（服务还是改代码前起的进程）
-    $("#listcount").textContent =
-      (MAPFILT !== "all" && !LIFE.size && MAPS.length)
-        ? `${MAPS.length} 张 · 刷怪数据未加载 —— 重启服务后刷新页面`
-        : `${items.length} 张`;
-    box.innerHTML = top.map((m) =>
-      `<div class="it" data-id="${m}"><span class="id">${m}</span></div>`).join("")
-      || '<div class="muted" style="padding:10px">没有匹配（或还没转换 Map.wz）</div>';
-  }
+  let items = MAPS;
+  if (MAPFILT === "mob") items = items.filter((m) => LIFE.has(m));
+  else if (MAPFILT === "empty") items = items.filter((m) => !LIFE.has(m));
+  if (q) items = items.filter((m) => m.includes(q));
+  const top = items.slice(0, 400);
+  // 有怪/无怪全都是 5262 张 = 后端没返回刷怪数据（服务还是改代码前起的进程）
+  $("#listcount").textContent =
+    (MAPFILT !== "all" && !LIFE.size && MAPS.length)
+      ? `${MAPS.length} 张 · 刷怪数据未加载 —— 重启服务后刷新页面`
+      : `${items.length} 张`;
+  box.innerHTML = top.map((m) =>
+    `<div class="it" data-id="${m}"><span class="id">${m}</span></div>`).join("")
+    || '<div class="muted" style="padding:10px">没有匹配（或还没转换 Map.wz）</div>';
   box.querySelectorAll(".it").forEach((el) => {
     el.onclick = () => select(el);
   });
@@ -705,188 +630,8 @@ async function select(el) {
   $$("#list .it").forEach((x) => x.classList.remove("on"));
   el.classList.add("on");
   errBox.style.display = "none";
-  if (TAB === "mob") {
-    const meta = MOBS.find((x) => x.id === el.dataset.id) || {};
-    mobSel = {
-      raw: el.dataset.raw, id: el.dataset.id, name: el.querySelector(".nm").textContent,
-      tier: meta.tier || "normal", level: meta.level, hp: meta.hp,
-    };
-    mobLoad(mobSel, true);
-  } else {
-    mapSel = el.dataset.id;
-    mapLoad(mapSel, true);
-  }
-}
-
-async function mobLoad(m, preview) {
-  const det = $("#detail");
-  det.innerHTML = `<div class="flexline"><div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"}<br>
-    <span class="muted">正在导出动画帧 …</span></div>
-    ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}</div>`;
-  try {
-    const d = await api("/api/mob/export", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ raw: m.raw, preview }),
-    });
-    renderMobDetail(det, d, m, preview);
-    const b = $("#do-export");
-    if (b) b.onclick = () => mobLoad(m, false);
-  } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
-}
-
-/* ---- 怪物帧渲染：按 origin 对齐，默认 1x = 客户端真实渲染尺寸 ----
-   WZ 里每帧画布是各自裁剪的（28x28 / 31x28 / 46x18…），只有把 origin
-   （锚点=脚底中心）对齐到同一画布上，帧与帧才对得齐；这个画布的大小就是
-   该动画在游戏客户端里占据的真实包围盒，可以直接拿去和识别框比对。 */
-
-let mobPlayTimer = null;
-let mobPlayGen = 0;
-
-function animBox(frames) {
-  // 全部帧按锚点归零后的公共包围盒（游戏内真实 bbox）
-  let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
-  for (const f of frames) {
-    minx = Math.min(minx, -f.ox); miny = Math.min(miny, -f.oy);
-    maxx = Math.max(maxx, f.w - f.ox); maxy = Math.max(maxy, f.h - f.oy);
-  }
-  return { minx, miny, W: Math.round(maxx - minx), H: Math.round(maxy - miny) };
-}
-
-function groupAnims(frames) {
-  const g = new Map();
-  for (const f of frames) {
-    if (!g.has(f.anim)) g.set(f.anim, []);
-    g.get(f.anim).push(f);
-  }
-  for (const a of g.values()) a.sort((x, y) => x.frame - y.frame);
-  return g;
-}
-
-function cellHTML(f, box, Z) {
-  const left = (-f.ox - box.minx) * Z, top = (-f.oy - box.miny) * Z;
-  return `<figure class="fcell"><div class="fbx" style="width:${box.W * Z}px;height:${box.H * Z}px">
-      <img src="${f.url}" style="left:${left}px;top:${top}px;width:${f.w * Z}px;height:${f.h * Z}px">
-    </div><figcaption class="fcap">${f.anim}_${String(f.frame).padStart(2, "0")} ${f.w}×${f.h}</figcaption></figure>`;
-}
-
-function renderMobDetail(det, d, m, preview) {
-  const frames = d.frames || [];
-  if (!frames.length) {   // 旧缓存没有 origin 数据 → 原来的平铺展示
-    det.innerHTML = `<div class="flexline"><div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"} ·
-      ${d.count} 帧${preview ? "（预览）" : ""}</div>
-      ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}</div>
-      <div class="muted" style="margin:4px 0 8px">${d.dir}</div>
-      <div class="frames">${d.pngs.slice(0, 120).map((u) => `<img src="${u}" loading="lazy">`).join("")}</div>`;
-    return;
-  }
-  const groups = groupAnims(frames);
-  // 最大的那个动画包围盒决定可用缩放：4x 一只 400px 的 boss 会横向溢出面板
-  let maxW = 1, maxH = 1;
-  for (const fs of groups.values()) {
-    const b = animBox(fs);
-    maxW = Math.max(maxW, b.W); maxH = Math.max(maxH, b.H);
-  }
-  const zooms = [1, 2, 4].filter((z) => maxW * z <= 600 && maxH * z <= 520);
-  if (!zooms.includes(1)) zooms.unshift(1);   // 超大 boss 至少留 1x，横向滚动看
-  const tierBadge = m.tier === "big" ? '<span class="tier big">大BOSS</span>'
-    : m.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
-  const stats = (m.level != null && m.hp != null)
-    ? ` · Lv ${m.level} · HP ${Number(m.hp).toLocaleString()}` : "";
-  // 链接怪：自己没帧，后端已顺着 info/link 导出目标怪
-  const linkNote = d.link
-    ? ` <span class="pill" title="这种怪自己的 img 没有帧，客户端渲染 link 指向的怪">链接怪 → 画面同 <b>${d.link.to}</b></span>` : "";
-  det.innerHTML = `<div class="flexline"><div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"}
-      ${tierBadge}${linkNote}<br><span class="muted">${d.count} 帧${preview ? "（预览）" : ""}${stats}</span></div>
-      ${preview ? '<button class="primary mini" id="do-export">导出到 exports</button>' : ""}</div>
-    <div class="muted" style="margin:4px 0 2px">${d.dir}</div>
-    <div class="zoombar"><span class="muted">缩放：</span>
-      ${zooms.map((z) => `<button class="zb${z === 1 ? " on" : ""}" data-z="${z}">${z}x</button>`).join("")}
-      <span class="muted" id="zs-hint">1x = 客户端真实渲染尺寸${zooms.length === 1 ? "（这只太大，已限制放大）" : ""}</span></div>
-    <div class="mb-player" id="mb-player"></div>
-    <div id="mb-anim"></div>`;
-  let Z = 1;
-  const player = $("#mb-player"), animBox_ = $("#mb-anim");
-
-  const draw = () => {
-    let html = "";
-    for (const [an, fs] of groups) {
-      const box = animBox(fs);
-      html += `<div class="animgrp"><div class="ahead">
-          <span class="aname">${an}</span>
-          <span class="muted">${fs.length} 帧 · 整体包围盒 ${box.W}×${box.H}（游戏内）</span></div>
-        <div class="fgrid">${fs.map((f) => cellHTML(f, box, Z)).join("")}</div></div>`;
-    }
-    animBox_.innerHTML = html;
-    drawPlayer();
-  };
-
-  const drawPlayer = () => {
-    clearTimeout(mobPlayTimer);
-    // 默认播 stand（没有就播第一组）
-    const key = groups.has("stand") ? "stand" : groups.keys().next().value;
-    player.innerHTML = "";
-    const chips = [...groups.keys()].map((k) =>
-      `<button class="pchip${k === key ? " on" : ""}" data-a="${k}">▶ ${k}</button>`).join("");
-    const chipbar = document.createElement("div");
-    chipbar.className = "pchipbar";
-    chipbar.innerHTML = chips;
-    player.append(chipbar);
-    const wrap = document.createElement("div");
-    wrap.className = "pstagewrap";
-    const stage = document.createElement("div");
-    stage.className = "mb-stage";
-    wrap.append(stage);
-    player.append(wrap);
-    playAnim(key, stage);
-    chipbar.querySelectorAll(".pchip").forEach((c) =>
-      c.onclick = () => {
-        chipbar.querySelectorAll(".pchip").forEach((x) => x.classList.remove("on"));
-        c.classList.add("on");
-        playAnim(c.dataset.a, stage);
-      });
-  };
-
-  const playAnim = (key, stage) => {
-    clearTimeout(mobPlayTimer);
-    const gen = ++mobPlayGen;
-    const fs = groups.get(key);
-    const box = animBox(fs);
-    stage.style.width = box.W * Z + "px";
-    stage.style.height = box.H * Z + "px";
-    const img = document.createElement("img");
-    stage.innerHTML = "";
-    // 锚点（origin = 脚底中心）参考线：蓝线是站地线，蓝点是锚点像素
-    const ax = -box.minx * Z, ay = -box.miny * Z;
-    const gl = document.createElement("div");
-    gl.className = "gline";
-    gl.style.top = ay + "px";
-    const ad = document.createElement("div");
-    ad.className = "adot";
-    ad.style.left = ax - 2 + "px";
-    ad.style.top = ay - 2 + "px";
-    stage.append(gl, ad, img);
-    let i = 0;
-    const step = () => {
-      if (gen !== mobPlayGen) return;   // 换了怪/缩放/动画就停
-      const f = fs[i % fs.length];
-      img.src = f.url;
-      img.style.left = (-f.ox - box.minx) * Z + "px";
-      img.style.top = (-f.oy - box.miny) * Z + "px";
-      img.style.width = f.w * Z + "px";
-      img.style.height = f.h * Z + "px";
-      i++;
-      mobPlayTimer = setTimeout(step, f.delay > 0 ? f.delay : 120);
-    };
-    step();
-  };
-
-  det.querySelectorAll(".zoombar .zb").forEach((b) => b.onclick = () => {
-    det.querySelectorAll(".zoombar .zb").forEach((x) => x.classList.remove("on"));
-    b.classList.add("on");
-    Z = +b.dataset.z;
-    draw();
-  });
-  draw();
+  mapSel = el.dataset.id;
+  mapLoad(mapSel, true);
 }
 
 let mapData = null;    // 当前地图的导出结果（含刷怪点 / 坐标变换）
@@ -1176,9 +921,8 @@ async function mapLoad(id, preview) {
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, yolo: YOLOSHOT, no_boss: NOBOSS, no_bg: NOBG }),
+      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, no_bg: NOBG }),
     });
-    YOLOSHOT = false;
     const nKinds = (d.life_kinds || []).length;
     // 链接图：自己的 img 是空的，客户端渲染 link 指向的那张 —— 后端已顺着导出目标图
     const linkNote = d.link
@@ -1193,12 +937,11 @@ async function mapLoad(id, preview) {
         ${nKinds ? `<button class="mini" id="dex-btn" title="这只地图出现的怪物，带立绘的图鉴">👾 怪物图鉴（${nKinds} 种）</button>` : ""}
         <button class="mini" id="opt-btn" title="显示叠加层与导出选项">⚙ 显示设置</button>
         <button class="primary mini" id="do-export" title="导出 WebUI 里游戏窗口当前显示的那块画面（1366×768，拖动画布到哪就导哪）→ exports/maps/&lt;id&gt;/window.png；是否带怪物由「显示怪物」开关决定，不显示背景同样生效">导出窗口</button>
-        <button class="mini" id="do-yolo" title="按游戏窗口当前显示的画面产出 YOLO 训练集（exports/yolo/：图片+标注 txt+classes.txt+dataset.yaml；每只怪一个框、绳/梯各一类）">导出YOLO</button>
       </div>
       <div class="optpop" id="opt-pop" hidden>
         <div class="optgrp">叠加显示（只影响画面标注，不影响导出图）</div>
         ${d.life_count ? `        <label title="红点=每只怪的刷新位置（大BOSS品红、BOSS橙）。勾选「显示怪物」后页面与导出图都会把怪物合成进去（是否带怪物跟着这个开关走）"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
-        <label title="把怪物按巡逻区间随机摆进画面（与导出合成同款规则）：页面上这样显示，导出/导出YOLO 的图里也同样带怪物"><input type="checkbox" id="mob-toggle" ${EXPORTMOBS ? "checked" : ""} /> 显示怪物</label>` : ""}
+        <label title="把怪物按巡逻区间随机摆进画面（与导出合成同款规则）：页面上这样显示，导出图里也同样带怪物"><input type="checkbox" id="mob-toggle" ${EXPORTMOBS ? "checked" : ""} /> 显示怪物</label>` : ""}
         ${d.footholds ? `<label title="青色线=每一段可站立的地面（foothold，含斜坡）；看人物能走哪、哪里会掉下去、怎么跳到下个平台"><input type="checkbox" id="fh-toggle" /> 显示地面（${d.footholds}）</label>` : ""}
         <label title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上"><input type="checkbox" id="nobg-toggle" ${NOBG ? "checked" : ""} /> 不显示背景</label>
         ${nRope ? `<label title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" /> 显示绳索（${nRope}）</label>` : ""}
@@ -1207,14 +950,14 @@ async function mapLoad(id, preview) {
         <label title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${MMSHOW.p ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
         <label><input type="checkbox" id="mm-n" ${MMSHOW.n ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>
         <label><input type="checkbox" id="mm-m" ${MMSHOW.m ? "checked" : ""} /> 刷怪点 ${d.minimap.mobs.length}</label>` : ""}
-        ${d.life_count ? `<div class="optgrp">导出选项（影响导出 / 导出YOLO）</div>
+        ${d.life_count ? `<div class="optgrp">导出选项</div>
         <label title="怪物密度倍数：影响页面叠加与导出合成的怪物数量；是否带怪物由上面的「显示怪物」开关决定" style="cursor:default">密度
           <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:110px" />
           ×<b id="density-val">${DENSITY}</b></label>` : ""}
       </div>
       ${nKinds ? `<div class="dexpop" id="dex-pop" hidden></div>` : ""}
       </div>
-      <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}${d.yolo ? ` · <b>YOLO ${d.yolo.boxes} 框已导出</b>（${d.yolo.image}）` : ""}</div>
+      <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
       <div class="gvbox" id="gvbox">
         <div class="gameview" id="gameview">
           <span class="mapwrap" id="mapsel">
@@ -1294,11 +1037,9 @@ async function mapLoad(id, preview) {
     }
     // 导出 = 游戏窗口里的 1366×768 画面（不重建面板，结果展示在 #export-out）
     const b = $("#do-export");
-    if (b) b.onclick = () => exportWindow(false);
-    const yb = $("#do-yolo");
-    if (yb) yb.onclick = () => exportWindow(true);
+    if (b) b.onclick = () => exportWindow();
     // 悬停导出按钮时高亮游戏窗口：导出范围 = 这块画面
-    for (const id of ["do-export", "do-yolo"]) {
+    for (const id of ["do-export"]) {
       const el = $("#" + id), box = $("#gvbox");
       if (!el || !box) continue;
       el.onmouseenter = () => box.classList.add("exp-hint");
@@ -1307,8 +1048,8 @@ async function mapLoad(id, preview) {
   } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
 }
 
-/* 把游戏窗口导出成 1366×768（yolo=true 时顺带产出 YOLO 训练集） */
-async function exportWindow(yolo) {
+/* 把游戏窗口导出成 1366×768（就是页面上看到的这块画面） */
+async function exportWindow() {
   if (!mapData || !mapRef) return;
   const ov = mapData.overlay;
   const view = VIEWPOS ? { x: ov.minx + VIEWPOS.x, y: ov.miny + VIEWPOS.y } : null;
@@ -1318,11 +1059,10 @@ async function exportWindow(yolo) {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: mapRef.id, preview: false, mobs: EXPORTMOBS,
-                             density: DENSITY, yolo, no_boss: NOBOSS, no_bg: NOBG, view }),
+                             density: DENSITY, no_bg: NOBG, view }),
     });
     const w = d.window || {};
     let html = `✅ 已导出<b>当前视窗</b> <b>${w.w || 1366}×${w.h || 768}</b>（左上角世界坐标 ${w.x},${w.y}）→ <code>${d.preview_path}</code>`;
-    if (d.yolo) html += `<br>YOLO: ${d.yolo.boxes} 框 · 图 ${d.yolo.image} · 数据集 ${d.yolo.dataset}`;
     html += `<img class="expthumb" src="${d.preview_url}?v=${Date.now()}">`;
     out.innerHTML = html;
   } catch (e) { out.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
@@ -1375,7 +1115,6 @@ function bindFilters(sel, setter) {
     renderList();
   };
 }
-bindFilters("#filters", (f) => MOBFILT = f);
 bindFilters("#filters-map", (f) => MAPFILT = f);
 /* 地图放大查看器事件 */
 $$("#mapzoom .zb").forEach((b) => b.onclick = () => { MZZ = b.dataset.z === "fit" ? "fit" : +b.dataset.z; mzApply(); });
@@ -1383,8 +1122,6 @@ $("#mz-close").onclick = mzClose;
 $("#mz-scroll").onclick = (e) => { if (e.target === e.currentTarget) mzClose(); };
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#mapzoom").hidden) mzClose(); });
 window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); });
-$("#tab-mob").onclick = () => { TAB = "mob"; $("#tab-mob").classList.add("on"); $("#tab-map").classList.remove("on"); renderList(); };
-$("#tab-map").onclick = () => { TAB = "map"; $("#tab-map").classList.add("on"); $("#tab-mob").classList.remove("on"); renderList(); };
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#ws-browse") && !e.target.closest("#ws-menu")) $("#ws-menu").hidden = true;
 });
