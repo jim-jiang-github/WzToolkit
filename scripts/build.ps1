@@ -128,7 +128,7 @@ if (-not (Test-Path $lz4obj)) { throw 'missing lz4.obj - build wz2nx first' }
 $nl_inc = @((Join-Path $NLNX_INC 'NoLifeNx'), $NLNX_INC) + $VC_INC
 $nl_lib = @($NLNX_LIB) + $VC_LIB
 
-foreach ($t in @('nxmap','nxmob','nxscan')) {
+foreach ($t in @('nxmap','nxmob','nxscan','nxchar')) {
     if (-not (Want $t)) { continue }
     $objdir = Join-Path $OBJ $t; New-Item -ItemType Directory -Force -Path $objdir | Out-Null
     $inc_t = $nl_inc
