@@ -197,13 +197,66 @@ static int cmd_life() {
     return 0;
 }
 
+// ---------------------------------------------------------------- 小地图索引
+// `nxmap mini-all <outdir>`：单进程遍历 Map/Map0..9 所有地图，把 miniMap/canvas
+// 导成 <outdir>/<id>.png，并写 <outdir>/index.json（id → 坐标换算参数 + 地图名）。
+// 只碰 miniMap 子树（NoLifeNx 按需解码），比整图导出快几个数量级 —— 给 Web 端
+// 的「粘贴截图找地图」做模板匹配索引用。
+static int cmd_mini_all(const std::string & outdir) {
+    fs::create_directories(outdir);
+    nl::nx::load_all();
+    std::ostringstream idx;
+    idx << "{\n";
+    bool first = true;
+    int maps = 0, with_mm = 0;
+    for (const char * shard : {"Map0","Map1","Map2","Map3","Map4","Map5","Map6","Map7","Map8","Map9"}) {
+        nl::node sh = nl::nx::Map["Map"][shard];
+        if (!sh) continue;
+        for (auto it = sh.begin(); it != sh.end(); ++it) {
+            nl::node img = *it;
+            std::string id = img.name();
+            if (id.size() > 4 && id.compare(id.size() - 4, 4, ".img") == 0)
+                id = id.substr(0, id.size() - 4);
+            ++maps;
+            nl::node mm = img["miniMap"];
+            nl::node canvas = mm ? mm["canvas"] : nl::node();
+            nl::bitmap bmp = canvas ? canvas.get_bitmap() : nl::bitmap();
+            if (!bmp) continue;
+            ++with_mm;
+            if (!write_png(bmp, (fs::path(outdir) / (id + ".png")).string())) continue;
+            if (!first) idx << ",\n";
+            first = false;
+            const MapName & mn = map_name_of(id);
+            idx << "  \"" << json_escape(id) << "\": {"
+                << "\"cw\":" << bmp.width() << ",\"ch\":" << bmp.height()
+                << ",\"centerX\":" << jget_int(mm, "centerX")
+                << ",\"centerY\":" << jget_int(mm, "centerY")
+                << ",\"mag\":" << jget_int(mm, "mag")
+                << ",\"name\":\"" << json_escape(mn.name) << "\""
+                << ",\"street\":\"" << json_escape(mn.street) << "\"}";
+            if ((with_mm % 200) == 0)
+                std::cerr << "minimaps: " << with_mm << "\r";
+        }
+    }
+    idx << "\n}\n";
+    std::ofstream f(fs::path(outdir) / "index.json");
+    f << idx.str();
+    f.close();
+    std::cerr << "\nmaps scanned: " << maps << ", minimap exported: " << with_mm << "\n";
+    std::cout << "mini-all -> " << outdir << "  minimaps=" << with_mm << "\n";
+    return 0;
+}
+
 int main(int argc, char ** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "life") == 0)
         return cmd_life();
+    if (argc >= 3 && std::strcmp(argv[1], "mini-all") == 0)
+        return cmd_mini_all(argv[2]);
     if (argc < 3) {
         std::cerr << "usage:\n"
                      "  nxmap <mapid> <outdir>\n"
-                     "  nxmap life        # 全库刷怪表 CSV（mapid,mapname,type,id,x,y,fh,mobtime）\n";
+                     "  nxmap life        # 全库刷怪表 CSV（mapid,mapname,type,id,x,y,fh,mobtime）\n"
+                     "  nxmap mini-all <outdir>  # 全库小地图索引（<id>.png + index.json）\n";
         return 1;
     }
     const std::string mapid = argv[1];
