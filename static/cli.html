@@ -122,6 +122,16 @@
   .browse div { padding: 4px 10px; cursor: pointer; border-radius: 5px; }
   .browse div:hover { background: #0e3b35; }
   .mapimg { display: block; image-rendering: pixelated; cursor: zoom-in; }
+  /* 地图「显示设置」弹窗：工具栏只留按钮，开关都收进来 */
+  .optpop { position: absolute; right: 0; top: 32px; z-index: 30; width: 320px;
+            background: var(--panel); border: 1px solid var(--acc); border-radius: 8px;
+            padding: 8px 14px 10px; box-shadow: 0 8px 30px #000a; }
+  .optpop[hidden] { display: none; }
+  .optpop .optgrp { color: var(--mut); font-size: 11.5px; margin: 7px 0 2px; }
+  .optpop label { display: flex; align-items: center; gap: 6px; padding: 2.5px 0;
+                  cursor: pointer; font-size: 13px; }
+  .optpop label:hover { color: var(--acc); }
+  .optpop label[title] { cursor: help; }
   /* 游戏窗口：CSS 固定 1366×768（= 客户端画面 = 导出尺寸）。DPI 由浏览器自然处理：
      系统 125% 缩放时它在屏幕上的物理大小 = 1366×1.25，和真实客户端窗口完全一致。
      里面的地图是"画布"，按住拖动平移（不缩放）；小地图 HUD 贴在窗口上，所以不动。 */
@@ -386,6 +396,11 @@ window.addEventListener("mouseup", () => {
   VPDRAG = null;
   const gv = $("#gameview");
   if (gv) gv.classList.remove("dragging");
+});
+/* 点「显示设置」弹窗外面 = 关闭（按钮自己的 onclick 已 stopPropagation，不会误关） */
+document.addEventListener("click", (e) => {
+  const op = $("#opt-pop");
+  if (op && !op.hidden && !e.target.closest("#opt-pop")) op.hidden = true;
 });
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
@@ -989,25 +1004,31 @@ async function mapLoad(id, preview) {
     const pvUrl = d.preview_url + (d.mobs ? `?v=${Date.now()}` : "");
     const nRope = (d.ladder_rope || []).filter((s) => !s[3]).length;
     const nLad = (d.ladder_rope || []).filter((s) => s[3]).length;
-    det.innerHTML = `<div class="flexline"><div>地图 <b>${id}</b>${linkNote} ·
+    det.innerHTML = `<div class="flexline" style="position:relative"><div>地图 <b>${id}</b>${linkNote} ·
       ${d.preview.w}×${d.preview.h}${preview ? "（预览）" : ""}</div>
       <div class="row">
-        ${d.life_count ? `<label class="muted" style="cursor:pointer"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
-        <label class="muted" style="cursor:pointer"><input type="checkbox" id="mob-toggle" /> 显示怪物</label>` : ""}
-        ${d.footholds ? `<label class="muted" style="cursor:pointer" title="青色线=每一段可站立的地面（foothold，含斜坡）；看人物能走哪、哪里会掉下去、怎么跳到下个平台"><input type="checkbox" id="fh-toggle" /> 显示地面（${d.footholds}）</label>` : ""}
-        <label class="muted" style="cursor:pointer" title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上"><input type="checkbox" id="nobg-toggle" ${NOBG ? "checked" : ""} /> 不显示背景</label>
-        ${nRope ? `<label class="muted" style="cursor:pointer" title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" /> 显示绳索（${nRope}）</label>` : ""}
-        ${nLad ? `<label class="muted" style="cursor:pointer" title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" /> 显示梯子（${nLad}）</label>` : ""}
-        ${d.life_count ? `<label class="muted" style="cursor:pointer" title="勾选后导出/预览的图片会直接把怪物画进去"><input type="checkbox" id="export-mobs" ${EXPORTMOBS ? "checked" : ""} /> 导出带怪物</label>
-        <label class="muted" style="cursor:pointer" title="不合成/标注大BOSS（HP≥1000万，挂机升级不打）；高阶怪(BOSS标记但血量低)照常出现；只刷大BOSS的图会得到没有怪的图"><input type="checkbox" id="export-noboss" ${NOBOSS ? "checked" : ""} /> 不含大BOSS</label>
-        <label class="muted" title="怪物密度倍数：影响页面叠加与导出合成的怪物数量" style="cursor:default">密度
-          <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:80px" />
-          ×<b id="density-val">${DENSITY}</b></label>` : ""}
-        ${d.minimap ? `<label class="muted" style="cursor:pointer" title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${MMSHOW.p ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
-        <label class="muted" style="cursor:pointer"><input type="checkbox" id="mm-n" ${MMSHOW.n ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>
-        <label class="muted" style="cursor:pointer"><input type="checkbox" id="mm-m" ${MMSHOW.m ? "checked" : ""} /> 刷怪点 ${d.minimap.mobs.length}</label>` : ""}
+        <button class="mini" id="opt-btn" title="显示叠加层与导出选项">⚙ 显示设置</button>
         <button class="primary mini" id="do-export" title="把游戏窗口里的 1366×768 画面导出到 exports/maps/&lt;id&gt;/window.png（导出带怪物/不含大BOSS/不显示背景同样生效）">导出窗口</button>
         <button class="mini" id="do-yolo" title="产出 YOLO 训练集（exports/yolo/：图片+标注 txt+classes.txt+dataset.yaml；每只怪一个框、绳/梯各一类；窗口位置/密度/导出带怪设置同样生效）">导出YOLO</button>
+      </div>
+      <div class="optpop" id="opt-pop" hidden>
+        <div class="optgrp">叠加显示（只影响画面标注，不影响导出图）</div>
+        ${d.life_count ? `<label title="红点=每只怪的刷新位置（大BOSS品红、BOSS橙）"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
+        <label><input type="checkbox" id="mob-toggle" /> 显示怪物</label>` : ""}
+        ${d.footholds ? `<label title="青色线=每一段可站立的地面（foothold，含斜坡）；看人物能走哪、哪里会掉下去、怎么跳到下个平台"><input type="checkbox" id="fh-toggle" /> 显示地面（${d.footholds}）</label>` : ""}
+        <label title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上"><input type="checkbox" id="nobg-toggle" ${NOBG ? "checked" : ""} /> 不显示背景</label>
+        ${nRope ? `<label title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" /> 显示绳索（${nRope}）</label>` : ""}
+        ${nLad ? `<label title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" /> 显示梯子（${nLad}）</label>` : ""}
+        ${d.minimap ? `<div class="optgrp">小地图 HUD 标记</div>
+        <label title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${MMSHOW.p ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
+        <label><input type="checkbox" id="mm-n" ${MMSHOW.n ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>
+        <label><input type="checkbox" id="mm-m" ${MMSHOW.m ? "checked" : ""} /> 刷怪点 ${d.minimap.mobs.length}</label>` : ""}
+        ${d.life_count ? `<div class="optgrp">导出选项（影响导出 / 导出YOLO）</div>
+        <label title="勾选后导出/预览的图片会直接把怪物画进去"><input type="checkbox" id="export-mobs" ${EXPORTMOBS ? "checked" : ""} /> 导出带怪物</label>
+        <label title="不合成/标注大BOSS（HP≥1000万，挂机升级不打）；高阶怪(BOSS标记但血量低)照常出现；只刷大BOSS的图会得到没有怪的图"><input type="checkbox" id="export-noboss" ${NOBOSS ? "checked" : ""} /> 不含大BOSS</label>
+        <label title="怪物密度倍数：影响页面叠加与导出合成的怪物数量" style="cursor:default">密度
+          <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:110px" />
+          ×<b id="density-val">${DENSITY}</b></label>` : ""}
       </div></div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}${d.yolo ? ` · <b>YOLO ${d.yolo.boxes} 框已导出</b>（${d.yolo.image}）` : ""}</div>
       <div style="margin-bottom:6px">${kinds || '<span class="muted">这张图没有怪物</span>'}</div>
@@ -1033,6 +1054,8 @@ async function mapLoad(id, preview) {
     vpPlace();
     const img = $("#mapsel img.mapimg");
     if (img && !img.complete) img.onload = () => vpPlace();   // 图加载完再按真实尺寸夹一次
+    const ob = $("#opt-btn"), op = $("#opt-pop");
+    if (ob && op) ob.onclick = (e) => { e.stopPropagation(); op.hidden = !op.hidden; };
     const mo = $("#mz-open");
     if (mo) mo.onclick = (e) => {
       e.preventDefault();
