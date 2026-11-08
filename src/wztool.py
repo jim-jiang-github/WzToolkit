@@ -458,7 +458,8 @@ def _cn_workdir(data: Path) -> Path:
 def c_convert_cn(log) -> dict:
     """国服官方客户端 → .cache\\cn\\：Map.nx（10 个地图分片 + Back/Tile/Obj 全量位图）
     + String.nx（地图名等中文表）+ Mob.nx（全部怪物素材——怪物的 canvas 分片本身
-    就带完整帧结构）。产物是经典布局，nxmap/nxmob/nxscan 直接可用。
+    就带完整帧结构）+ Character.nx（人物光板/头发/脸/装备部位，供 nxchar 用）。
+    产物是经典布局，nxmap/nxmob/nxscan/nxchar 直接可用。
     Map.nx 要解压并重压约 9 GB 位图，一次大约 10~40 分钟（做完永久缓存）。"""
     data = _cn_mode()
     if data is None:
@@ -469,6 +470,7 @@ def c_convert_cn(log) -> dict:
     map_nx = CN_NX / "Map.nx"
     str_nx = CN_NX / "String.nx"
     mob_nx = CN_NX / "Mob.nx"
+    char_nx = CN_NX / "Character.nx"
     todo = []
     if not str_nx.exists():
         todo.append("String.nx")
@@ -476,6 +478,8 @@ def c_convert_cn(log) -> dict:
         todo.append("Map.nx")
     if not mob_nx.exists():
         todo.append("Mob.nx")
+    if not char_nx.exists():
+        todo.append("Character.nx")
     if not todo:
         return {"started": False, "total": 0,
                 "message": "国服数据已转换完成（.cache\\cn）"}
@@ -498,6 +502,18 @@ def c_convert_cn(log) -> dict:
         m = [("", f"Mob/_Canvas/_Canvas_00{n}.wz") for n in range(1, 6)]
         log("  Mob.nx 全量转换（约 10 GB 位图，15 分钟上下）…")
         _cn_wz2nx(work, "Mob/_Canvas/_Canvas_000.wz", str(mob_nx), m, "", None, log)
+    if "Character.nx" in todo:
+        # 人物：基卷 Character_000.wz 是光板身体/头（000020XX / 000120XX）的结构，
+        # 位图在同级 _Canvas；每个部位目录（Hair/Face/Coat/…）各有一份结构卷
+        # <P>_000.wz + <P>/_Canvas 位图卷。全部以空名/部位名挂到 .nx 根，得到
+        # 经典布局 Character/<id>.img 与 Character/<P>/<id>.img，nxchar 直接可用。
+        m = [("_Canvas", "Character/_Canvas/_Canvas_000.wz")]
+        for p in ("Hair", "Face", "Cap", "Coat", "Pants", "Longcoat",
+                  "Shoes", "Glove", "Cape", "Shield", "Weapon"):
+            m += [(p, f"Character/{p}/{p}_000.wz"),
+                  (f"{p}/_Canvas", f"Character/{p}/_Canvas/_Canvas_000.wz")]
+        log("  Character.nx 全量转换（约 1.8 GB 位图，10 分钟上下）…")
+        _cn_wz2nx(work, "Character/Character_000.wz", str(char_nx), m, "", None, log)
     return {"started": True, "total": len(todo), "done": len(todo)}
 
 
@@ -721,6 +737,9 @@ def c_maps() -> dict:
 # 找出它对应哪张地图。索引由 `nxmap mini-all` 一次建好（.cache/minimap/）。
 
 MMIDX = CACHE / "minimap"
+MMAUTO = MMIDX / "auto.meta.json"      # 兜底小地图的完成戳（绑 Map.nx mtime）
+_mmauto_lock = threading.Lock()
+_mmauto: dict = {"running": False, "done": 0, "total": 0}
 _mmjob: dict = {"running": False, "error": ""}
 _mm_lock = threading.Lock()
 
@@ -1252,8 +1271,9 @@ _char_cache: dict = {"lists": {}}
 def _char_nx() -> Path:
     ch = _nx_dir() / "Character.nx"
     if not ch.exists():
-        raise CliError("没有 Character.nx —— 人物素材的国服转换还没支持"
-                       "（classic 工作区先转 Character.wz）", 1)
+        hint = "国服数据源还没转换 Character.nx（工作区卡片点「转换」会一起生成）" \
+            if _cn_mode() is not None else "先转换 Character.wz"
+        raise CliError(f"没有 Character.nx —— {hint}", 1)
     return ch
 
 
