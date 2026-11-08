@@ -790,7 +790,7 @@ def _minimap_ready() -> bool:
 
 
 def _minimap_build() -> None:
-    """后台线程：mini-all 全库导小地图（先写临时目录，成功后整体替换）。
+    """后台线程：mini-all 全库导小地图（直接写 .cache/minimap，旧目录整体挪进 trash）。
 
     这一步是「一次性解压」：把 Map.nx 里 14000+ 张 canvas 全部落成 PNG 目录，
     之后所有找图都只读这个目录 + 签名索引，不再碰 23GB 的 Map.nx。
@@ -799,58 +799,59 @@ def _minimap_build() -> None:
     if not _mm_lock.acquire(blocking=False):
         return
     nxdir = _nx_dir()
-    tmp = CACHE / "minimap.building"
-    try:                                       # 旧索引的张数当进度条分母（重建前读）
+    # 进度条分母：优先用旧索引的张数（14449）；全新安装时退而用全库传送门表的
+    # 行数估（略大于真实张数，进度停在 ~95% 再跳满，总比无限转圈强）。
+    total = 0
+    try:
         total = len(json.loads((MMIDX / "index.json").read_text(encoding="utf-8")))
     except Exception:                          # noqa: BLE001
-        total = 0
-    _mmjob.update(running=True, error="", done=0, total=total)
+        try:
+            with open(CACHE / "portals.csv", encoding="utf-8") as f:
+                total = sum(1 for _ in f) - 1
+        except Exception:                       # noqa: BLE001
+            total = 0
+    prog = MMIDX / "_progress"
+    _mmjob.update(running=True, error="", done=0, total=total, stage="清理旧索引")
     try:
-        if tmp.exists():
-            drop_dir(tmp)
-        # 用 Popen 而不是 _run：nxmap 的进度是 "\rminimaps: N"，逐字符解析出来
-        # 喂给进度条，否则界面在解压 14000 张的一分钟里完全没反馈。
+        # 旧目录整体改名扔进 .cache/trash（目录 rename 是元数据操作，1.4 万文件也是秒级），
+        # 绝不逐文件删——实测 19 个/秒还会被批量删除保护拦下。
+        if MMIDX.exists():
+            drop_dir(MMIDX)
+            _mmjob["stage"] = "清理旧索引"
+        MMIDX.mkdir(parents=True, exist_ok=True)
+        _mmjob["stage"] = "解压小地图"
+        # 进度不走进程输出：Windows 下管道是全缓冲的，进度会憋到进程退出才吐出来
+        # （std::cerr / fprintf+fflush / os.read 全试过一样）。nxmap 自己写计数文件。
         proc = subprocess.Popen(
-            [str(BIN / "nxmap.exe"), "mini-all", str(tmp)], cwd=str(nxdir),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
-        buf = b""
-        last = -1
-        while True:
-            # 必须用 os.read：管道上的 read(n) 会等读满 n 字节才返回，
-            # 而 nxmap 的进度是 "\r" 结尾的小片段，用 read 会全憋到进程结束。
-            chunk = os.read(proc.stdout.fileno(), 4096)
-            if not chunk:
-                break
-            buf += chunk
-            while True:
-                idxs = [x for x in (buf.find(b"\r"), buf.find(b"\n")) if x >= 0]
-                if not idxs:
-                    break
-                line, buf = buf[:min(idxs)], buf[min(idxs) + 1:]
-                m = re.search(rb"minimaps:/s*(/d+)", line)
-                if m:
-                    n = int(m.group(1))
-                    if n != last:
-                        last = n
-                        _mmjob["done"] = n
-                m = re.search(rb"maps scanned:/s*(/d+)", line)
-                if m and not _mmjob.get("total"):
-                    _mmjob["total"] = int(m.group(1))
+            [str(BIN / "nxmap.exe"), "mini-all", str(MMIDX)], cwd=str(nxdir),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        while proc.poll() is None:
+            try:
+                _mmjob["done"] = int(prog.read_text(encoding="utf-8").strip() or 0)
+            except (OSError, ValueError):
+                pass
+            time.sleep(0.3)
         rc = proc.wait()
         if rc != 0:
             raise RuntimeError(f"nxmap mini-all 失败（exit {rc}）")
-        (tmp / "index.meta.json").write_text(
+        if _mmjob["total"] > 0:
+            _mmjob["done"] = _mmjob["total"]        # 收尾：进度条先补满再进签名阶段
+        (MMIDX / "index.meta.json").write_text(
             json.dumps({"mtime": (nxdir / "Map.nx").stat().st_mtime}), encoding="utf-8")
-        if MMIDX.exists():
-            drop_dir(MMIDX)
-        tmp.rename(MMIDX)
+        if total <= 0:
+            _mmjob["total"] = _mmjob["done"]
         _mmjob["error"] = ""
         # 顺手把识别索引也建好（每张小地图压成 64×64 签名），
         # 这样第一次「找图」不用再等一次全库解码
-        _thumbs_build()
+        _thumbs_build(progress=True)
+        _mmjob["stage"] = ""
     except Exception as exc:                   # noqa: BLE001
         _mmjob["error"] = str(exc)
     finally:
+        try:
+            prog.unlink()
+        except OSError:
+            pass
         _mmjob["running"] = False
         _mm_lock.release()
 
@@ -1020,7 +1021,7 @@ def _thumb_one(mid: str):
     return t.astype(np.int8)
 
 
-def _thumbs_build() -> None:
+def _thumbs_build(progress: bool = False) -> None:
     """把每张小地图压成 64×64 归一化签名，存 thumbs.npz（约 59MB）。
 
     cv2.imread 解码时会放 GIL，8 线程并行比串行快 4 倍左右
@@ -1035,8 +1036,16 @@ def _thumbs_build() -> None:
         index = json.loads((MMIDX / "index.json").read_text(encoding="utf-8"))
         mapnx = _nx_dir() / "Map.nx"
         mids = sorted(index.keys())
+        if progress:                       # 14k 张解码要一分钟，不能让进度条空转
+            _mmjob["stage"] = "生成找图签名"
+            _mmjob["done"] = 0
+            _mmjob["total"] = len(mids)
         with ThreadPoolExecutor(max_workers=8) as ex:
-            rows = list(ex.map(_thumb_one, mids))
+            rows = []
+            for i, t in enumerate(ex.map(_thumb_one, mids)):
+                rows.append(t)
+                if progress and (i % 200) == 0:
+                    _mmjob["done"] = i + 1
         arr = np.zeros((len(mids), THUMB_PX, THUMB_PX), dtype=np.int8)
         kept: list[str] = []
         for mid, t in zip(mids, rows):
@@ -1049,6 +1058,8 @@ def _thumbs_build() -> None:
             np.savez_compressed(f, mids=np.array(kept), thumbs=arr[:len(kept)],
                                 mtime=np.float64(mapnx.stat().st_mtime))
         os.replace(tmp, THUMBS_NPZ)
+        if progress:
+            _mmjob["done"] = _mmjob["total"]
         _thumbs["state"] = None        # 让下一次 _thumbs_load 重新读盘
     except Exception:                  # noqa: BLE001
         pass                           # 建不出来就退回「全库逐张扫」的老路径
@@ -1178,21 +1189,59 @@ def c_map_imgsearch(image: str) -> dict:
 
 # 导出 ----------------------------------------------------------------------
 
+_trash_busy = threading.Event()
+
+
+def _trash_sweep_async() -> None:
+    """后台尽力清空 .cache/trash（rd /s /q 比逐文件删快几十倍；被拦就留到下次）。"""
+    if _trash_busy.is_set():
+        return
+
+    def run() -> None:
+        _trash_busy.set()
+        try:
+            trash = CACHE / "trash"
+            if not trash.exists():
+                return
+            for c in list(trash.iterdir()):
+                try:
+                    if os.name == "nt":
+                        subprocess.run(["cmd", "/c", "rd", "/s", "/q", str(c)],
+                                       capture_output=True)
+                    elif c.is_dir():
+                        for f in sorted(c.rglob("*"), key=lambda x: len(x.parts), reverse=True):
+                            f.rmdir() if f.is_dir() else f.unlink()
+                        c.rmdir()
+                    else:
+                        c.unlink()
+                except BaseException:
+                    pass
+        finally:
+            _trash_busy.clear()
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def drop_dir(p: Path) -> None:
-    """清空一个导出/缓存目录，不依赖删除成功：删不掉就整体挪进 .cache/trash/。"""
+    """清空一个导出/缓存目录：**整体改名挪进 .cache/trash/**，秒级完成。
+
+    Windows 上逐文件 rglob+unlink 1.4 万个文件实测只有 19 个/秒（十几分钟），
+    还会被环境的批量删除保护拦下——所以必须走目录 rename 这条无损快路，
+    真正的删除交给后台线程用系统 rd /s /q 去啃。
+    """
     if not p.exists():
         return
-    try:
-        for c in sorted(p.rglob("*"), key=lambda x: len(x.parts), reverse=True):
-            c.rmdir() if c.is_dir() else c.unlink()
-        p.rmdir()
-        return
-    except BaseException:
-        pass
     try:
         trash = CACHE / "trash"
         trash.mkdir(parents=True, exist_ok=True)
         p.rename(trash / f"{p.name}-{int(time.time() * 1000)}")
+        _trash_sweep_async()
+        return
+    except BaseException:
+        pass
+    try:
+        if os.name == "nt":
+            subprocess.run(["cmd", "/c", "rd", "/s", "/q", str(p)], capture_output=True)
     except BaseException:
         pass
 
@@ -2563,13 +2612,18 @@ def c_progress() -> dict:
     except Exception:                          # noqa: BLE001
         ready = False
     return {
-        "convert": {"running": _job["running"], "done": _job["done"],
+        # 重新转换时 _job 会一直 running，但真正的进度在 minimap / auto 段，
+        # 这里让位，否则前端会卡在「转换 0/0」的无限转圈上。
+        "convert": {"running": _job["running"]
+                    and not (_mmjob["running"] or _mmauto["running"]),
+                    "done": _job["done"],
                     "total": _job["total"], "stage": _job.get("stage", ""),
                     "error": _job["error"]},
         "minimap": {"running": _mmjob["running"], "done": _mmjob.get("done", 0),
-                    "total": _mmjob.get("total", 0), "error": _mmjob["error"]},
+                    "total": _mmjob.get("total", 0), "stage": _mmjob.get("stage", ""),
+                    "error": _mmjob["error"]},
         "auto": {"running": _mmauto["running"], "done": _mmauto["done"],
-                 "total": _mmauto["total"]},
+                 "total": _mmauto["total"], "stage": "兜底小地图（1×1 退化图）"},
         "ready": ready,
     }
 
