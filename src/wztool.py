@@ -343,6 +343,11 @@ def c_workspace(path: str) -> dict:
     if cn is not None:
         map_nx = CN_NX / "Map.nx"
         mob_nx = CN_NX / "Mob.nx"
+        char_nx = CN_NX / "Character.nx"
+        skill_nx = CN_NX / "Skill.nx"
+
+        def gb(f: Path) -> float:
+            return round(f.stat().st_size / 1073741824, 1) if f.exists() else 0
         return {"workspace": str(p),
                 "cn": {"data": str(cn),
                        "nx_dir": str(CN_NX),
@@ -350,7 +355,11 @@ def c_workspace(path: str) -> dict:
                        "map_nx_mb": round(map_nx.stat().st_size / 1048576) if map_nx.exists() else 0,
                        "string_nx": (CN_NX / "String.nx").exists(),
                        "mob_nx": mob_nx.exists(),
-                       "mob_nx_gb": round(mob_nx.stat().st_size / 1073741824, 1) if mob_nx.exists() else 0}}
+                       "mob_nx_gb": gb(mob_nx),
+                       "char_nx": char_nx.exists(),
+                       "char_nx_gb": gb(char_nx),
+                       "skill_nx": skill_nx.exists(),
+                       "skill_nx_gb": gb(skill_nx)}}
     files = []
     for f in sorted(p.glob("*.wz")):
         if f.name.endswith(".segs"):           # 下载器没下完的标记
@@ -471,6 +480,7 @@ def c_convert_cn(log) -> dict:
     str_nx = CN_NX / "String.nx"
     mob_nx = CN_NX / "Mob.nx"
     char_nx = CN_NX / "Character.nx"
+    skill_nx = CN_NX / "Skill.nx"
     todo = []
     if not str_nx.exists():
         todo.append("String.nx")
@@ -480,6 +490,8 @@ def c_convert_cn(log) -> dict:
         todo.append("Mob.nx")
     if not char_nx.exists():
         todo.append("Character.nx")
+    if not skill_nx.exists():
+        todo.append("Skill.nx")
     if not todo:
         return {"started": False, "total": 0,
                 "message": "国服数据已转换完成（.cache\\cn）"}
@@ -514,6 +526,23 @@ def c_convert_cn(log) -> dict:
                   (f"{p}/_Canvas", f"Character/{p}/_Canvas/_Canvas_000.wz")]
         log("  Character.nx 全量转换（约 1.8 GB 位图，10 分钟上下）…")
         _cn_wz2nx(work, "Character/Character_000.wz", str(char_nx), m, "", None, log)
+    if "Skill.nx" in todo:
+        # 技能：结构与位图都在 8 个 canvas 分片里（Skill.wz 本体是空壳）。基卷选
+        # 000，其余 7 片空名挂载并进 .nx 根；MobSkill/Dragon/AbyssExpedition/
+        # Roguelike 子卷同理（怪物技能/龙/远征/肉鸽技能特效）。产物根下直接是
+        # <职业>.img，nxskill 直接可用。
+        m = [("", f"Skill/_Canvas/_Canvas_00{n}.wz") for n in range(1, 8)]
+        m += [("", "Skill/MobSkill/_Canvas/_Canvas_000.wz"),
+              ("", "Skill/Dragon/_Canvas/_Canvas_000.wz"),
+              ("", "Skill/AbyssExpedition/Skill/_Canvas/_Canvas_000.wz"),
+              ("", "Skill/AbyssExpedition/Skill/skill_archive/_Canvas/_Canvas_000.wz"),
+              ("", "Skill/Roguelike/Skill/_Canvas/_Canvas_000.wz"),
+              ("", "Skill/Roguelike/Skill/Redmoon/_Canvas/_Canvas_000.wz"),
+              ("", "Skill/Roguelike/Buff/_Canvas/_Canvas_000.wz"),
+              ("", "Skill/Roguelike/Buff/Redmoon/_Canvas/_Canvas_000.wz")]
+        log("  Skill.nx 全量转换（约 15 GB 位图，30 分钟上下）…")
+        _cn_wz2nx(work, "Skill/_Canvas/_Canvas_000.wz", str(skill_nx), m, "", None, log,
+                  timeout=7200)
     return {"started": True, "total": len(todo), "done": len(todo)}
 
 
@@ -1628,6 +1657,94 @@ def c_char_export(spec: dict) -> dict:
             "box": res["box"], "spec": sp}
 
 
+# ---------------------------------------------------------------- 技能特效
+
+_skill_cache: dict = {"lists": {}}
+
+
+def _skill_nx() -> Path:
+    sk = _nx_dir() / "Skill.nx"
+    if not sk.exists():
+        hint = "国服数据源还没转换 Skill.nx（工作区卡片点「转换」会一起生成）" \
+            if _cn_mode() is not None else "先转换 Skill.wz"
+        raise CliError(f"没有 Skill.nx —— {hint}", 1)
+    return sk
+
+
+def c_skill_jobs() -> dict:
+    """技能职业卷列表：{jobs:[{id,skills}]}（按 mtime 缓存）。"""
+    sk = _skill_nx()
+    key = f"jobs:{sk.stat().st_mtime}"
+    if key not in _skill_cache["lists"]:
+        out = _run(["nxskill", "jobs"], sk.parent, timeout=300)
+        i = out.find("{")
+        data = json.loads(out[i:]) if i >= 0 else {"jobs": []}
+        _skill_cache["lists"][key] = data["jobs"]
+        if len(_skill_cache["lists"]) > 60:
+            _skill_cache["lists"].clear()
+            _skill_cache["lists"][key] = data["jobs"]
+    return {"jobs": _skill_cache["lists"][key]}
+
+
+def c_skill_list(job: str) -> dict:
+    """一个职业卷下的全部技能：{items:[{id,name,icon,effects:[...]}]}。"""
+    sk = _skill_nx()
+    job = re.sub(r"\D", "", str(job))[:6]
+    if not job:
+        raise CliError("职业卷 id 不合法", 2)
+    key = f"{job}:{sk.stat().st_mtime}"
+    if key not in _skill_cache["lists"]:
+        out = _run(["nxskill", "list", job], sk.parent, timeout=300)
+        i = out.find("{")
+        data = json.loads(out[i:]) if i >= 0 else {"items": []}
+        _skill_cache["lists"][key] = data["items"]
+        if len(_skill_cache["lists"]) > 60:
+            _skill_cache["lists"].clear()
+            _skill_cache["lists"][key] = data["items"]
+    return {"job": job, "items": _skill_cache["lists"][key]}
+
+
+def c_skill_export(job: str, skill: str) -> dict:
+    """导出一个技能的全部特效序列（帧 PNG + manifest.json），缓存到 .cache/skill/。"""
+    sk = _skill_nx()
+    job = re.sub(r"\D", "", str(job))[:6]
+    skill = re.sub(r"\D", "", str(skill))[:8]
+    if not job or not skill:
+        raise CliError("技能 id 不合法", 2)
+    outdir = CACHE / "skill" / job / skill
+    if not (outdir / "manifest.json").exists():
+        if outdir.exists():
+            drop_dir(outdir)
+        outdir.parent.mkdir(parents=True, exist_ok=True)
+        _run(["nxskill", "export", "--job", job, "--skill", skill, str(outdir)],
+             sk.parent, timeout=600)
+    mf = outdir / "manifest.json"
+    if not mf.exists():
+        raise CliError("这个技能没有任何特效帧", 1)
+    man = json.loads(mf.read_text(encoding="utf-8"))
+    for seq in man.get("seqs") or []:
+        for fr in seq.get("frames") or []:
+            fr["url"] = "/preview/skill/" + job + "/" + skill + "/" + fr["img"]
+    for i, ic in enumerate(man.get("icons") or []):
+        man["icons"][i] = "/preview/skill/" + job + "/" + skill + "/" + ic
+    return {"job": job, "id": skill, "dir": str(outdir), "manifest": man}
+
+
+def c_skill_export_to(job: str, skill: str) -> dict:
+    """把一个技能的全部特效（帧 PNG + manifest.json）导出到 .exports/skills/。"""
+    res = c_skill_export(job, skill)
+    outdir = EXPORTS / "skills" / res["job"] / res["id"]
+    if outdir.exists():
+        drop_dir(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    files = []
+    for p in sorted(Path(res["dir"]).iterdir()):
+        if p.is_file():
+            (outdir / p.name).write_bytes(p.read_bytes())
+            files.append(p.name)
+    return {"dir": str(outdir), "count": len(files), "files": files}
+
+
 def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
                    density: int = 1, no_bg: bool = False):
     """把这张图的怪随机贴到地面上，产出 preview_mobs.png（脚底落在 foothold 地面）。
@@ -2253,6 +2370,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_mob_maps, path[len("/api/mob/"):-len("/maps")])
         elif path == "/api/maps":
             self._api(c_maps)
+        elif path == "/api/skill/jobs":
+            self._api(c_skill_jobs)
+        elif path == "/api/skill/list":
+            qs = urllib.parse.parse_qs(u.query)
+            self._api(c_skill_list, (qs.get("job") or [""])[0])
+        elif path == "/api/skill/frames":
+            qs = urllib.parse.parse_qs(u.query)
+            self._api(c_skill_export, (qs.get("job") or [""])[0],
+                      (qs.get("skill") or [""])[0])
         elif path == "/api/char/parts":
             qs = urllib.parse.parse_qs(u.query)
             self._api(c_char_parts, (qs.get("cat") or ["hair"])[0])
@@ -2298,6 +2424,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_mob_export, str(b.get("raw") or ""), bool(b.get("preview")))
         elif path == "/api/char/render":
             self._api(c_char_render, b)
+        elif path == "/api/skill/export":
+            self._api(c_skill_export_to, str(b.get("job") or ""),
+                      str(b.get("skill") or ""))
         elif path == "/api/char/export":
             self._api(c_char_export, b)
         elif path == "/api/map/export":
@@ -2321,7 +2450,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_map_imgsearch, str(img))
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
-        elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps", "/api/char/parts") \
+        elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps",
+                      "/api/char/parts", "/api/skill/jobs", "/api/skill/list",
+                      "/api/skill/frames") \
                 or path.startswith("/api/mob/icon/") \
                 or (path.startswith("/api/mob/") and path.endswith("/maps")):
             self._send_json(405, {"detail": f"Method Not Allowed: {path} 是 GET 接口"})
@@ -2337,7 +2468,10 @@ def _web_convert(names: list[str], force: bool) -> dict:
         data = _cn_mode()
         todo_names = [n for n, p in
                       (("String.nx", CN_NX / "String.nx"),
-                       ("Map.nx", CN_NX / "Map.nx")) if not p.exists()]
+                       ("Map.nx", CN_NX / "Map.nx"),
+                       ("Mob.nx", CN_NX / "Mob.nx"),
+                       ("Character.nx", CN_NX / "Character.nx"),
+                       ("Skill.nx", CN_NX / "Skill.nx")) if not p.exists()]
         if not todo_names:
             return {"started": False, "message": "国服数据已转换完成（.cache\\cn）"}
         cn_todo = todo_names
