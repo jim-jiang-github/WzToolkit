@@ -992,8 +992,32 @@ def _char_layer_xy(L: dict, A: dict) -> tuple[int, int]:
     return -ox, -oy
 
 
-def _char_rank(L: dict) -> int:
+CHAR_CLIMB = {"rope", "ladder"}          # 客户端 Stance::is_climbing
+
+# 爬绳/爬梯时客户端 CharLook::draw 走的是完全另一条分支（背对镜头）：
+#   body → gloves → shoes → pants → top/mail → cape → head → 头发背面 → 帽子 → 背盾 → 背武器
+# 两个关键差异：**不画脸**（所以不该有眼睛）、**后发画在头之后**（盖住后脑）。
+_CLIMB_RANK = (("body", 10), ("glove", 11), ("shoes", 12),
+               ("pants", 15), ("top", 17), ("mail", 17), ("cape", 18),
+               ("head", 20), ("cap", 22), ("hair", 24),
+               ("shield", 26), ("weapon", 28))
+
+
+def _climb_rank(z: str, slot: str) -> int:
+    key = (z or slot or "").lower()
+    for name, rank in _CLIMB_RANK:
+        if name in key:
+            return rank
+    return 50
+
+
+def _char_rank(L: dict, action: str = "") -> int:
+    if action in CHAR_CLIMB:
+        return _climb_rank(L.get("z") or "", L.get("slot") or "")
     return CHAR_ZRANK.get(L.get("z") or "", CHAR_ZSLOT.get(L.get("slot"), 50))
+
+
+CHAR_DUMP_V = 2                          # dump 结构/规则有变时+1，旧缓存自动失效
 
 
 def _char_dump(spec: dict) -> tuple[dict, Path, str]:
@@ -1006,7 +1030,9 @@ def _char_dump(spec: dict) -> tuple[dict, Path, str]:
     jf = outdir / "layers.json"
     if jf.exists():
         try:
-            return json.loads(jf.read_text(encoding="utf-8")), outdir, key
+            data = json.loads(jf.read_text(encoding="utf-8"))
+            if data.get("v") == CHAR_DUMP_V:      # 旧规则（缺脸层/错层序）的缓存直接重来
+                return data, outdir, key
         except Exception:                     # noqa: BLE001
             pass
 
@@ -1021,6 +1047,7 @@ def _char_dump(spec: dict) -> tuple[dict, Path, str]:
     if i < 0:
         raise CliError("nxchar 没有输出（Character.nx 可能不完整）", 1)
     data = json.loads(out[i:])
+    data["v"] = CHAR_DUMP_V
     jf.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return data, outdir, key
 
@@ -1038,10 +1065,16 @@ def c_char_render(spec: dict) -> dict:
     plans = []
     for fr in frames:
         A = fr.get("anchors") or {}
+        climbing = fr.get("action") in CHAR_CLIMB
+        has_back_hair = any((L.get("z") or "") == "backHair" for L in fr.get("layers") or [])
         layers = []
         for L in fr.get("layers") or []:
+            if climbing and L.get("slot") == "face":
+                continue                      # 背对镜头：脸不画（客户端 climb 分支没有 face）
+            if climbing and has_back_hair and (L.get("z") or "") == "backHairBelowCap":
+                continue                      # 无帽时只画整块后发，半盖版重叠会显双色边
             x, y = _char_layer_xy(L, A)
-            layers.append((_char_rank(L), x, y, outdir / L["img"], L))
+            layers.append((_char_rank(L, fr.get("action") or ""), x, y, outdir / L["img"], L))
         layers.sort(key=lambda t: t[0])       # 稳定排序：同层保持 dump 顺序
         plans.append((fr, layers))
 
