@@ -2,15 +2,18 @@
 rem =====================================================================
 rem  WzToolkit 原生工具编译 —— 双击本文件即可（4 个 C++ 工具 -> bin\）
 rem
+rem  本文件按 GBK(cp936) 保存，别用 UTF-8 另存，否则 cmd 里中文全是乱码。
 rem  .ps1 在资源管理器里双击只会打开编辑器（默认执行策略禁止运行），
 rem  所以包一层 bat：绕过执行策略、切到项目根目录、透传参数，
 rem  结束时停住窗口方便看结果。
 rem
 rem    build.bat              -> 全量编译（已是最新的会跳过）
-rem    build.bat -Clean       -> 先清空 bin\ 和 obj\
+rem    build.bat -Clean       -> 先清空 bin\ 和 .build\
 rem    build.bat -Only nxmap  -> 只编一个：wz2nx / nxmap / nxmob / nxscan
 rem =====================================================================
 setlocal
+rem 固定控制台代码页，保证下面的中文在任何终端里都能正常显示
+chcp 936 >nul 2>nul
 cd /d "%~dp0.."
 set "ROOT=%CD%"
 

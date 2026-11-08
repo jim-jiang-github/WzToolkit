@@ -13,7 +13,7 @@ param([string]$Only = '', [switch]$Clean)
 
 $ErrorActionPreference = 'Stop'
 
-# 脚本活在本项目 scripts\ 下，项目根是它的上一层
+# This script lives in <root>\scripts, so the project root is its parent.
 $ROOT = Split-Path -Parent $PSScriptRoot
 $OBJ  = Join-Path $ROOT '.build\obj'
 $RSP  = Join-Path $ROOT '.build\rsp'
