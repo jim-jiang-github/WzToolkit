@@ -4,8 +4,8 @@
   1) 给"AI 生成的地图"出预览图，肉眼验收；
   2) 反推原版地图的贴砖/分层规则（对比原版地图渲染结果）。
 
-绘制顺序（与客户端一致）：
-  back(front=0)  →  layer0..layer7 [ tile(z=0) + obj(z 升序) ]  →  back(front=1)
+绘制顺序（与客户端 TilesObjs::draw 一致）：
+  back(front=0)  →  layer0..layer7 [ obj(z 升序) → tile(zM 升序) ]  →  back(front=1)
 """
 from __future__ import annotations
 
@@ -238,15 +238,13 @@ def render_map(map_json: dict, img_dirs: list[str], opts: RenderOpts | None = No
                 _blit(canvas, tex, x0, y0, x1, y1)
 
     # --- 8 层 ---
+    # 顺序照客户端 TilesObjs::draw（mxd_client_source Gameplay/MapleMap）：
+    # 每层先画 obj（z 升序，multimap 等键保持原顺序），再画 tile（zM 升序）。
+    # 也就是 tile（地面）永远盖在同层 obj 上面——obj 底边插进地面才和游戏一致。
     layers = map_json.get("layers", [])
     for li in range(8):
         L = layers[li] if li < len(layers) else {}
-        for t in L.get("tile", []):
-            tex = store.get(t.get("img", ""))
-            if tex is None:
-                continue
-            place(tex, float(t["x"]) - t.get("ox", 0), float(t["y"]) - t.get("oy", 0), int(t.get("a", 255)))
-        objs = sorted(L.get("obj", []), key=lambda o: (int(o.get("z", 0)), int(o.get("no", 0))))
+        objs = sorted(L.get("obj", []), key=lambda o: int(o.get("z", 0)))
         for o in objs:
             tex = store.get(o.get("img", ""))
             if tex is None:
@@ -255,6 +253,12 @@ def render_map(map_json: dict, img_dirs: list[str], opts: RenderOpts | None = No
             if int(o.get("f", 0)) == 1:
                 im = im.transpose(Image.FLIP_LEFT_RIGHT)
             place(im, float(o["x"]) - o.get("ox", 0), float(o["y"]) - o.get("oy", 0), int(o.get("a", 255)))
+        tiles = sorted(L.get("tile", []), key=lambda t: int(t.get("z", 0)))
+        for t in tiles:
+            tex = store.get(t.get("img", ""))
+            if tex is None:
+                continue
+            place(tex, float(t["x"]) - t.get("ox", 0), float(t["y"]) - t.get("oy", 0), int(t.get("a", 255)))
 
     # --- 前景背景（front=1）---
     for b in ([] if opts.no_bg else map_json.get("back", [])):

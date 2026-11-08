@@ -146,8 +146,9 @@ def _render_preview(map_dir: Path, out_png: Path, no_bg: bool = False) -> dict:
     小图，没有 meta 就当作过期重渲（否则会一直命中旧的小图）。
     """
     from PIL import Image
+    # v2 = 渲染器改成客户端顺序（同层 obj 先画、tile 后画）；换渲染逻辑要 bump
     meta = out_png.with_suffix(".meta")
-    stamp = f"native-1x no_bg={int(bool(no_bg))}\n"
+    stamp = f"native-1x-v2 no_bg={int(bool(no_bg))}\n"
     fresh = out_png.exists() and meta.exists() and meta.read_text() == stamp
     if not fresh:
         import tempfile
