@@ -359,6 +359,10 @@ struct wztonx {
     std::string prefix;
     // Convert only imgs with this name (matches the WZ img name, e.g. "login.img").
     std::string only;
+    // Local patch: comma-separated --only values, and an explicit output path so
+    // we can convert straight from a read-only install dir.
+    std::vector<std::string> only_list;
+    std::string outpath;
     // Logical WZ name of the main volume (Map_000.wz -> "Map"). WZ-internal paths
     // are rooted at it, but our NX tree is not, so it has to be stripped.
     std::string root_name;
@@ -901,9 +905,14 @@ struct wztonx {
     }
     void img(id_t img_node, int32_t size) {
         auto p = in.tell();
-        if (!only.empty() && strings[nodes[img_node].name] != only) {
-            in.seek(p + size);
-            return;
+        if (!only_list.empty()) {
+            bool hit = false;
+            for (auto const & o : only_list)
+                if (strings[nodes[img_node].name] == o) { hit = true; break; }
+            if (!hit) {
+                in.seek(p + size);
+                return;
+            }
         }
         auto n1 = in.read<uint8_t>();
         if (n1 == 1) {
@@ -1544,6 +1553,7 @@ struct wztonx {
         nxfilename = u8string(filename.replace_extension(".nx"));
     }
     void convert_file() {
+        if (!outpath.empty()) nxfilename = outpath;
         if (!std::ifstream{wzfilename}.is_open()) { return; }
         std::cout << wzfilename << " -> " << nxfilename << std::endl;
         parse_file();
@@ -1597,15 +1607,26 @@ Converts WZ files into NX files
     std::vector<std::string> mountspecs;
     std::string prefix;
     std::string only;
+    std::string outpath;
+    std::vector<std::string> onlylist;
     for (auto i = 0u; i < args.size();) {
         if (args[i] == "--mount" && i + 1 < args.size()) {
             mountspecs.push_back(args[i + 1]);
+            args.erase(args.begin() + i, args.begin() + i + 2);
+        } else if (args[i] == "--out" && i + 1 < args.size()) {
+            outpath = args[i + 1];
             args.erase(args.begin() + i, args.begin() + i + 2);
         } else if (args[i] == "--prefix" && i + 1 < args.size()) {
             prefix = args[i + 1];
             args.erase(args.begin() + i, args.begin() + i + 2);
         } else if (args[i] == "--only" && i + 1 < args.size()) {
             only = args[i + 1];
+            std::string acc;
+            for (char c : only) {
+                if (c == ',') { if (!acc.empty()) onlylist.push_back(acc); acc.clear(); }
+                else acc += c;
+            }
+            if (!acc.empty()) onlylist.push_back(acc);
             args.erase(args.begin() + i, args.begin() + i + 2);
         } else {
             ++i;
@@ -1645,6 +1666,8 @@ Converts WZ files into NX files
                 conv.mounts = mountspecs;
                 conv.prefix = prefix;
                 conv.only = only;
+                conv.only_list = onlylist;
+                conv.outpath = outpath;
                 conv.convert_file();
             }
         } catch (std::exception const & e) {
