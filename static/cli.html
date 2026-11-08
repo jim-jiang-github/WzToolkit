@@ -126,6 +126,61 @@
                 overflow: hidden; text-overflow: ellipsis; }
   .dexit .did { font: 11px Consolas, monospace; color: var(--acc2); }
   .dexit .tier { margin-left: 3px; }
+  .dexit { cursor: pointer; }
+  .dexit:hover { border-color: var(--acc); background: #0e3b3522; }
+  /* 怪物素材查看器（全屏弹窗）：左列表 + 右帧播放/逐帧表 */
+  #mobdex { position: fixed; inset: 0; background: #000d; z-index: 998;
+            display: flex; flex-direction: column; }
+  #mobdex[hidden] { display: none; }
+  #mobdex .md-bar { padding: 8px 14px; display: flex; gap: 10px; align-items: center;
+                    flex-wrap: wrap; background: var(--panel);
+                    border-bottom: 1px solid var(--line); }
+  #mobdex .md-bar input[type=text] { min-width: 240px; padding: 5px 10px; }
+  #mobdex .md-body { flex: 1; min-height: 0; display: grid;
+                     grid-template-columns: 290px 1fr; gap: 12px; padding: 12px 14px; }
+  #mobdex .md-list { border: 1px solid var(--line); border-radius: 8px; overflow: auto;
+                     background: #0b0f14; }
+  #mobdex .md-list .it { padding: 5px 10px; cursor: pointer;
+                         border-bottom: 1px solid #1c2128; display: flex; gap: 8px;
+                         align-items: baseline; }
+  #mobdex .md-list .it:hover { background: #161b22; }
+  #mobdex .md-list .it.on { background: #0e3b35; }
+  #mobdex .md-list .id { font: 12.5px Consolas, monospace; color: var(--acc2); }
+  #mobdex .md-list .nm { color: var(--mut); font-size: 12.5px; overflow: hidden;
+                         text-overflow: ellipsis; white-space: nowrap; }
+  #mobdex .md-list .it.big { background: linear-gradient(90deg, #3d0d14, #1b0b0f 70%); }
+  #mobdex .md-list .it.big .id { color: #ff8f8f; }
+  #mobdex .md-list .it.big .nm { color: #ff6b6b; font-weight: 600; }
+  #mobdex .md-list .it.boss { background: linear-gradient(90deg, #2e1c05, #171008 70%); }
+  #mobdex .md-list .it.boss .id { color: #d9a441; }
+  #mobdex .md-list .it.boss .nm { color: #ffb454; }
+  #mobdex .md-list .it.big.on { background: #521019; }
+  #mobdex .md-list .it.boss.on { background: #4a2f08; }
+  #mobdex .md-detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+                       overflow: auto; background: #0b0f14; min-height: 0; }
+  /* 动画帧组：所有帧共用一个按 origin 对齐的画布，默认 1x = 客户端真实渲染尺寸 */
+  .animgrp { margin: 10px 0 4px; }
+  .animgrp .ahead { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
+  .animgrp .aname { color: var(--acc2); font: 12.5px Consolas, monospace; }
+  .fgrid { display: flex; flex-wrap: wrap; gap: 8px; overflow: auto; }
+  .fcell { border: 1px solid var(--line); border-radius: 4px; padding: 3px;
+           background: repeating-conic-gradient(#1c2128 0 25%, #10151b 0 50%) 0 0 / 16px 16px; }
+  .fcell .fbx { position: relative; }
+  .fcell img { position: absolute; image-rendering: pixelated; }
+  .fcell .fcap { font: 11px Consolas, monospace; color: var(--mut);
+                 text-align: center; padding-top: 2px; }
+  .mb-player { margin: 8px 0 6px; padding: 8px; border: 1px solid var(--line);
+               border-radius: 8px;
+               background: repeating-conic-gradient(#1c2128 0 25%, #10151b 0 50%) 0 0 / 16px 16px; }
+  .pchipbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .pstagewrap { display: flex; justify-content: center; align-items: flex-end;
+                min-height: 40px; overflow: auto; max-height: 480px; }
+  .mb-stage { position: relative; outline: 1px dashed #2a3a46; }
+  .mb-stage img { position: absolute; image-rendering: pixelated; }
+  .mb-stage .gline { position: absolute; left: 0; right: 0; height: 1px;
+                     background: #3b82f6aa; }
+  .mb-stage .adot { position: absolute; width: 5px; height: 5px; border-radius: 50%;
+                    background: #3b82f6; box-shadow: 0 0 0 1px #0008; }
   /* 游戏窗口：CSS 固定 1366×768（= 客户端画面 = 导出尺寸）。DPI 由浏览器自然处理：
      系统 125% 缩放时它在屏幕上的物理大小 = 1366×1.25，和真实客户端窗口完全一致。
      里面的地图是"画布"，按住拖动平移（不缩放）；小地图 HUD 贴在窗口上，所以不动。 */
@@ -245,7 +300,10 @@
 
   <!-- ② 浏览 / 导出 -->
   <div class="card grow">
-    <h2><span class="step">2</span> 浏览 &amp; 导出</h2>
+    <h2><span class="step">2</span> 浏览 &amp; 导出
+      <span style="flex:1"></span>
+      <button class="mini" id="md-open" title="怪物素材：按 id/名字浏览全部怪物，看每个动作的逐帧动画，导出逐帧 PNG（带锚点 manifest）">👾 怪物素材</button>
+    </h2>
     <div class="cols">
       <div class="col-left">
         <div style="position:relative;display:flex;gap:6px;margin-bottom:8px">
@@ -291,6 +349,28 @@
       <img class="mz-img" id="mz-img" alt="">
       <span class="lifedots" id="mz-dots"></span>
     </span>
+  </div>
+</div>
+
+<!-- 怪物素材查看器：逐帧动画 + 导出（Esc 关闭） -->
+<div id="mobdex" hidden>
+  <div class="md-bar">
+    <b style="color:var(--acc)">👾 怪物素材</b>
+    <div class="filters" style="margin:0">
+      <button class="md-flt on" data-f="all">全部</button>
+      <button class="md-flt" data-f="boss">BOSS</button>
+      <button class="md-flt" data-f="big">大BOSS</button>
+    </div>
+    <input type="text" id="md-q" placeholder="搜索 id 或名字 …" />
+    <span class="muted" id="md-count"></span>
+    <span style="flex:1"></span>
+    <button class="primary mini" id="md-export" disabled
+            title="把这只怪的全部动作帧逐帧导出成 PNG + manifest.csv（锚点/延迟）→ exports/mobs/&lt;id&gt;/">⬇ 导出到 exports</button>
+    <button id="md-close">✕ 关闭 (Esc)</button>
+  </div>
+  <div class="md-body">
+    <div class="md-list" id="md-list"></div>
+    <div class="md-detail" id="md-detail"><span class="muted">左侧选一只怪：看全部动作帧（按锚点对齐、可播放），导出逐帧 PNG 素材。</span></div>
   </div>
 </div>
 
@@ -636,6 +716,252 @@ async function select(el) {
 
 let mapData = null;    // 当前地图的导出结果（含刷怪点 / 坐标变换）
 const MOBICON = {};    // kind id -> icon 数据（url/w/h/ox/oy），跨地图复用缓存
+
+/* ================= 怪物素材查看器 ==================
+   浏览全部怪物（id/名字/BOSS 档位）→ 看每个动作的逐帧动画（按 origin 对齐，
+   1x = 客户端真实渲染尺寸）→ 导出逐帧 PNG + manifest.csv。 */
+
+const MD = { all: null, filt: "all", sel: null, data: null, zoom: 1,
+             timer: null, gen: 0, loading: false };
+
+async function mdEnsureList() {
+  if (MD.all) return MD.all;
+  const d = await api("/api/mobs");
+  MD.all = d.mobs || [];
+  return MD.all;
+}
+
+async function mdOpen(kindId) {
+  const box = $("#mobdex");
+  box.hidden = false;
+  errBox.style.display = "none";
+  if (!MD.all) {
+    $("#md-list").innerHTML = '<span class="muted" style="padding:10px;display:block">读取怪物列表…</span>';
+    try { await mdEnsureList(); }
+    catch (e) {
+      $("#md-list").innerHTML = `<span class="miss" style="padding:10px;display:block">读取失败：${e.message}</span>`;
+      return;
+    }
+  }
+  mdRenderList();
+  if (kindId) {
+    const m = MD.all.find((x) => x.id === String(kindId).replace(/^0+/, "") || x.id === String(kindId));
+    if (m) mdSelect(m);
+  }
+}
+
+function mdRenderList() {
+  const q = ($("#md-q").value || "").trim().toLowerCase();
+  let items = MD.all || [];
+  if (MD.filt === "boss") items = items.filter((m) => m.tier === "big" || m.tier === "boss");
+  else if (MD.filt === "big") items = items.filter((m) => m.tier === "big");
+  if (q) items = items.filter((m) => m.id.includes(q) ||
+                                    (m.name || "").toLowerCase().includes(q));
+  $("#md-count").textContent = `${items.length} 只`;
+  const top = items.slice(0, 600);
+  const el = $("#md-list");
+  el.innerHTML = top.map((m) => {
+    const badge = m.tier === "big" ? '<span class="tier big">大BOSS</span>'
+      : m.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
+    return `<div class="it ${m.tier}" data-id="${m.id}" title="Lv ${m.level} · HP ${Number(m.hp || 0).toLocaleString()}">
+       <span class="id">${m.id}</span><span class="nm">${m.name || ""}</span>${badge}</div>`;
+  }).join("") || '<div class="muted" style="padding:10px">没有匹配（或还没转换 Mob.wz）</div>';
+  el.querySelectorAll(".it").forEach((it) => {
+    const m = (MD.all || []).find((x) => x.id === it.dataset.id);
+    it.classList.toggle("on", MD.sel && MD.sel.id === it.dataset.id);
+    it.onclick = () => { if (m) mdSelect(m); };
+  });
+}
+
+async function mdSelect(m) {
+  MD.sel = m;
+  MD.zoom = 1;
+  $$("#md-list .it").forEach((x) => x.classList.toggle("on", x.dataset.id === m.id));
+  const ex = $("#md-export");
+  if (ex) ex.disabled = false;
+  const det = $("#md-detail");
+  det.innerHTML = `<div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"}<br>
+    <span class="muted">正在导出动画帧 …</span></div>`;
+  try {
+    const d = await api("/api/mob/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw: m.raw || m.id, preview: true }),
+    });
+    if (MD.sel !== m) return;              // 期间又点了别的怪
+    MD.data = d;
+    mdRenderDetail(det, m);
+  } catch (e) {
+    det.innerHTML = `<div>怪物 <b>${m.id}</b> · ${m.name || ""}</div>
+      <span class="miss">取帧失败：${e.message}</span>`;
+  }
+}
+
+/* 全部帧按锚点归零后的公共包围盒（= 该动作在游戏里的真实 bbox） */
+function mdAnimBox(frames) {
+  let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+  for (const f of frames) {
+    minx = Math.min(minx, -f.ox); miny = Math.min(miny, -f.oy);
+    maxx = Math.max(maxx, f.w - f.ox); maxy = Math.max(maxy, f.h - f.oy);
+  }
+  return { minx, miny, W: Math.round(maxx - minx), H: Math.round(maxy - miny) };
+}
+
+function mdGroupAnims(frames) {
+  const g = new Map();
+  for (const f of frames) {
+    if (!g.has(f.anim)) g.set(f.anim, []);
+    g.get(f.anim).push(f);
+  }
+  for (const a of g.values()) a.sort((x, y) => x.frame - y.frame);
+  return g;
+}
+
+function mdCellHTML(f, box, Z) {
+  const left = (-f.ox - box.minx) * Z, top = (-f.oy - box.miny) * Z;
+  return `<figure class="fcell" style="margin:0"><div class="fbx"
+      style="width:${box.W * Z}px;height:${box.H * Z}px">
+      <img src="${f.url}" style="left:${left}px;top:${top}px;width:${f.w * Z}px;height:${f.h * Z}px">
+    </div><figcaption class="fcap">${f.anim}_${String(f.frame).padStart(2, "0")} ${f.w}×${f.h}</figcaption></figure>`;
+}
+
+function mdRenderDetail(det, m) {
+  const d = MD.data || {};
+  const frames = d.frames || [];
+  if (!frames.length) {                    // 没有 manifest（旧缓存）→ 平铺展示
+    det.innerHTML = `<div class="flexline"><div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"} ·
+      ${d.count} 帧</div></div>
+      <div class="muted" style="margin:4px 0 8px">${d.dir || ""}</div>
+      <div class="fgrid">${(d.pngs || []).slice(0, 200).map((u) =>
+        `<img src="${u}" loading="lazy" style="height:110px;border:1px solid var(--line);border-radius:4px">`).join("")}</div>`;
+    return;
+  }
+  const groups = mdGroupAnims(frames);
+  let maxW = 1, maxH = 1;
+  for (const fs of groups.values()) {
+    const b = mdAnimBox(fs);
+    maxW = Math.max(maxW, b.W); maxH = Math.max(maxH, b.H);
+  }
+  const zooms = [1, 2, 4].filter((z) => maxW * z <= 620 && maxH * z <= 460);
+  if (!zooms.includes(1)) zooms.unshift(1);
+  const tierBadge = m.tier === "big" ? '<span class="tier big">大BOSS</span>'
+    : m.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
+  const stats = (m.level != null && m.hp != null)
+    ? ` · Lv ${m.level} · HP ${Number(m.hp).toLocaleString()}` : "";
+  const linkNote = d.link
+    ? ` <span class="pill" title="这种怪自己的 img 没有帧，客户端渲染 link 指向的怪">链接怪 → 画面同 <b>${d.link.to}</b></span>` : "";
+  det.innerHTML = `<div class="flexline"><div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"}
+      ${tierBadge}${linkNote}<br><span class="muted">${d.count} 帧 · ${groups.size} 个动作${stats}</span></div>
+      <div class="row"><button class="mini" id="md-exp2"
+        title="逐帧导出 PNG + manifest.csv（锚点/延迟）→ exports/mobs/&lt;id&gt;/">⬇ 导出到 exports</button></div></div>
+    <div class="muted" style="margin:4px 0 2px">${d.dir}</div>
+    <div class="zoombar"><span class="muted">缩放：</span>
+      ${zooms.map((z) => `<button class="zb${z === 1 ? " on" : ""}" data-z="${z}">${z}x</button>`).join("")}
+      <span class="muted">1x = 客户端真实渲染尺寸</span></div>
+    <div class="mb-player" id="mb-player"></div>
+    <div id="mb-anim"></div>
+    <div id="md-out" class="muted" style="margin-top:8px"></div>`;
+  let Z = 1;
+  const player = $("#mb-player"), animHost = $("#mb-anim");
+  const draw = () => {
+    let html = "";
+    for (const [an, fs] of groups) {
+      const box = mdAnimBox(fs);
+      html += `<div class="animgrp"><div class="ahead">
+          <span class="aname">${an}</span>
+          <span class="muted">${fs.length} 帧 · 整体包围盒 ${box.W}×${box.H}（游戏内）</span></div>
+        <div class="fgrid">${fs.map((f) => mdCellHTML(f, box, Z)).join("")}</div></div>`;
+    }
+    animHost.innerHTML = html;
+    drawPlayer();
+  };
+  const drawPlayer = () => {
+    clearTimeout(MD.timer);
+    const key = groups.has("stand") ? "stand" : groups.keys().next().value;
+    const chips = [...groups.keys()].map((k) =>
+      `<button class="pchip${k === key ? " on" : ""}" data-a="${k}">▶ ${k}</button>`).join("");
+    player.innerHTML = `<div class="pchipbar">${chips}</div>`;
+    const wrap = document.createElement("div");
+    wrap.className = "pstagewrap";
+    const stage = document.createElement("div");
+    stage.className = "mb-stage";
+    wrap.append(stage);
+    player.append(wrap);
+    mdPlay(key, stage, Z);
+    player.querySelectorAll(".pchip").forEach((c) => c.onclick = () => {
+      player.querySelectorAll(".pchip").forEach((x) => x.classList.remove("on"));
+      c.classList.add("on");
+      mdPlay(c.dataset.a, stage, Z);
+    });
+  };
+  const bindExport = (btn) => {
+    if (btn) btn.onclick = () => mdExport(m, btn);
+  };
+  det.querySelectorAll(".zoombar .zb").forEach((b) => b.onclick = () => {
+    det.querySelectorAll(".zoombar .zb").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on");
+    Z = +b.dataset.z;
+    MD.zoom = Z;
+    draw();
+  });
+  bindExport($("#md-exp2"));
+  draw();
+  bindExport($("#md-export"));
+}
+
+function mdPlay(key, stage, Z) {
+  clearTimeout(MD.timer);
+  const gen = ++MD.gen;
+  const groups = mdGroupAnims(MD.data.frames || []);
+  const fs = groups.get(key);
+  if (!fs) return;
+  const box = mdAnimBox(fs);
+  stage.style.width = box.W * Z + "px";
+  stage.style.height = box.H * Z + "px";
+  stage.innerHTML = "";
+  const img = document.createElement("img");
+  const ax = -box.minx * Z, ay = -box.miny * Z;
+  const gl = document.createElement("div");
+  gl.className = "gline"; gl.style.top = ay + "px";
+  const ad = document.createElement("div");
+  ad.className = "adot"; ad.style.left = ax - 2 + "px"; ad.style.top = ay - 2 + "px";
+  stage.append(gl, ad, img);
+  let i = 0;
+  const step = () => {
+    if (gen !== MD.gen) return;            // 换了怪/动作/缩放就停
+    const f = fs[i % fs.length];
+    img.src = f.url;
+    img.style.left = (-f.ox - box.minx) * Z + "px";
+    img.style.top = (-f.oy - box.miny) * Z + "px";
+    img.style.width = f.w * Z + "px";
+    img.style.height = f.h * Z + "px";
+    i++;
+    MD.timer = setTimeout(step, f.delay > 0 ? f.delay : 120);
+  };
+  step();
+}
+
+async function mdExport(m, btn) {
+  const out = $("#md-out") || $("#md-detail");
+  if (btn) { btn.disabled = true; btn.textContent = "导出中…"; }
+  try {
+    const d = await api("/api/mob/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw: m.raw || m.id, preview: false }),
+    });
+    const link = d.link ? `（链接怪 → 画面同 ${d.link.to}）` : "";
+    out.innerHTML = `✅ 已导出 <b>${d.count}</b> 帧 ${link} → <code>${d.dir}</code>`;
+  } catch (e) {
+    out.innerHTML = `<span class="miss">导出失败：${e.message}</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "⬇ 导出到 exports"; }
+  }
+}
+
+function mdClose() {
+  clearTimeout(MD.timer);
+  MD.gen++;
+  $("#mobdex").hidden = true;
+}
 
 async function mobIcon(kindId) {
   if (!MOBICON[kindId]) {
@@ -994,7 +1320,7 @@ async function mapLoad(id, preview) {
                    : k.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
         const img = ic ? `<img src="${ic.url}" alt="${k.name || k.id}">`
                        : '<span class="muted" style="font-size:11px">无图</span>';
-        return `<div class="dexit" title="${k.name || k.id}（${k.id}）">
+        return `<div class="dexit" data-id="${k.id}" title="点开看这只怪的全部动作帧 / 导出素材（${k.name || k.id}）">
           <div class="dimg">${img}</div>
           <div class="dnm" title="${k.name || k.id}">${k.name || k.id}</div>
           <div class="did">${k.id}${tier}</div></div>`;
@@ -1002,6 +1328,10 @@ async function mapLoad(id, preview) {
       dp.innerHTML = cards.length
         ? `<div class="dexgrid">${cards.join("")}</div>`
         : '<span class="muted">这只地图没有怪物的图片资源</span>';
+      dp.querySelectorAll(".dexit").forEach((el) => el.onclick = () => {
+        dp.hidden = true;
+        mdOpen(el.dataset.id);
+      });
     };
     const mo = $("#mz-open");
     if (mo) mo.onclick = (e) => {
@@ -1120,7 +1450,23 @@ bindFilters("#filters-map", (f) => MAPFILT = f);
 $$("#mapzoom .zb").forEach((b) => b.onclick = () => { MZZ = b.dataset.z === "fit" ? "fit" : +b.dataset.z; mzApply(); });
 $("#mz-close").onclick = mzClose;
 $("#mz-scroll").onclick = (e) => { if (e.target === e.currentTarget) mzClose(); };
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#mapzoom").hidden) mzClose(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("#mobdex").hidden) { mdClose(); return; }
+  if (!$("#mapzoom").hidden) mzClose();
+});
+/* 怪物素材查看器事件 */
+$("#md-open").onclick = () => mdOpen(MD.sel ? MD.sel.id : null);
+$("#md-close").onclick = mdClose;
+$("#md-q").oninput = mdRenderList;
+$("#mobdex .md-bar").onclick = (e) => {
+  const b = e.target.closest(".md-flt");
+  if (!b) return;
+  $$("#mobdex .md-flt").forEach((x) => x.classList.remove("on"));
+  b.classList.add("on");
+  MD.filt = b.dataset.f;
+  mdRenderList();
+};
 window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); });
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#ws-browse") && !e.target.closest("#ws-menu")) $("#ws-menu").hidden = true;
