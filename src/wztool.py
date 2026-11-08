@@ -281,7 +281,9 @@ def mob_names() -> dict[str, str]:
 # 每个函数返回 dict（即 --json 的输出 / web API 的响应体），错误抛 CliError。
 
 def c_state() -> dict:
+    cn = _cn_mode()
     return {"workspace": str(_ws) if _ws else None,
+            "cn": {"data": str(cn), "nx_dir": str(CN_NX)} if cn else None,
             "tools_ok": tools_ok(),
             "exports": str(EXPORTS),
             "ui": c_ui()["ui"]}
@@ -1962,21 +1964,37 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 def _web_convert(names: list[str], force: bool) -> dict:
     """web 版转换：后台线程跑，前端轮询 /api/job（和页面现有约定一致）。"""
     _need_tools()
-    ws = _need_ws()
-    todo = _convert_pick(ws, names, force)
-    if not todo:
-        return {"started": False, "message": "选中的都已是 .nx（要重转勾「强制重转」）"}
+    todo: list[Path] = []
+    if _cn_mode() is not None:
+        data = _cn_mode()
+        todo_names = [n for n, p in
+                      (("String.nx", CN_NX / "String.nx"),
+                       ("Map.nx", CN_NX / "Map.nx")) if not p.exists()]
+        if not todo_names:
+            return {"started": False, "message": "国服数据已转换完成（.cache\\cn）"}
+        cn_todo = todo_names
+    else:
+        ws = _need_ws()
+        todo = _convert_pick(ws, names, force)
+        if not todo:
+            return {"started": False, "message": "选中的都已是 .nx（要重转勾「强制重转」）"}
+        cn_todo = None
+    total = len(cn_todo) if cn_todo is not None else len(todo)
     with _lock:
         if _job["running"]:
             raise CliError("已有转换在跑，等它完成", 1)
         _job.update(id=_job["id"] + 1, running=True, log=[], done=0,
-                    total=len(todo), error="")
+                    total=total, error="")
 
     def work():
         try:
-            for wz in todo:
-                _convert_one(wz, lambda s: _job["log"].append(s))
-                _job["done"] += 1
+            if cn_todo is not None:
+                c_convert_cn(lambda s: _job["log"].append(s))
+                _job["done"] = total
+            else:
+                for wz in todo:
+                    _convert_one(wz, lambda s: _job["log"].append(s))
+                    _job["done"] += 1
             _job["log"].append("全部完成 ✔")
         except Exception as exc:              # noqa: BLE001
             _job["error"] = str(exc)
@@ -1986,7 +2004,7 @@ def _web_convert(names: list[str], force: bool) -> dict:
             _lists.clear()
 
     threading.Thread(target=work, daemon=True).start()
-    return {"started": True, "total": len(todo), "job": _job["id"]}
+    return {"started": True, "total": total, "job": _job["id"]}
 
 
 def _port_busy(port: int) -> bool:

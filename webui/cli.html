@@ -482,7 +482,7 @@ function api(path, opts) {
 }
 function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + e.message; }
 
-let WS = null, MAPS = [], TIMER = null;
+let WS = null, CN = false, MAPS = [], TIMER = null;
 let mapSel = null;
 let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // =「显示怪物」开关：勾选后页面与导出图都把怪物合成进去
@@ -728,6 +728,29 @@ async function scan() {
       body: JSON.stringify({ path }),
     });
     WS = d.workspace;
+    CN = !!d.cn;
+    if (d.cn) {
+      // 国服官方数据源：没有 .wz 列表，显示数据源状态与一键全量转换
+      const cn = d.cn;
+      $("#ws-state").innerHTML =
+        `工作区：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
+      $("#ws-mini").textContent = `：国服官方 · ${cn.map_nx ? "已转换" : "待转换"}`;
+      $("#wz-table").innerHTML = `
+        <table><tr><th>数据源</th><th>状态</th></tr>
+        <tr><td>Map.nx（全量 10 分片 + Back/Tile/Obj 位图，约 23 GB）</td>
+            <td>${cn.map_nx ? `<span class="ok">已转换（${cn.map_nx_mb} GB）</span>` : '<span class="miss">未转换</span>'}</td></tr>
+        <tr><td>String.nx（地图名等中文表）</td>
+            <td>${cn.string_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
+        </table>
+        <div class="muted" style="margin-top:6px">怪物 / 人物素材的国服转换还没支持，这两个页签暂不可用。</div>`;
+      $("#cv-force").disabled = true;
+      $("#cv-go").disabled = cn.map_nx && cn.string_nx;
+      $("#cv-go").textContent = cn.map_nx && cn.string_nx ? "已转换完成" : "转换为 NX（全量约 8 分钟）";
+      loadLists();
+      return;
+    }
+    $("#cv-force").disabled = false;
+    $("#cv-go").textContent = "转换为 NX";
     $("#ws-state").innerHTML = `工作区：<b>${WS}</b> · ${d.wz.length} 个 .wz`;
     $("#ws-mini").textContent = `：${WS.split(/[\\/]/).pop()} · ${d.wz.length} 个 .wz`;
     const rows = d.wz.map((f) => `
@@ -747,7 +770,7 @@ async function scan() {
 
 async function convert() {
   const files = [...$$("#wz-table input:checked")].map((i) => i.dataset.f);
-  if (!files.length) return;
+  if (!files.length && !CN) return;
   $("#cv-go").disabled = true;
   try {
     const d = await api("/api/convert", {
