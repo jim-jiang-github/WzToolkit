@@ -99,7 +99,8 @@ class CliError(Exception):
 
 _lock = threading.Lock()
 _ws: Path | None = None                        # 工作区（放 .wz / .nx 的目录，或国服客户端目录）
-_job: dict = {"id": 0, "running": False, "log": [], "done": 0, "total": 0, "error": ""}
+_job: dict = {"id": 0, "running": False, "log": [], "done": 0, "total": 0,
+             "error": "", "stage": ""}
 _lists: dict = {}                              # mobs / maps / life 缓存（键: 文件 mtime）
 _BOSS_REF: dict | None = None                  # boss 参照表懒加载
 _UNSET = object()                              # 国服探测哨兵：None=确认不是，对象=还没探测
@@ -529,17 +530,18 @@ def c_convert_cn(log) -> dict:
     if "Skill.nx" in todo:
         # 技能：结构与位图都在 8 个 canvas 分片里（Skill.wz 本体是空壳）。基卷选
         # 000，其余 7 片空名挂载并进 .nx 根；MobSkill/Dragon/AbyssExpedition/
-        # Roguelike 子卷同理（怪物技能/龙/远征/肉鸽技能特效）。产物根下直接是
+        # Roguelike 子卷用命名挂载（独立子树）——空名 merge 多卷时 wz2nx 的加密
+        # key 推断会互相干扰（"I give up"），命名子树实测稳定。产物根下直接是
         # <职业>.img，nxskill 直接可用。
         m = [("", f"Skill/_Canvas/_Canvas_00{n}.wz") for n in range(1, 8)]
-        m += [("", "Skill/MobSkill/_Canvas/_Canvas_000.wz"),
-              ("", "Skill/Dragon/_Canvas/_Canvas_000.wz"),
-              ("", "Skill/AbyssExpedition/Skill/_Canvas/_Canvas_000.wz"),
-              ("", "Skill/AbyssExpedition/Skill/skill_archive/_Canvas/_Canvas_000.wz"),
-              ("", "Skill/Roguelike/Skill/_Canvas/_Canvas_000.wz"),
-              ("", "Skill/Roguelike/Skill/Redmoon/_Canvas/_Canvas_000.wz"),
-              ("", "Skill/Roguelike/Buff/_Canvas/_Canvas_000.wz"),
-              ("", "Skill/Roguelike/Buff/Redmoon/_Canvas/_Canvas_000.wz")]
+        m += [("MobSkill", "Skill/MobSkill/_Canvas/_Canvas_000.wz"),
+              ("Dragon", "Skill/Dragon/_Canvas/_Canvas_000.wz"),
+              ("Abyss", "Skill/AbyssExpedition/Skill/_Canvas/_Canvas_000.wz"),
+              ("AbyssArchive", "Skill/AbyssExpedition/Skill/skill_archive/_Canvas/_Canvas_000.wz"),
+              ("Roguelike", "Skill/Roguelike/Skill/_Canvas/_Canvas_000.wz"),
+              ("RoguelikeRed", "Skill/Roguelike/Skill/Redmoon/_Canvas/_Canvas_000.wz"),
+              ("RoguelikeBuff", "Skill/Roguelike/Buff/_Canvas/_Canvas_000.wz"),
+              ("RoguelikeBuffRed", "Skill/Roguelike/Buff/Redmoon/_Canvas/_Canvas_000.wz")]
         log("  Skill.nx 全量转换（约 15 GB 位图，30 分钟上下）…")
         _cn_wz2nx(work, "Skill/_Canvas/_Canvas_000.wz", str(skill_nx), m, "", None, log,
                   timeout=7200)
@@ -769,7 +771,7 @@ MMIDX = CACHE / "minimap"
 MMAUTO = MMIDX / "auto.meta.json"      # 兜底小地图的完成戳（绑 Map.nx mtime）
 _mmauto_lock = threading.Lock()
 _mmauto: dict = {"running": False, "done": 0, "total": 0}
-_mmjob: dict = {"running": False, "error": ""}
+_mmjob: dict = {"running": False, "error": "", "done": 0, "total": 0}
 _mm_lock = threading.Lock()
 
 
@@ -798,11 +800,45 @@ def _minimap_build() -> None:
         return
     nxdir = _nx_dir()
     tmp = CACHE / "minimap.building"
-    _mmjob.update(running=True, error="")
+    try:                                       # 旧索引的张数当进度条分母（重建前读）
+        total = len(json.loads((MMIDX / "index.json").read_text(encoding="utf-8")))
+    except Exception:                          # noqa: BLE001
+        total = 0
+    _mmjob.update(running=True, error="", done=0, total=total)
     try:
         if tmp.exists():
             drop_dir(tmp)
-        _run(["nxmap", "mini-all", str(tmp)], nxdir, timeout=1800)
+        # 用 Popen 而不是 _run：nxmap 的进度是 "\rminimaps: N"，逐字符解析出来
+        # 喂给进度条，否则界面在解压 14000 张的一分钟里完全没反馈。
+        proc = subprocess.Popen(
+            [str(BIN / "nxmap.exe"), "mini-all", str(tmp)], cwd=str(nxdir),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+        buf = b""
+        last = -1
+        while True:
+            # 必须用 os.read：管道上的 read(n) 会等读满 n 字节才返回，
+            # 而 nxmap 的进度是 "\r" 结尾的小片段，用 read 会全憋到进程结束。
+            chunk = os.read(proc.stdout.fileno(), 4096)
+            if not chunk:
+                break
+            buf += chunk
+            while True:
+                idxs = [x for x in (buf.find(b"\r"), buf.find(b"\n")) if x >= 0]
+                if not idxs:
+                    break
+                line, buf = buf[:min(idxs)], buf[min(idxs) + 1:]
+                m = re.search(rb"minimaps:/s*(/d+)", line)
+                if m:
+                    n = int(m.group(1))
+                    if n != last:
+                        last = n
+                        _mmjob["done"] = n
+                m = re.search(rb"maps scanned:/s*(/d+)", line)
+                if m and not _mmjob.get("total"):
+                    _mmjob["total"] = int(m.group(1))
+        rc = proc.wait()
+        if rc != 0:
+            raise RuntimeError(f"nxmap mini-all 失败（exit {rc}）")
         (tmp / "index.meta.json").write_text(
             json.dumps({"mtime": (nxdir / "Map.nx").stat().st_mtime}), encoding="utf-8")
         if MMIDX.exists():
@@ -899,7 +935,9 @@ def _minimap_fallback_one(mid: str, tmp: Path) -> bool:
     for p in mj.get("portal", []):
         if p.get("pt") != 2:
             continue
-        x, y = (p["x"] + cx) / scale, (p["y"] + cy) / scale
+        # 传送门坐标是脚底点，直接画会正压在地面线上、和地形边缘糊在一起：
+        # 统一上移 3px（用户 2026-11-08 定的观感）。
+        x, y = (p["x"] + cx) / scale, (p["y"] + cy) / scale - 3
         dr.ellipse([x - 2, y - 2, x + 2, y + 2], outline=(64, 160, 255, 255), width=1)
     canvas.save(MMIDX / f"{mid}.png")
     return True
@@ -2151,7 +2189,8 @@ def _minimap_composite(export: dict, out: Path, zoom: int = 2) -> Path:
         c = tier_color.get(m.get("tier"), tier_color["normal"])
         d.ellipse([x - dot, y - dot, x + dot, y + dot], fill=c)
     for p in mm.get("portals", []):
-        x, y = p["x"] * zoom, p["y"] * zoom
+        # 传送门是脚底坐标：上移 3px 才不会压在地面线上（同兜底生成）
+        x, y = p["x"] * zoom, (p["y"] - 3) * zoom
         d.ellipse([x - ring, y - ring, x + ring, y + ring],
                   outline=(64, 160, 255, 255), width=max(1, zoom // 2 + 1))
     out = Path(out)
@@ -2347,7 +2386,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     # ---- 路由 ----
     # POST-only 路由集合：GET 打过来回 405（与旧 FastAPI 行为一致），别的才 404
-    _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert", "/api/mob/export",
+    _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert", "/api/reconvert",
+                   "/api/mob/export",
                    "/api/char/render", "/api/char/export",
                    "/api/map/export", "/api/map/imgsearch", "/api/export/clear-cache"}
 
@@ -2362,6 +2402,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_ui)
         elif path == "/api/job":
             self._api(c_job)
+        elif path == "/api/progress":
+            self._api(c_progress)
         elif path == "/api/mobs":
             self._api(c_mobs)
         elif path.startswith("/api/mob/icon/"):
@@ -2420,6 +2462,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_workspace, b["path"])
         elif path == "/api/convert":
             self._api(_web_convert, b.get("files") or [], bool(b.get("force")))
+        elif path == "/api/reconvert":
+            self._api(_web_reconvert)
         elif path == "/api/mob/export":
             self._api(c_mob_export, str(b.get("raw") or ""), bool(b.get("preview")))
         elif path == "/api/char/render":
@@ -2510,6 +2554,81 @@ def _web_convert(names: list[str], force: bool) -> dict:
 
     threading.Thread(target=work, daemon=True).start()
     return {"started": True, "total": total, "job": _job["id"]}
+
+
+def c_progress() -> dict:
+    """WebUI 进度条数据源：转换 / 小地图索引 / 兜底生成 三段进度。"""
+    try:
+        ready = _minimap_ready()
+    except Exception:                          # noqa: BLE001
+        ready = False
+    return {
+        "convert": {"running": _job["running"], "done": _job["done"],
+                    "total": _job["total"], "stage": _job.get("stage", ""),
+                    "error": _job["error"]},
+        "minimap": {"running": _mmjob["running"], "done": _mmjob.get("done", 0),
+                    "total": _mmjob.get("total", 0), "error": _mmjob["error"]},
+        "auto": {"running": _mmauto["running"], "done": _mmauto["done"],
+                 "total": _mmauto["total"]},
+        "ready": ready,
+    }
+
+
+def _web_reconvert() -> dict:
+    """WebUI「重新转换」：补齐缺失的国服 .nx，然后强制重建全库小地图库
+    （mini-all + 兜底生成 + 识别签名）——把 .cache\\minimap 删掉也能一键恢复。
+    后台线程跑，前端轮询 /api/progress。"""
+    if _cn_mode() is None:
+        raise CliError("「重新转换」只对国服官方数据源生效", 1)
+    _need_tools()
+    with _lock:
+        if _job["running"]:
+            raise CliError("已有转换任务在跑，等它完成", 1)
+        if _mmjob["running"] or _mmauto["running"]:
+            raise CliError("小地图索引正在构建，等它完成", 1)
+        _job.update(id=_job["id"] + 1, running=True, log=[], done=0, total=1,
+                    error="", stage="检查数据")
+    CN_NX.mkdir(parents=True, exist_ok=True)
+
+    def work() -> None:
+        log = lambda s: _job["log"].append(s)     # noqa: E731
+        try:
+            need = [n for n, p in (("String.nx", CN_NX / "String.nx"),
+                                   ("Map.nx", CN_NX / "Map.nx"),
+                                   ("Mob.nx", CN_NX / "Mob.nx"),
+                                   ("Character.nx", CN_NX / "Character.nx"),
+                                   ("Skill.nx", CN_NX / "Skill.nx")) if not p.exists()]
+            if need:
+                _job.update(stage="转换", done=0, total=len(need))
+                log("转换缺失数据：" + "、".join(need))
+                c_convert_cn(log)
+                _job["done"] = len(need)
+            else:
+                log(".cache\\cn 的 .nx 都在，跳过转换，直接重建小地图库")
+            # 强制重建：删掉三处戳，让 mini-all / 兜底 / 签名都重跑
+            for name in ("index.meta.json", "auto.meta.json", "thumbs.npz"):
+                f = MMIDX / name
+                if f.exists():
+                    f.unlink()
+            _job.update(stage="小地图索引", done=0, total=0)
+            log("重建全库小地图索引（mini-all，约 1.4 万张）…")
+            _minimap_build()
+            if _mmjob["error"]:
+                raise RuntimeError(_mmjob["error"])
+            _job.update(stage="兜底小地图", done=0, total=1)
+            log("生成退化 canvas 的兜底小地图 …")
+            _minimap_fallback_build()
+            _job.update(stage="", done=1, total=1)
+            log("重新转换完成 ✔（小地图库 + 找图索引已就绪）")
+        except Exception as exc:               # noqa: BLE001
+            _job["error"] = str(exc)
+            _job["log"].append(f"出错：{exc}")
+        finally:
+            _job["running"] = False
+            _lists.clear()
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"started": True, "job": _job["id"]}
 
 
 def _port_busy(port: int) -> bool:
