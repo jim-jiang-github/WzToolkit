@@ -574,7 +574,7 @@ def _mm_score_one(qg, cg) -> tuple[float, float] | None:
 def c_map_imgsearch(image: str) -> dict:
     """image = base64（可带 data:image/...;base64, 前缀）的截图，返回 top 匹配。"""
     if cv2 is None or np is None:
-        raise CliError("缺依赖：pip install opencv-python-headless numpy", 1)
+        raise CliError("缺依赖：先跑 python scripts\\deps.py（依赖装在 .pylibs\\ 里）", 1)
     if not _minimap_ready():
         if not _mmjob["running"]:
             _mmjob.update(running=True, error="")

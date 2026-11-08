@@ -7,6 +7,9 @@ rem  PyInstaller onefile：src\wztool.py + vendor\（render_map / Mob.txt 等）
 rem  + static\（WebUI 页面）-> bin\wztool.exe，和 nxmap.exe 等原生工具放一起。
 rem  改过 wztool.py / static\ / vendor\ 之后跑一次。
 rem
+rem  Python 依赖不装进系统环境：requirements.txt 里的包先装到 <项目根>\.pylibs\，
+rem  打包时 PYTHONPATH 只指向它，所以换台电脑 clone 下来也能直接编（首次需联网）。
+rem
 rem    build-exe.bat              -> 打包并暂停（双击用）
 rem    build-exe.bat --no-pause   -> 打包不暂停（给别的脚本调用）
 rem =====================================================================
@@ -16,23 +19,29 @@ chcp 936 >nul 2>nul
 cd /d "%~dp0.."
 set "ROOT=%CD%"
 set "OUT=%ROOT%\bin\wztool.exe"
+set "PYLIBS=%ROOT%\.pylibs"
+rem 只认项目内的依赖，不去翻用户目录 / 系统 Python 的 site-packages
+set "PYTHONNOUSERSITE=1"
 
 where python >nul 2>nul
 if errorlevel 1 (
-    echo [错误] 找不到 python，需要 3.9+ 并已安装 pyinstaller。
+    echo [错误] 找不到 python，需要一个 3.9+ 的解释器在 PATH 里。
     echo.
     pause
     exit /b 1
 )
 
-python -c "import PyInstaller" >nul 2>nul
+echo === 准备 Python 依赖：.pylibs ===
+echo.
+python "%~dp0deps.py"
 if errorlevel 1 (
-    echo [错误] 没装 PyInstaller，请先执行：
-    echo     python -m pip install pyinstaller
+    echo.
+    echo [错误] 依赖准备失败，按上面的提示处理后重跑（多半是网络或 pip 源）。
     echo.
     pause
     exit /b 1
 )
+echo.
 
 rem 正在运行的 wztool.exe 会锁住文件，先问一下要不要关掉
 tasklist /FI "IMAGENAME eq wztool.exe" 2>nul | find /I "wztool.exe" >nul
@@ -52,6 +61,7 @@ timeout /t 2 /nobreak >nul
 if not exist "%ROOT%\bin" mkdir "%ROOT%\bin"
 echo === 打包 wztool.exe ===
 echo.
+set "PYTHONPATH=%PYLIBS%"
 python -m PyInstaller --clean --noconfirm --onefile --name wztool ^
     --add-data "%ROOT%\vendor;vendor" ^
     --add-data "%ROOT%\static;static" ^
@@ -60,6 +70,7 @@ python -m PyInstaller --clean --noconfirm --onefile --name wztool ^
     --specpath "%ROOT%\.build\wztool" ^
     "%ROOT%\src\wztool.py"
 set "RC=%ERRORLEVEL%"
+set "PYTHONPATH="
 
 echo.
 if "%RC%"=="0" (

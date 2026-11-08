@@ -1,0 +1,14 @@
+# WzToolkit Python 依赖（打包 bin\wztool.exe 与源码模式运行都需要）
+#
+# 不要装到系统 Python 里：scripts\build-exe.bat 会自动把这里的东西装进
+# <项目根>\.pylibs\，打包时 PYTHONPATH 指向它，换台电脑 clone 下来直接就能编。
+#
+# 手动同步一次：python scripts\deps.py
+#
+# 上限是故意加的：opencv 5 / numpy 3 这类大版本升级会改算法默认值，
+# 截图匹配的分数就会漂，所以只吃当前大版本。
+pyinstaller>=6.0,<7
+pillow>=10.0,<14
+numpy>=1.24,<3
+# 截图找图用；缺了 wztool 仍能跑，只是「🖼 找图」不可用
+opencv-python-headless>=4.8,<5
