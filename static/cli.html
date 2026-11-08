@@ -1054,7 +1054,6 @@ async function mapLoad(id, preview) {
       </div></div>
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}${d.yolo ? ` · <b>YOLO ${d.yolo.boxes} 框已导出</b>（${d.yolo.image}）` : ""}</div>
       <div style="margin-bottom:6px">${kinds || '<span class="muted">这张图没有怪物</span>'}</div>
-      <div class="muted" style="margin:0 0 6px">窗口就是 <b style="color:#3ba7ff">客户端画面 1366×768</b>：<b>按住拖动画布</b>（滚轮也平移，不能缩放）看不同位置，左上角小地图固定在窗口上不会跟着动；导出/YOLO 都是这个窗口里的画面，窗口超出地图的部分留空。</div>
       <div class="gvbox" id="gvbox">
         <div class="gameview" id="gameview">
           <span class="mapwrap" id="mapsel">
