@@ -11,6 +11,10 @@
 
 .pylibs\\.stamp.json 记录 requirements.txt 的 sha256 + 解释器版本，任一变化就整目录
 重装（旧版本文件残留会让 import 结果和 requirements 对不上，不如重来）。
+
+requirements.txt 会被滤成纯 ASCII 的临时副本再交给 pip：pip 24 在没 BOM、没
+coding 声明时用系统 ANSI 代码页（中文 Windows = cp936）解码它，文件里有 UTF-8
+中文注释就直接 UnicodeDecodeError（用户实测踩过）。
 """
 
 from __future__ import annotations
@@ -80,6 +84,30 @@ def read_stamp() -> str:
         return ""
 
 
+def ascii_reqs() -> Path:
+    """给 pip 一份纯 ASCII 的 requirements 副本。
+
+    pip 24 的 auto_decode 在没 BOM、没 coding 声明时直接按系统 ANSI 代码页解码
+    （中文 Windows = cp936），requirements.txt 里放 UTF-8 中文注释就 UnicodeDecodeError。
+    这里只保留非注释行，既绕开解码问题，也不改变装什么。
+    """
+    raw = REQ.read_text(encoding="utf-8", errors="replace")
+    specs = []
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if any(ord(c) > 127 for c in s):
+            raise SystemExit(f"[错误] requirements.txt 的依赖行含非 ASCII 字符：{s}")
+        specs.append(s)
+    if not specs:
+        raise SystemExit("[错误] requirements.txt 里没有任何依赖行")
+    out = ROOT / ".build" / "requirements.ascii.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(specs) + "\n", encoding="ascii")
+    return out
+
+
 def probe() -> dict:
     """在子进程里按「只有 .pylibs」的环境探测版本。
 
@@ -136,7 +164,8 @@ def main() -> int:
 
     log(f"[依赖] 安装到 {TARGET}")
     log(f"       解释器 {sys.version.split()[0]}  {sys.executable}")
-    cmd = [sys.executable, "-m", "pip", "install", "-r", str(REQ),
+    req_path = ascii_reqs()
+    cmd = [sys.executable, "-m", "pip", "install", "-r", str(req_path),
            "--target", str(TARGET), "--no-warn-script-location",
            "--disable-pip-version-check"]
     rc = subprocess.call(cmd)
