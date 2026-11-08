@@ -337,7 +337,7 @@
       </div>
       <div class="muted" id="ws-state" style="margin-top:8px">尚未选择</div>
       <div id="wz-table" style="margin-top:12px"></div>
-      <div class="row" style="margin-top:10px">
+      <div class="row" id="cv-row" style="margin-top:10px">
         <label class="muted"><input type="checkbox" id="cv-force" /> 强制重转（忽略已存在的 .nx）</label>
         <button id="cv-go" disabled>转换为 NX</button>
         <span class="muted" id="cv-note"></span>
@@ -482,7 +482,7 @@ function api(path, opts) {
 }
 function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + e.message; }
 
-let WS = null, CN = false, MAPS = [], TIMER = null;
+let WS = null, CN = false, MAPS = [], TIMER = null, CNAUTO = false;
 let mapSel = null;
 let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // =「显示怪物」开关：勾选后页面与导出图都把怪物合成进去
@@ -735,7 +735,8 @@ async function scan() {
     WS = d.workspace;
     CN = !!d.cn;
     if (d.cn) {
-      // 国服官方数据源：没有 .wz 列表，显示数据源状态与一键全量转换
+      // 国服官方数据源：没有 .wz 列表，显示数据源状态；转换全自动，
+      // 不放「强制重转」复选框和转换按钮（选好后缺什么自动补转什么）
       const cn = d.cn;
       $("#ws-state").innerHTML =
         `工作区：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
@@ -746,14 +747,21 @@ async function scan() {
             <td>${cn.map_nx ? `<span class="ok">已转换（${cn.map_nx_mb} MB）</span>` : '<span class="miss">未转换</span>'}</td></tr>
         <tr><td>String.nx（地图名等中文表）</td>
             <td>${cn.string_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
+        <tr><td>Mob.nx（怪物素材，${cn.mob_nx ? cn.mob_nx_gb + " GB" : "约 30 GB"}）</td>
+            <td>${cn.mob_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
         </table>
-        <div class="muted" style="margin-top:6px">怪物 / 人物素材的国服转换还没支持，这两个页签暂不可用。</div>`;
-      $("#cv-force").disabled = true;
-      $("#cv-go").disabled = cn.map_nx && cn.string_nx;
-      $("#cv-go").textContent = cn.map_nx && cn.string_nx ? "已转换完成" : "转换为 NX（全量约 8 分钟）";
+        <div class="muted" style="margin-top:6px">怪物素材页签已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）；人物素材的国服转换还没做好，该页签暂不可用。</div>`;
+      $("#cv-row").style.display = "none";
+      // 缺哪个自动补转哪个（本会话只自动触发一次，避免失败后无限重试）
+      const todo = [cn.map_nx, cn.string_nx, cn.mob_nx].some((v) => !v);
+      if (todo && !CNAUTO) {
+        CNAUTO = true;
+        convert();
+      }
       loadLists();
       return;
     }
+    $("#cv-row").style.display = "";
     $("#cv-force").disabled = false;
     $("#cv-go").textContent = "转换为 NX";
     $("#ws-state").innerHTML = `工作区：<b>${WS}</b> · ${d.wz.length} 个 .wz`;

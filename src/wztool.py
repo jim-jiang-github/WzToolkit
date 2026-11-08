@@ -341,12 +341,15 @@ def c_workspace(path: str) -> dict:
     cn = _cn_mode()
     if cn is not None:
         map_nx = CN_NX / "Map.nx"
+        mob_nx = CN_NX / "Mob.nx"
         return {"workspace": str(p),
                 "cn": {"data": str(cn),
                        "nx_dir": str(CN_NX),
                        "map_nx": map_nx.exists(),
                        "map_nx_mb": round(map_nx.stat().st_size / 1048576) if map_nx.exists() else 0,
-                       "string_nx": (CN_NX / "String.nx").exists()}}
+                       "string_nx": (CN_NX / "String.nx").exists(),
+                       "mob_nx": mob_nx.exists(),
+                       "mob_nx_gb": round(mob_nx.stat().st_size / 1073741824, 1) if mob_nx.exists() else 0}}
     files = []
     for f in sorted(p.glob("*.wz")):
         if f.name.endswith(".segs"):           # 下载器没下完的标记
@@ -408,9 +411,14 @@ def c_convert(names: list[str], force: bool, log) -> dict:
 
 def _cn_wz2nx(work: Path, src: str, out: str, mounts: list[tuple[str, str]],
               prefix: str, only: str | None, log, timeout: int = 14400) -> None:
-    """调 NoLifeWzToNx 转一个国服 WZ 卷（work 是 ASCII 可见的卷根），产物写到 out。"""
+    """调 NoLifeWzToNx 转一个国服 WZ 卷（work 是 ASCII 可见的卷根），产物写到 out。
+
+    prefix 为空 = 不加 --prefix（img 直接落在 .nx 根，Mob.nx 用这种经典布局）。
+    """
     exe = BIN / "NoLifeWzToNx.exe"
-    cmd = [str(exe), "-c", src, "--prefix", prefix]
+    cmd = [str(exe), "-c", src]
+    if prefix:
+        cmd += ["--prefix", prefix]
     for name, path in mounts:
         cmd += ["--mount", f"{name}={path}"]
     if only:
@@ -448,7 +456,8 @@ def _cn_workdir(data: Path) -> Path:
 
 def c_convert_cn(log) -> dict:
     """国服官方客户端 → .cache\\cn\\：Map.nx（10 个地图分片 + Back/Tile/Obj 全量位图）
-    + String.nx（地图名等中文表）。产物是 v83 布局，nxmap/nxscan 直接可用。
+    + String.nx（地图名等中文表）+ Mob.nx（全部怪物素材——怪物的 canvas 分片本身
+    就带完整帧结构）。产物是经典布局，nxmap/nxmob/nxscan 直接可用。
     Map.nx 要解压并重压约 9 GB 位图，一次大约 10~40 分钟（做完永久缓存）。"""
     data = _cn_mode()
     if data is None:
@@ -458,11 +467,14 @@ def c_convert_cn(log) -> dict:
     work = _cn_workdir(data)
     map_nx = CN_NX / "Map.nx"
     str_nx = CN_NX / "String.nx"
+    mob_nx = CN_NX / "Mob.nx"
     todo = []
     if not str_nx.exists():
         todo.append("String.nx")
     if not map_nx.exists():
         todo.append("Map.nx")
+    if not mob_nx.exists():
+        todo.append("Mob.nx")
     if not todo:
         return {"started": False, "total": 0,
                 "message": "国服数据已转换完成（.cache\\cn）"}
@@ -478,6 +490,13 @@ def c_convert_cn(log) -> dict:
               ("Map/Obj", "Map/Obj/Obj_000.wz"), ("Map/Obj/_Canvas", "Map/Obj/_Canvas")]
         log("  Map.nx 是全量转换（含全部物件/背景位图），大约 10~40 分钟，请耐心等 …")
         _cn_wz2nx(data, "Map/Map/Map0/Map0_000.wz", str(map_nx), m, "Map", None, log)
+    if "Mob.nx" in todo:
+        # 普通怪的 WZ 卷是空的（Mob.wz 只索引事件系统），全部怪物都在 6 个
+        # canvas 分片里（结构+位图一体、无外链）。基卷选 000，其余 5 片以空名
+        # 挂载（= 并进 .nx 根），合成经典布局 Mob/<id>.img，nxmob 直接可用。
+        m = [("", f"Mob/_Canvas/_Canvas_00{n}.wz") for n in range(1, 6)]
+        log("  Mob.nx 全量转换（约 10 GB 位图，15 分钟上下）…")
+        _cn_wz2nx(work, "Mob/_Canvas/_Canvas_000.wz", str(mob_nx), m, "", None, log)
     return {"started": True, "total": len(todo), "done": len(todo)}
 
 
@@ -509,7 +528,7 @@ def _mob_tier(raw_id: str, name: str, boss: int, hp: int) -> str:
     return "big" if hp >= 10_000_000 else "boss"
 
 
-def mob_meta(ws: Path, mobnx: Path) -> list[dict]:
+def mob_meta(mobnx: Path) -> list[dict]:
     """跑 nxmob info 拿每只怪的 boss/等级/血量 + link 目标 + 自身帧数（按 mtime 缓存）。"""
     cache = CACHE / f"mobinfo2_{int(mobnx.stat().st_mtime)}.json"
     if cache.exists():
@@ -517,7 +536,7 @@ def mob_meta(ws: Path, mobnx: Path) -> list[dict]:
             return json.loads(cache.read_text(encoding="utf-8"))
         except Exception:
             pass
-    out = _run(["nxmob", "info"], ws, timeout=300)
+    out = _run(["nxmob", "info"], _nx_dir(), timeout=300)
     items: list[dict] = []
     for row in csv.reader(out.splitlines()):
         if len(row) < 6 or not row[0].isdigit():
@@ -591,12 +610,12 @@ def c_mobs() -> dict:
     _need_ws()
     mobnx = _nx_dir() / "Mob.nx"
     if not mobnx.exists():
-        hint = "国服数据源的怪物转换还没支持（.cache\\cn 里没有 Mob.nx）" \
+        hint = "国服数据源还没转换 Mob.nx（转换完会出现在 .cache\\cn）" \
             if _cn_mode() is not None else "先转换 Mob.wz"
         raise CliError(f"没有 Mob.nx —— {hint}", 1)
     key = f"mobs:{mobnx.stat().st_mtime}"
     if _lists.get("key") != key:
-        items = mob_meta(ws, mobnx)
+        items = mob_meta(mobnx)
         byid = {it["id"]: it for it in items}
         for it in items:
             if not it.get("name"):
@@ -961,7 +980,7 @@ def _ensure_mob_preview(raw: str, ws: Path) -> Path:
         if outdir.exists():
             drop_dir(outdir)
         outdir.parent.mkdir(parents=True, exist_ok=True)
-        _run(["nxmob", "export", str(outdir), "--only", raw, "--named"], ws,
+        _run(["nxmob", "export", str(outdir), "--only", raw, "--named"], _nx_dir(),
              timeout=600)
     return outdir
 
@@ -973,9 +992,9 @@ def _mob_anim_frames(ws: Path, kind_id: str) -> dict:
     stand/move/attack1/hit1/die1/jump/fly 等动作都在 manifest 里。没图返回 {}。
     """
     raw = kind_id.lstrip("0") or "0"
-    mobnx = ws / "Mob.nx"
+    mobnx = _nx_dir() / "Mob.nx"
     if mobnx.exists():
-        meta = {m["id"]: m for m in mob_meta(ws, mobnx)}
+        meta = {m["id"]: m for m in mob_meta(mobnx)}
         raw = _resolve_mob_link(raw, meta)
         # nxmob 的 --only 只认 WZ 里的原始 id（带前导 0），meta 里存了原始值
         raw = (meta.get(raw) or {}).get("raw") or raw.zfill(7)
@@ -1099,9 +1118,9 @@ def c_mob_export(raw: str, preview: bool = False) -> dict:
     if not re.fullmatch(r"\d+", raw):
         raise CliError("怪 id 不合法（应为数字）", 2)
     raw_req = raw
-    mobnx = ws / "Mob.nx"
+    mobnx = _nx_dir() / "Mob.nx"
     if mobnx.exists():
-        meta = {m["id"]: m for m in mob_meta(ws, mobnx)}
+        meta = {m["id"]: m for m in mob_meta(mobnx)}
         raw = _resolve_mob_link(raw, meta)
         raw = (meta.get(raw) or {}).get("raw") or raw.zfill(7)
     link_info = {"from": raw_req, "to": raw} if raw != raw_req else None
@@ -1112,7 +1131,7 @@ def c_mob_export(raw: str, preview: bool = False) -> dict:
         if outdir.exists():
             drop_dir(outdir)
         outdir.parent.mkdir(parents=True, exist_ok=True)
-        _run(["nxmob", "export", str(outdir), "--only", raw, "--named"], ws,
+        _run(["nxmob", "export", str(outdir), "--only", raw, "--named"], _nx_dir(),
              timeout=600)
     pngs = sorted(outdir.rglob("*.png"))
     if not pngs:
@@ -1186,10 +1205,10 @@ _char_cache: dict = {"lists": {}}
 
 
 def _char_nx() -> Path:
-    ws = _need_ws()
-    ch = ws / "Character.nx"
+    ch = _nx_dir() / "Character.nx"
     if not ch.exists():
-        raise CliError("工作区里没有 Character.nx —— 先把 Character.wz 转成 nx", 1)
+        raise CliError("没有 Character.nx —— 人物素材的国服转换还没支持"
+                       "（classic 工作区先转 Character.wz）", 1)
     return ch
 
 
@@ -1458,8 +1477,8 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     from PIL import Image
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
     if life:
-        mobnx = ws / "Mob.nx"
-        meta = {m["id"]: m for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
+        mobnx = _nx_dir() / "Mob.nx"
+        meta = {m["id"]: m for m in mob_meta(mobnx)} if mobnx.exists() else {}
         life = [l for l in life
                 if meta.get(str(l.get("id", "")).lstrip("0"), {})
                 .get("tier", "normal") != "big"]
@@ -1711,8 +1730,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     size = _render_preview(outdir, png, no_bg=no_bg)
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
     kinds = sorted({str(l.get("id", "")).lstrip("0") for l in life})
-    mobnx = ws / "Mob.nx"
-    meta = {m["id"]: m for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
+    mobnx = _nx_dir() / "Mob.nx"
+    meta = {m["id"]: m for m in mob_meta(mobnx)} if mobnx.exists() else {}
     # 刷怪点叠加：overlay 必须和渲染实际用的一致（render_file pad=40、1:1 不缩放）
     R = _render_mod()
     minx, miny, bw, bh = R.map_bounds(mj)
@@ -1901,8 +1920,8 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
     bw, bh = cw + 80, chh + 80                   # 渲染画布窗口（pad=40，与导出一致）
     s = 1.0                  # 渲染改成 1:1（真实尺寸），不再缩到 1600 宽
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
-    mobnx = ws / "Mob.nx"
-    meta = {m["id"]: m for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
+    mobnx = _nx_dir() / "Mob.nx"
+    meta = {m["id"]: m for m in mob_meta(mobnx)} if mobnx.exists() else {}
     kinds = sorted({str(l.get("id", "")).lstrip("0") for l in life})
     return {"id": mid,
             "bounds": {"x": cx, "y": cy, "w": cw, "h": chh},
