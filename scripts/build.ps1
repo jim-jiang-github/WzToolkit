@@ -1,9 +1,10 @@
 # WzToolkit one-shot build: compiles all four native tools into bin\.
 # Pure ASCII on purpose (PowerShell 5.1 decodes BOM-less files as GBK).
 #
-#   build.ps1              -> build everything (skips what is already built)
-#   build.ps1 -Clean       -> wipe bin\ and obj\ first
-#   build.ps1 -Only name   -> build just one of: wz2nx, nxmap, nxmob, nxscan
+#   scripts\build.bat        -> double-click wrapper around this script
+#   build.ps1                -> build everything (skips what is already built)
+#   build.ps1 -Clean         -> wipe bin\ and obj\ first
+#   build.ps1 -Only name     -> build just one of: wz2nx, nxmap, nxmob, nxscan
 #
 # Toolchain is discovered without vcvars (same trick as the original MapleStory
 # repo scripts: vswhere + cl.exe + link.exe directly, no msbuild).
@@ -12,7 +13,8 @@ param([string]$Only = '', [switch]$Clean)
 
 $ErrorActionPreference = 'Stop'
 
-$ROOT = $PSScriptRoot
+# 脚本活在本项目 scripts\ 下，项目根是它的上一层
+$ROOT = Split-Path -Parent $PSScriptRoot
 $OBJ  = Join-Path $ROOT 'build\obj'
 $RSP  = Join-Path $ROOT 'build\rsp'
 $BIN  = Join-Path $ROOT 'bin'

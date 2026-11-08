@@ -104,7 +104,7 @@ def tools_ok() -> bool:
 
 def _need_tools() -> None:
     if not tools_ok():
-        raise CliError("bin\\ 里缺工具（NoLifeWzToNx/nxmap/nxmob/nxscan）—— 先跑 build.ps1 编译", 1)
+        raise CliError("bin\\ 里缺工具（NoLifeWzToNx/nxmap/nxmob/nxscan）—— 先跑 scripts\\build.bat 编译", 1)
 
 
 def _need_ws() -> Path:
@@ -117,7 +117,7 @@ def _run(args: list[str], cwd: Path, timeout: int = 1200) -> str:
     """跑一个原生工具（以工作区为 cwd，工具按 cwd 定位 .nx），返回 stdout。"""
     exe = BIN / (args[0] + ".exe")
     if not exe.exists():
-        raise CliError(f"缺工具 {exe.name}（先跑 build.ps1）", 1)
+        raise CliError(f"缺工具 {exe.name}（先跑 scripts\\build.bat）", 1)
     r = subprocess.run([str(exe)] + args[1:], cwd=str(cwd), capture_output=True,
                        text=True, encoding="utf-8", errors="replace", timeout=timeout)
     return r.stdout or ""

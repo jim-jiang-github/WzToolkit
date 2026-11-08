@@ -26,10 +26,14 @@ wztool map-minimap 101040000        渲染游戏内小地图（miniMap canvas + 
 
 ```powershell
 # 1) 编译四个原生工具（需要 VS 的 C++ 工具集；一次即可）
-#    双击 build.bat 即可；命令行等价：
-build.bat                    # 全量（已有产物会跳过）
-build.bat -Clean             # 先清 bin\ obj\
-build.bat -Only nxmap        # 只编一个：wz2nx / nxmap / nxmob / nxscan
+#    双击 scripts\build.bat 即可；命令行等价：
+scripts\build.bat                # 全量（已有产物会跳过）
+scripts\build.bat -Clean         # 先清 bin\ obj\
+scripts\build.bat -Only nxmap    # 只编一个：wz2nx / nxmap / nxmob / nxscan
+
+# 1b) 改了 wztool.py / static / vendor 之后，重新打包 wztool.exe
+#     双击 scripts\build-exe.bat；等价：
+scripts\build-exe.bat            # PyInstaller onefile → 项目根 wztool.exe
 
 # 2) CLI（推荐 / 自动化入口；已附带编译好的 wztool.exe）
 wztool --help                           # 全部子命令与示例（面向 AI/程序编写）
@@ -119,8 +123,9 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
 ## 目录
 
 ```
-build.bat        双击即编译（cl.exe 直接编，不依赖 msbuild；内部调 build.ps1）
-build.ps1        实际编译逻辑（PowerShell；build.bat 会带 -ExecutionPolicy Bypass 调用）
+scripts\build.bat       双击即编译原生工具（cl.exe 直接编，不依赖 msbuild；调 build.ps1）
+scripts\build.ps1       原生工具编译逻辑（PowerShell；由 build.bat 带 Bypass 调用）
+scripts\build-exe.bat   双击即打包 wztool.exe（PyInstaller onefile，含 vendor\ + static\）
 wztool.py        CLI 主程序（wztool.exe 由 PyInstaller 打包，含 CLI + web 两用）
 wztool.exe       编译好的独立 CLI（放项目根即可找到 bin\ 与 vendor\）
 vendor\          全部源码与依赖（NoLifeWzToNx、nxmap/nxmob/nxscan、NoLifeNx、render_map、Mob.txt）
