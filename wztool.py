@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 """wztool —— WzToolkit 命令行工具（CLI-first，供人类与其他程序/AI 直接调用）。
 
-功能：导入 .wz → 转成 .nx → 列出/导出 怪物动画帧与地图（JSON/贴图/渲染预览）。
+功能：导入 .wz → 转成 .nx → 导出地图（map.json / 贴图 / 渲染预览 / 客户端画面窗口 /
+小地图 / 截图找图）。只做地图相关的导出，不含训练集之类的功能。
 所有子命令都支持 --json 机器可读输出；退出码：0 成功，1 业务错误，2 参数错误。
 
 常用示例::
 
     wztool workspace "D:/MapleStory/nxrun"        # 1. 设置工作区（放 .wz/.nx 的目录）
-    wztool convert Mob.wz Map.wz                  # 2. wz → nx（耗时任务，同步执行）
-    wztool mobs --json                            # 3. 列出全部怪物（JSON）
-    wztool mob-export 0100100                     # 4. 导出一只怪的全部动画帧
-    wztool map-export 000050000 --mobs            # 5. 导出地图（预览图带怪物）
+    wztool convert Map.wz Mob.wz String.wz        # 2. wz → nx（耗时任务，同步执行）
+    wztool maps --json                            # 3. 列出全部地图（JSON）
+    wztool map-export 000050000 --mobs            # 4. 导出地图（预览图带怪物）
+    wztool map-minimap 000050000                  # 5. 渲染游戏内小地图
     wztool web                                    # 6. 启动 Web 页面（人看，可选）
 
 坐标与文件格式与客户端一致：怪物帧 PNG 带锚点(ox,oy=脚底中心)，
@@ -403,45 +404,6 @@ def life_index(ws: Path, mapnx: Path) -> dict[str, list[dict]]:
     return idx
 
 
-def c_mobs() -> dict:
-    ws = _need_ws()
-    mobnx = ws / "Mob.nx"
-    if not mobnx.exists():
-        raise CliError("工作区里没有 Mob.nx —— 先转换 Mob.wz", 1)
-    key = f"mobs:{mobnx.stat().st_mtime}"
-    if _lists.get("key") != key:
-        items = mob_meta(ws, mobnx)
-        byid = {it["id"]: it for it in items}
-        for it in items:
-            if not it.get("name"):
-                it["name"] = mob_names().get(it["id"]) or ""
-            # 有图 = 自己有帧，或 link 链条终点有帧（客户端就是渲染目标怪）
-            seen: set = set()
-            cur, ok = it, False
-            for _ in range(5):
-                if cur["id"] in seen:
-                    break
-                seen.add(cur["id"])
-                if cur.get("frames", 0) > 0:
-                    ok = True
-                    break
-                cur = byid.get(cur.get("link") or "")
-                if not cur:
-                    break
-            it["img_ok"] = ok
-        _lists.update(key=key, mobs=items)
-    return {"mobs": _lists["mobs"]}
-
-
-def c_mob_maps(kid: str) -> dict:
-    ws = _need_ws()
-    mapnx = ws / "Map.nx"
-    if not mapnx.exists():
-        raise CliError("工作区里没有 Map.nx —— 先转换 Map.wz", 1)
-    idx = life_index(ws, mapnx)
-    return {"maps": idx.get(kid.lstrip("0"), [])}
-
-
 def c_maps() -> dict:
     ws = _need_ws()
     mapnx = ws / "Map.nx"
@@ -724,16 +686,14 @@ def c_mob_icon(raw: str) -> dict:
 
 
 def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
-                   density: int = 1, no_boss: bool = False,
-                   no_bg: bool = False):
+                   density: int = 1, no_bg: bool = False):
     """把这张图的怪随机贴到地面上，产出 preview_mobs.png（脚底落在 foothold 地面）。
 
     返回 (png路径, 摆放列表)：places 每项 {kind, x, y, w, h} 是该怪在预览图上的
-    精确像素框（x,y=左上角），YOLO 标注直接用它当 ground truth。
+    精确像素框（x,y=左上角）。
 
-    no_boss=True 时只放大 BOSS 以外的怪（tier=big 不出现，高阶怪 boss/normal
-    照常参与合成）
-    （挂机升级场景不打 Boss；只刷 Boss 的图返回空结果）。
+    大 BOSS（tier=big）一律不参与合成（只刷大 BOSS 的图会得到空结果），
+    高阶 BOSS / 普通怪照常出现。
 
     每个怪在「随机游走区间」内取随机 x：优先用 life 自带 rx0~rx1（客户端巡逻区间），
     没有就按图宽 ±8% 兜底；y 由 foothold 段线性插值得出（同一段里取离出生地面最近
@@ -743,7 +703,7 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     """
     from PIL import Image
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
-    if no_boss and life:
+    if life:
         mobnx = ws / "Mob.nx"
         meta = {m["id"]: m for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
         life = [l for l in life
@@ -778,7 +738,7 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     keys = list(frames)
     fhs = [(float(f["x1"]), float(f["y1"]), float(f["x2"]), float(f["y2"]))
            for f in mj.get("foothold", [])]
-    places = []                          # 摆放记录：YOLO ground truth
+    places = []                          # 摆放记录（每只怪的像素框）
 
     def _ground(x: float, y_ref: float) -> float | None:
         """x 处的地面 y：含 x 的 foothold 段里取离 y_ref 最近的一条（线性插值）。"""
@@ -839,91 +799,16 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     return out, places
 
 
-def _read_manifest(outdir: Path, root: Path, url_prefix: str, pngs: list[Path]) -> list[dict]:
-    """把 nxmob 的 manifest.csv 解析成帧表（含 origin/锚点/延迟）。
-
-    每帧 PNG 都按自己的包围盒裁出来（28x28、31x28…），画面位置由 ox/oy 决定。
-    """
-    man = outdir / "manifest.csv"
-    if not man.exists():
-        return []
-    by_name: dict[str, Path] = {}
-    for p in pngs:
-        by_name.setdefault(p.name, p)
-    out: list[dict] = []
-    rows = list(csv.reader(man.read_text(encoding="utf-8-sig").splitlines()))
-    for f in rows[1:]:
-        if len(f) < 10:
-            continue
-        p = by_name.get(f[4])
-        if p is None:
-            continue
-        try:
-            w, h, ox, oy, delay = (int(x) for x in f[5:10])
-        except ValueError:
-            continue
-        out.append({"file": f[4],
-                    "path": str(p),
-                    "url": url_prefix + p.relative_to(root).as_posix(),
-                    "anim": f[2], "frame": int(f[3]),
-                    "w": w, "h": h, "ox": ox, "oy": oy, "delay": delay})
-    return out
-
-
-def c_mob_export(raw: str, preview: bool = False) -> dict:
-    """导出一只怪的全部动画帧 PNG（逐帧，含锚点 manifest）。
-
-    preview=True 只出预览（.cache，重复调用秒回）；默认导出到 exports/mobs/。
-    链接怪（info/link）自动顺链导出目标怪。
-    """
-    ws = _need_ws()
-    raw = str(raw).strip()
-    if not re.fullmatch(r"\d+", raw):
-        raise CliError("怪 id 不合法（应为数字）", 2)
-    raw_req = raw
-    mobnx = ws / "Mob.nx"
-    if mobnx.exists():
-        meta = {m["id"]: m for m in mob_meta(ws, mobnx)}
-        raw = _resolve_mob_link(raw, meta)
-    link_info = {"from": raw_req, "to": raw} if raw != raw_req else None
-    outdir = (CACHE / "mob" / raw) if preview else (EXPORTS / "mobs" / raw)
-    if preview and outdir.exists():
-        pngs = sorted(outdir.rglob("*.png"))
-    else:
-        if outdir.exists():
-            drop_dir(outdir)
-        outdir.parent.mkdir(parents=True, exist_ok=True)
-        _run(["nxmob", "export", str(outdir), "--only", raw, "--named"], ws,
-             timeout=600)
-        pngs = sorted(outdir.rglob("*.png"))
-    if not pngs:
-        raise CliError("没导出任何帧（这只怪可能没有图片资源）", 1)
-    root = CACHE if preview else EXPORTS
-    prefix = "/preview/" if preview else "/exports/"
-    return {"dir": str(outdir), "count": len(pngs),
-            "pngs": [prefix + p.relative_to(root).as_posix() for p in pngs[:400]],
-            "png_paths": [str(p) for p in pngs],
-            "frames": _read_manifest(outdir, root, prefix, pngs),
-            "preview": preview, "link": link_info}
-
-
 def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
                  density: int = 1, view: tuple | None = None,
-                 yolo: bool = False, seed: str | None = None,
-                 no_boss: bool = False,
+                 seed: str | None = None,
                  _visited: set | None = None,
                  no_bg: bool = False) -> dict:
     """导出一张地图：map.json（life/foothold/ladderRope）+ 全部贴图 + 渲染预览图。
 
     链接图（info/link，自己的 img 是空的）自动顺链导出目标图，返回带 link 字段。
     mobs=True 时预览图把怪随机画到地面上（preview_mobs.png，沿 rx 巡逻区间散布、
-    foothold 落地）；seed 缺省每次随机，传同值可复现同一布局。
-    no_boss=True 时合成怪/标注不放大 BOSS（tier=big；高阶怪 boss/normal 照常
-    出现）——挂机升级用；只刷大 BOSS 的图会得到没有怪的合成结果。
-    yolo=True 时额外产出 YOLO 训练集（exports/yolo/：images + labels +
-    classes.txt/dataset.yaml；每只怪一个框、每段绳/梯一个框、每段地面一个框
-    ——平地标 ground、坡度≥0.2 的标 slope），
-    蕴含 mobs=True。
+    foothold 落地，大 BOSS 不合成）；seed 缺省每次随机，传同值可复现同一布局。
     view=(x, y) 是导出窗口（VIEW_W×VIEW_H = 客户端画面 1366×768）的左上角世界坐标；
     缺省取地图正中。导出文件统一是 1366×768，窗口超出地图边界的地方补空白。
     life_points 是刷怪点（x, y 已按客户端规则落到 cy 地面），overlay 是
@@ -963,14 +848,13 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     # 链接图：拿目标图的数据渲染（客户端同款行为）
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
-        d = c_map_export(link, preview, mobs, density, view, yolo, seed,
-                         no_boss, visited, no_bg=no_bg)
+        d = c_map_export(link, preview, mobs, density, view, seed,
+                         visited, no_bg=no_bg)
         d["link"] = {"from": mid, "to": link}
         return d
 
     return _map_export_inner(ws, mid, preview, mobs, density, view, visited,
-                             yolo=yolo, seed=seed, outdir=outdir, mj=mj,
-                             no_boss=no_boss, no_bg=no_bg)
+                             seed=seed, outdir=outdir, mj=mj, no_bg=no_bg)
 
 
 def _minimap_payload(outdir: Path, root: Path, mj: dict, meta: dict) -> dict | None:
@@ -1045,10 +929,10 @@ def _view_origin(view: tuple | None, minx: float, miny: float,
 
 
 def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: int,
-                      view: tuple | None, visited: set, yolo: bool = False,
+                      view: tuple | None, visited: set,
                       seed: str | None = None,
                       outdir: Path | None = None, mj: dict | None = None,
-                      no_boss: bool = False, no_bg: bool = False) -> dict:
+                      no_bg: bool = False) -> dict:
     root = CACHE if preview else EXPORTS
     if outdir is None:
         outdir = (root / "map" / mid) if preview else (EXPORTS / "maps" / mid)
@@ -1098,21 +982,18 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
               "ladder_rope": [[lr["x"], lr["y1"], lr["y2"], lr.get("l", 0)]
                               for lr in mj.get("ladderRope", [])]}
     # 导出图带怪物：把怪沿地面随机散布合成进预览图（preview_mobs.png）
-    # yolo 但不 mobs = 负样本：图里一只怪都没有（绳梯照常标注）
     use_seed = str(seed) if seed else f"{mid}:{random.randrange(1 << 30):x}"
     places: list[dict] = []
     if mobs and life:
         mob_png, places = _composite_mobs(ws, outdir, mj, png, use_seed,
                                           density=max(1, min(10, int(density or 1))),
-                                          no_boss=no_boss, no_bg=no_bg)
+                                          no_bg=no_bg)
         if mob_png is not None:
             rel = (mob_png.relative_to(CACHE) if preview else mob_png.relative_to(EXPORTS))
             result["preview_path"] = str(mob_png)
             result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview
                                      else f"/exports/{rel.as_posix()}")
             result["mobs"] = True
-        elif yolo:
-            raise CliError("这张图有刷怪点但没找到任何怪的图片，无法做 YOLO 标注", 1)
     # 导出 = 客户端那个固定 1366×768 的画面窗口（预览模式输出整张 1:1 地图，供页面叠窗口用）
     if not preview:
         from PIL import Image
@@ -1140,120 +1021,6 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
         result["overlay"] = {"minx": vx, "miny": vy, "s": 1.0,
                              "w": VIEW_W, "h": VIEW_H}
 
-    # ---------------------------------------------------------------- YOLO 数据集
-    # 每只怪一个框（合成时记录的精确 ground truth）+ 每段绳/梯一个框
-    # + 每段地面(foothold)一个框。
-    # 产出 exports/yolo/{images,labels}/ + classes.txt + dataset.yaml，
-    # 类别表跨导出累积（classes.json 注册表），怪的类别名 = id_英文名。
-    if yolo:
-        import shutil
-        W, H = result["preview"]["w"], result["preview"]["h"]
-        # 导出图是 1366×768 窗口，标注框要减去窗口左上角在整图上的像素偏移
-        offx, offy = (result["window"]["px"]["x"], result["window"]["px"]["y"]) \
-            if result.get("window") else (0, 0)
-
-        def _mob_cls(k: str, state: str = "") -> str:
-            nm = meta.get(k, {}).get("name") or mob_names().get(k) or ""
-            base = f"{k}_{re.sub(r'[^0-9A-Za-z_]+', '_', nm).strip('_')}" if nm else k
-            # 类别名带上动作状态：YOLO 一套检测就同时认「是哪种怪 + 什么状态」
-            return f"{base}__{state}" if state else base
-
-        # 类别注册表（跨导出累积，id 稳定）；批量导出是多进程并发的，
-        # 注册表读写要拿文件锁，否则并发分配类别 id 会互相覆盖错乱
-        ydir = EXPORTS / "yolo"
-        (ydir / "images").mkdir(parents=True, exist_ok=True)
-        (ydir / "labels").mkdir(parents=True, exist_ok=True)
-        reg_file = ydir / "classes.json"
-        import time as _time
-        lock = ydir / ".classes.lock"
-        deadline = _time.time() + 300
-        while True:
-            try:
-                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.close(fd)
-                break
-            except FileExistsError:
-                try:
-                    if _time.time() - lock.stat().st_mtime > 300:
-                        lock.unlink()      # 陈旧锁（进程崩了没清）：清掉重试
-                except FileNotFoundError:
-                    pass
-                if _time.time() > deadline:
-                    break                  # 等不到就继续，绝不死锁
-                _time.sleep(0.05)
-        try:
-            reg: dict[str, int] = {}
-            if reg_file.exists():
-                try:
-                    reg = json.loads(reg_file.read_text(encoding="utf-8"))
-                except Exception:
-                    reg = {}
-            cls_names = {_mob_cls(p["kind"], p.get("state", "stand")) for p in places} \
-                | {"rope", "ladder", "ground", "slope"}
-            for nm in sorted(cls_names):
-                if nm not in reg:
-                    reg[nm] = len(reg)
-
-            def _box(x: float, y: float, w: float, h: float) -> tuple | None:
-                """预览图像素框 → 最终图上的归一化 YOLO 框；完全在外头的丢弃。"""
-                x, y = x - offx, y - offy
-                x0, y0 = max(0.0, x), max(0.0, y)
-                x1, y1 = min(float(W), x + w), min(float(H), y + h)
-                if x1 - x0 < 2 or y1 - y0 < 2:      # 被裁得只剩边角的不算目标
-                    return None
-                return (((x0 + x1) / 2) / W, ((y0 + y1) / 2) / H,
-                        (x1 - x0) / W, (y1 - y0) / H)
-
-            lines = []
-            state_cnt: dict[str, int] = {}
-            for p in places:
-                st = p.get("state", "stand")
-                state_cnt[st] = state_cnt.get(st, 0) + 1
-                b = _box(p["x"], p["y"], p["w"], p["h"])
-                if b:
-                    lines.append(f"{reg[_mob_cls(p['kind'], st)]} "
-                                 + " ".join(f"{v:.6f}" for v in b))
-            for x, y1, y2, l in result["ladder_rope"]:
-                b = _box((x - 16 - minx) * s, (y1 - miny) * s, 32 * s, (y2 - y1) * s)
-                if b:
-                    lines.append(f"{reg['ladder' if l else 'rope']} " + " ".join(f"{v:.6f}" for v in b))
-            # 地面（foothold）：每段一个框，从站立线往下盖 32 世界像素——
-            # 平台贴图主体在线的下方、怪的脚踩在线上，往下扩既能框住可视平台、
-            # 又不会和怪框打架；窄于 8 世界像素的竖直连接段是平台侧壁不可辨识，跳过。
-            # 坡度 |dy|/|dx| ≥ 0.2（约 11°）的段标 slope 而非 ground：挂机工具
-            # 把 ground 当纯平地用（恒定 Y），斜坡若混进去会走上去回不来。
-            for fx1, fy1, fx2, fy2 in result.get("foothold_segs", []):
-                if abs(fx2 - fx1) < 8:
-                    continue
-                top = min(fy1, fy2)
-                bot = max(max(fy1, fy2), top + 32)
-                b = _box((min(fx1, fx2) - minx) * s, (top - miny) * s,
-                         abs(fx2 - fx1) * s, (bot - top) * s)
-                if b:
-                    steep = abs(fy2 - fy1) / abs(fx2 - fx1) >= 0.2
-                    lines.append(f"{reg['slope' if steep else 'ground']} "
-                                 + " ".join(f"{v:.6f}" for v in b))
-            stem = f"{mid}_{re.sub(r'[^0-9A-Za-z_]+', '_', use_seed)}"
-            img_out = ydir / "images" / f"{stem}.png"
-            lbl_out = ydir / "labels" / f"{stem}.txt"
-            shutil.copyfile(result["preview_path"], img_out)
-            lbl_out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            reg_file.write_text(json.dumps(reg, ensure_ascii=False, indent=1), encoding="utf-8")
-            # classes.txt（darknet 风格）+ dataset.yaml（ultralytics 用），每次导出全量重写
-            inv = sorted(reg.items(), key=lambda kv: kv[1])
-            (ydir / "classes.txt").write_text(
-                "\n".join(nm for nm, _ in inv) + "\n", encoding="utf-8")
-            names_yaml = "\n".join(f"  {i}: {nm}" for nm, i in inv)
-            (ydir / "dataset.yaml").write_text(
-                f"path: {ydir.resolve().as_posix()}\ntrain: images\nval: images\n"
-                f"names:\n{names_yaml}\n", encoding="utf-8")
-            result["yolo"] = {"image": str(img_out), "labels": str(lbl_out),
-                              "classes": str(ydir / "classes.txt"),
-                              "dataset": str(ydir / "dataset.yaml"),
-                              "boxes": len(lines),
-                              "states": state_cnt}
-        finally:
-            lock.unlink(missing_ok=True)
     # 游戏内小地图（miniMap canvas + 客户端同款标记换算），Web UI / AI 都能用
     result["name"] = mj.get("name", "")
     result["street_name"] = mj.get("streetName", "")
@@ -1396,75 +1163,6 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
                             for lr in mj.get("ladderRope", [])]}
 
 
-def c_probe_batch(ids: list[str], win_w: int = 1366, win_h: int = 768,
-                  no_boss: bool = False) -> list[dict]:
-    """批量探测：一次进程内算完多张图的「能不能导 1366×768 窗口」。
-
-    批量脚本别逐张调 map-info（每次都得起一个 onefile exe，杀毒+解包开销
-    会把并发拖死）——用这个一次全查：读 stdin 的 id 列表，输出 JSON 数组。
-    usable=True 表示这张图够大、不缩放、有刷怪，可以随机取窗口导出。
-    no_boss=True 时刷怪判定只数非大 BOSS 的怪：只刷大 BOSS（tier=big）的图
-    usable=False；高阶怪（tier=boss）算可用怪。
-    """
-    ws = _need_ws()
-    R = _render_mod()
-    mobnx = ws / "Mob.nx"
-    tier = {m["id"]: m.get("tier", "normal")
-            for m in mob_meta(ws, mobnx)} if mobnx.exists() else {}
-    out = []
-    for mid in (str(i).strip() for i in ids):
-        rec: dict = {"id": mid}
-        try:
-            if not re.fullmatch(r"\d{9}", mid):
-                raise CliError("地图 id 应该是 9 位数字", 2)
-            visited = set()
-            d_mid = mid
-            mj = None
-            for _ in range(5):                  # 链接图顺链（防环 4 跳）
-                if d_mid in visited:
-                    raise CliError("link 成环", 1)
-                visited.add(d_mid)
-                outdir = CACHE / "map" / d_mid
-                if not (outdir / "map.json").exists():
-                    if outdir.exists():
-                        drop_dir(outdir)
-                    outdir.parent.mkdir(parents=True, exist_ok=True)
-                    _run(["nxmap", d_mid, str(outdir)], ws, timeout=600)
-                if not (outdir / "map.json").exists():
-                    raise CliError(f"nxmap 没产出 map.json（{d_mid}）", 1)
-                mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
-                link = str(mj.get("info", {}).get("link") or "").strip()
-                if link and link != d_mid and re.fullmatch(r"\d{9}", link):
-                    d_mid = link
-                    continue
-                break
-            cx, cy, cw, chh = R.map_bounds(mj)
-            minx, miny = cx - 40, cy - 40
-            bw, bh = cw + 80, chh + 80
-            s = 1.0                  # 渲染改成 1:1（真实尺寸），不再缩到 1600 宽
-            life = [l for l in mj.get("life", []) if l.get("type") == "m"]
-            small = [l for l in life
-                     if tier.get(str(l.get("id", "")).lstrip("0"), "normal") != "big"]
-            rec.update({"world": {"x": minx, "y": miny, "w": bw, "h": bh},
-                        "scale": round(s, 4), "life_count": len(life),
-                        "small_count": len(small),
-                        "usable": bool((small if no_boss else life)
-                                       and s >= 0.999
-                                       and bw >= win_w and bh >= win_h)})
-            if no_boss and len(small) < len(life):
-                rec["boss_filtered"] = len(life) - len(small)
-            if d_mid != mid:
-                rec["link_to"] = d_mid
-        except CliError as e:
-            rec["usable"] = False
-            rec["error"] = str(e)
-        except Exception as e:                   # 单张坏图不拖垮整批
-            rec["usable"] = False
-            rec["error"] = f"{type(e).__name__}: {e}"
-        out.append(rec)
-    return out
-
-
 def c_clear_cache() -> dict:
     # 逐个删子目录，删不掉的挪进 trash —— 见 drop_dir 注释
     for d in list(CACHE.iterdir()) if CACHE.exists() else []:
@@ -1551,7 +1249,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     # ---- 路由 ----
     # POST-only 路由集合：GET 打过来回 405（与旧 FastAPI 行为一致），别的才 404
-    _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert", "/api/mob/export",
+    _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert",
                    "/api/map/export", "/api/map/imgsearch", "/api/export/clear-cache"}
 
     def do_GET(self):
@@ -1563,12 +1261,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_state)
         elif path == "/api/job":
             self._api(c_job)
-        elif path == "/api/mobs":
-            self._api(c_mobs)
         elif path.startswith("/api/mob/icon/"):
             self._api(c_mob_icon, path.rsplit("/", 1)[-1])
-        elif path.startswith("/api/mob/") and path.endswith("/maps"):
-            self._api(c_mob_maps, path[len("/api/mob/"):-len("/maps")])
         elif path == "/api/maps":
             self._api(c_maps)
         elif path == "/api/map/imgindex":
@@ -1600,8 +1294,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_workspace, b["path"])
         elif path == "/api/convert":
             self._api(_web_convert, b.get("files") or [], bool(b.get("force")))
-        elif path == "/api/mob/export":
-            self._api(c_mob_export, str(b.get("raw") or ""), bool(b.get("preview")))
         elif path == "/api/map/export":
             vp = b.get("view")      # 导出窗口左上角世界坐标 {x, y}；缺省地图正中
             view = None
@@ -1613,9 +1305,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_map_export, str(b.get("id") or ""),
                       bool(b.get("preview")), bool(b.get("mobs")),
                       int(b.get("density") or 1), view,
-                      bool(b.get("yolo")),
                       str(b["seed"]) if b.get("seed") else None,
-                      bool(b.get("no_boss")), no_bg=bool(b.get("no_bg")))
+                      no_bg=bool(b.get("no_bg")))
         elif path == "/api/map/imgsearch":
             img = b.get("image")
             if not img:
@@ -1624,9 +1315,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_map_imgsearch, str(img))
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
-        elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps") \
-                or path.startswith("/api/mob/icon/") \
-                or (path.startswith("/api/mob/") and path.endswith("/maps")):
+        elif path in ("/api/state", "/api/job", "/api/maps") \
+                or path.startswith("/api/mob/icon/"):
             self._send_json(405, {"detail": f"Method Not Allowed: {path} 是 GET 接口"})
         else:
             self._send_json(404, {"detail": f"no route: {path}"})
@@ -1712,32 +1402,6 @@ def cmd_job(a) -> int:
     return 0
 
 
-def cmd_mobs(a) -> int:
-    d = c_mobs()
-    if a.json or not a.filter:
-        _out(d, a.json)
-        return 0
-    items = d["mobs"]
-    if a.filter == "boss":
-        items = [m for m in items if m["tier"] in ("boss", "big")]
-    elif a.filter == "big":
-        items = [m for m in items if m["tier"] == "big"]
-    if a.name:
-        print("id,name,tier,level,hp,boss,link,frames")
-        for m in items:
-            print(f"{m['id']},{m['name']},{m['tier']},{m['level']},{m['hp']},{m['boss']},{m['link']},{m['frames']}")
-    else:
-        for m in items:
-            print(f"{m['id']}\t{m['name']}\t{m['tier']}\tLv{m['level']}\tHP {m['hp']}")
-    print(f"# 共 {len(items)} 只", file=sys.stderr)
-    return 0
-
-
-def cmd_mob_maps(a) -> int:
-    _out(c_mob_maps(a.id), a.json)
-    return 0
-
-
 def cmd_maps(a) -> int:
     d = c_maps()
     if a.json or not a.filter:
@@ -1770,28 +1434,8 @@ def cmd_map_info(a) -> int:
     return 0
 
 
-def cmd_probe(a) -> int:
-    """批量探测（stdin 一行一个 id）：usable=True 才能随机导 1366×768 窗口。"""
-    ids = [ln.strip() for ln in sys.stdin if ln.strip()]
-    recs = c_probe_batch(ids, a.w, a.h, no_boss=a.no_boss)
-    print(json.dumps(recs, ensure_ascii=False))
-    ok = sum(1 for r in recs if r.get("usable"))
-    print(f"# 探测 {len(recs)} 张，可用 {ok} 张", file=sys.stderr)
-    return 0
-
-
 def cmd_mob_icon(a) -> int:
     _out(c_mob_icon(a.id), a.json)
-    return 0
-
-
-def cmd_mob_export(a) -> int:
-    d = c_mob_export(a.id, preview=a.preview)
-    if a.json:
-        _out(d, True)
-    else:
-        link = f"（链接怪 → 画面同 {d['link']['to']}）" if d.get("link") else ""
-        print(f"已导出 {d['count']} 帧 → {d['dir']} {link}")
     return 0
 
 
@@ -1808,9 +1452,7 @@ def cmd_map_export(a) -> int:
                   file=sys.stderr)
             return 2
     d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density,
-                     view=view, yolo=bool(getattr(a, "yolo", False)),
-                     seed=getattr(a, "seed", None),
-                     no_boss=bool(getattr(a, "no_boss", False)),
+                     view=view, seed=getattr(a, "seed", None),
                      no_bg=bool(getattr(a, "no_bg", False)))
     if a.json:
         _out(d, True)
@@ -1824,30 +1466,11 @@ def cmd_map_export(a) -> int:
               f"地面 {d['footholds']} 段 · 绳梯 {d['ladders']} 段{mobs} {link}")
         print(f"目录: {d['dir']}")
         print(f"预览: {d['preview_path']}")
-        if d.get("yolo"):
-            y = d["yolo"]
-            st = " · ".join(f"{k}×{v}" for k, v in sorted(y.get("states", {}).items()))
-            print(f"YOLO: {y['boxes']} 个框 · 图 {y['image']}")
-            print(f"      标注 {y['labels']} · 类别 {y['classes']} · 数据集 {y['dataset']}")
-            if st:
-                print(f"      状态分布: {st}")
     return 0
 
 
 def cmd_clear_cache(a) -> int:
     _out(c_clear_cache(), a.json)
-    return 0
-
-
-def cmd_mob_frames(a) -> int:
-    """列出一只怪有哪些动画（stand/move/jump/hit/die1…）与帧数。"""
-    d = c_mob_export(a.id, preview=True)
-    anims: dict[str, int] = {}
-    for f in d.get("frames", []):
-        anims[f["anim"]] = max(anims.get(f["anim"], 0), f["frame"] + 1)
-    data = {"id": a.id, "dir": d["dir"], "total_frames": d["count"],
-            "link": d.get("link"), "anims": anims}
-    _out(data, a.json)
     return 0
 
 
@@ -1863,14 +1486,14 @@ def build_parser() -> argparse.ArgumentParser:
   1. wztool state --json                      # 看有没有设置工作区
   2. wztool workspace "D:/path/to/nxrun"       # 设置工作区（放 .wz/.nx 的目录）
   3. wztool convert Mob.wz Map.wz String.wz    # wz → nx（需要 bin\\ 里的原生工具）
-  4. wztool mobs --json                        # 怪物列表（含 tier/level/hp/link/frames）
-  5. wztool maps --json                        # 地图列表（含 life_maps=有怪的图）
-  6. wztool mob-export 0100100                 # → exports/mobs/0100100/（PNG 逐帧 + manifest.csv）
-  7. wztool map-export 000050000 --mobs        # → exports/maps/000050000/（map.json + 贴图 + 预览）
+  4. wztool maps --json                        # 地图列表（含 life_maps=有怪的图）
+  5. wztool map-info 000050000 --json          # 地图元信息（不渲染，含可导窗口范围）
+  6. wztool map-export 000050000 --mobs        # → exports/maps/000050000/（map.json + 贴图 + 窗口图）
+  7. wztool map-minimap 000050000              # → 游戏内小地图 PNG
 
 约定:
   - 所有 id 兼容带/不带前导 0（"0100100" 与 "100100" 等价）。
-  - 链接怪/链接图（WZ info/link 机制）自动顺链解析，返回 JSON 里有 link 字段。
+  - 链接图/链接怪（WZ info/link 机制）自动顺链解析，返回 JSON 里有 link 字段。
   - 怪物帧 PNG 的 ox/oy 是锚点（脚底中心）；map.json 的 life[].cy 是怪站的地面 y。
   - --json 永远输出完整数据；不加 --json 时列表类命令只打摘要/表头，省 token。
 """
@@ -1902,17 +1525,6 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("job", help="查询后台任务进度（web 模式下 convert 用）")
     _j(p); p.set_defaults(fn=cmd_job)
 
-    p = sub.add_parser("mobs", help="列出全部怪物（tier=big/boss/normal，含等级血量）",
-                       epilog="不加 --json 时只打印表格式列表；--name 加中文名列。")
-    p.add_argument("--filter", choices=["all", "boss", "big"], default="",
-                   help="按档位筛：boss=BOSS+大BOSS，big=只看大BOSS")
-    p.add_argument("--name", action="store_true", help="非 JSON 输出带名字列")
-    _j(p); p.set_defaults(fn=cmd_mobs)
-
-    p = sub.add_parser("mob-maps", help="这只怪自然刷新在哪些地图（life 反向聚合）")
-    p.add_argument("id", help="怪 id（带不带前导 0 都行）")
-    _j(p); p.set_defaults(fn=cmd_mob_maps)
-
     p = sub.add_parser("maps", help="列出全部地图 id（life_maps=有怪自然刷新的图）")
     p.add_argument("--filter", choices=["all", "mob", "empty"], default="",
                    help="mob=只看有怪的图，empty=只看无怪图")
@@ -1924,27 +1536,6 @@ def build_parser() -> argparse.ArgumentParser:
                               "导出图固定 1366×768（客户端画面），--view 选窗口位置。")
     p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
     _j(p); p.set_defaults(fn=cmd_map_info)
-
-    p = sub.add_parser("mob-frames", help="列出一只怪的动画列表与帧数（stand/move/die1…）")
-    p.add_argument("id", help="怪 id")
-    _j(p); p.set_defaults(fn=cmd_mob_frames)
-
-    p = sub.add_parser("probe", help="批量探测地图可导窗口（stdin 一行一个 id，输出 JSON 数组）",
-                       epilog="批量脚本专用：一次进程内查完全部地图，比逐张 map-info 快几十倍。\n"
-                              "usable=True 表示够大、不缩放、有刷怪，可随机导 W×H 窗口。")
-    p.add_argument("--w", type=int, default=1366, help="窗口宽（默认 1366）")
-    p.add_argument("--h", type=int, default=768, help="窗口高（默认 768）")
-    p.add_argument("--no-boss", action="store_true",
-                   help="刷怪判定只数非大BOSS的怪：只刷大BOSS(tier=big)的图 usable=False（挂机升级场景；高阶怪算可用）")
-    _j(p); p.set_defaults(fn=cmd_probe)
-
-    p = sub.add_parser("mob-export", help="导出一只怪的全部动画帧 PNG + manifest.csv",
-                       epilog="输出: exports/mobs/<id>/（--preview 时进 .cache/mob/<id>/）。\n"
-                              "manifest.csv 列: mob,anim,frame,file,w,h,ox,oy,delay；\n"
-                              "ox/oy=锚点(脚底中心)，把各帧对到同一画布用它。")
-    p.add_argument("id", help="怪 id（链接怪自动转向目标怪）")
-    p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 exports")
-    _j(p); p.set_defaults(fn=cmd_mob_export)
 
     p = sub.add_parser("mob-icon", help="取一只怪的 stand 帧（路径/尺寸/锚点）",
                        epilog="给刷怪点叠怪、做图鉴头像用；ox/oy=脚底中心锚点。")
@@ -1959,17 +1550,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
     p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 exports")
     p.add_argument("--mobs", action="store_true",
-                   help="预览图合成怪物（沿地面随机散布、贴地不悬空；动作状态也随机：站/走/攻击/受击/死亡等，默认每次随机，--seed 可复现）")
-    p.add_argument("--yolo", action="store_true",
-                   help="产出 YOLO 训练集（exports/yolo/：images+labels+classes.txt"
-                        "+dataset.yaml；每只怪一个框（类别=id_名字__动作状态）、"
-                        "每段绳/梯一个框、每段地面(foothold)一个框——"
-                        "平地=ground、坡度≥0.2(约11°)=slope 两类分开；"
-                        "配 --mobs 出正样本，不带 --mobs 出负样本（没怪，绳梯地面照常标注））")
+                   help="预览图合成怪物（沿地面随机散布、贴地不悬空；动作状态也随机：站/走/攻击/受击/死亡等，"
+                        "默认每次随机，--seed 可复现；大 BOSS 一律不合成）")
     p.add_argument("--seed", metavar="S", help="配合 --mobs：固定随机种子（同 seed 同布局；缺省每次随机）")
-    p.add_argument("--no-boss", action="store_true",
-                   help="配合 --mobs/--yolo：不合成/标注大BOSS（tier=big，HP≥1000万；高阶怪照常出现，挂机升级不打大BOSS）；"
-                        "只刷大BOSS的图会得到没有怪的图")
     p.add_argument("--density", type=int, default=1, metavar="N",
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
     p.add_argument("--no-bg", action="store_true",
