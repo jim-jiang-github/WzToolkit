@@ -41,6 +41,10 @@
 
 namespace fs = std::filesystem;
 
+// nlnx's load_all() insists on a fixed file set (Base.nx, ...) next to the exe.
+// The CN client ships self-contained Mob.nx / String.nx, so open them by name.
+namespace nl { namespace nx { node add_file(std::string name); } }
+
 // ------------------------------------------------------------------ node utils
 
 static bool is_uint(const std::string & s) {
@@ -57,6 +61,17 @@ static bool collect_roots() {
     g_roots.clear();
     nl::node r[4] = { nl::nx::Mob, nl::nx::Mob001, nl::nx::Mob002, nl::nx::Mob2 };
     for (int i = 0; i < 4; ++i) if (r[i]) g_roots.push_back(r[i]);
+    if (g_roots.empty()) {
+        // CN layout: Mob.nx holds "<id>.img" at the file root (no "Mob" folder),
+        // String.nx carries a "String" folder. Same fallback as nxmap's load_cn.
+        nl::node f = nl::nx::add_file("Mob.nx");
+        if (f) {
+            nl::nx::Mob = f["Mob"] ? f["Mob"] : f;
+            g_roots.push_back(nl::nx::Mob);
+        }
+        nl::node s = nl::nx::add_file("String.nx");
+        if (s) nl::nx::String = s["String"] ? s["String"] : s;
+    }
     return !g_roots.empty();
 }
 
@@ -90,8 +105,12 @@ static nl::node find_mob(const std::string & id) {
     return nl::node();
 }
 
+static std::string mob_name(const std::string & id);
+static std::string norm_id(const std::string & s);
+
 static std::string mob_name(const std::string & id) {
-    nl::node n = nl::nx::String["Mob.img"][id.c_str()]["name"];
+    // CN String Mob.img keys carry no leading zeros ("100100", not "0100100").
+    nl::node n = nl::nx::String["Mob.img"][norm_id(id).c_str()]["name"];
     if (!n) return std::string();
     return n.get_string();
 }
@@ -211,6 +230,21 @@ static std::string norm_id(const std::string & s) {
     return s.substr(p);
 }
 
+// NX names are UTF-8; a narrow fs::path would read them as ANSI and garble
+// every CN name. Convert UTF-8 -> wide -> path, then let path::string() narrow
+// it with the system codepage (GBK here) for the narrow stdio calls.
+static fs::path u8path(const std::string & s) {
+#ifdef _WIN32
+    if (s.empty()) return fs::path();
+    int w = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    std::wstring ws(static_cast<size_t>(w > 0 ? w - 1 : 0), L'\0');
+    if (w > 1) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, ws.data(), w);
+    return fs::path(ws);
+#else
+    return fs::path(s);
+#endif
+}
+
 static std::string safe_name(const std::string & s) {
     std::string out;
     for (unsigned char c : s) {
@@ -267,7 +301,14 @@ static int cmd_info() {
         nl::node mob = find_mob(id);
         if (!mob) continue;
         nl::node info = mob["info"];
-        if (!info) continue;
+        if (!info) {
+            // CN mobs carry sprites only -- the stat nodes (level/hp/boss) live
+            // in the game's encrypted Packs/*.ms, which no tool parses. Still
+            // list them so browsing/export work; stats show as 0.
+            std::cout << id << ",\"" << mob_name(id) << "\",0,0,0,0,,"
+                      << mob_frame_count(mob) << "\n";
+            continue;
+        }
         // link 怪自己没有完整 info，往目标跳（最多 4 跳，防环）
         nl::node src = info;
         std::string target = info_link(info);
@@ -394,13 +435,13 @@ static int cmd_export(const std::string & outdir, const Opts & opt) {
             name = mob_name(id);
             norm = norm_id(id);
             dirname = opt.named && !name.empty() ? (norm + "_" + safe_name(name)) : norm;
-            dir = opt.flat ? outdir : (fs::path(outdir) / dirname).string();
+            dir = opt.flat ? outdir : (fs::path(outdir) / u8path(dirname)).string();
         }
         catch (const std::exception &) {
             // Retry with the bare id - it is the mob name that breaks the path.
             try {
                 dirname = norm_id(id);
-                dir = opt.flat ? outdir : (fs::path(outdir) / dirname).string();
+                dir = opt.flat ? outdir : (fs::path(outdir) / u8path(dirname)).string();
             }
             catch (const std::exception & e2) {
                 std::fprintf(stderr, "SKIP mob=%s (name/dir): %s\n", id.c_str(), e2.what());
@@ -535,7 +576,24 @@ int main(int argc, char ** argv) {
                      "                        [--no-composite] [--named]\n";
         return 1;
     }
-    nl::nx::load_all();
+    // load_all() dereferences a null file node when some well-known files
+    // (Base.nx ...) are missing -- the CN layout never has them, and an empty
+    // dir crashes it too. Open exactly what we need by name instead (same
+    // approach as nxmap's load_cn). Each file's imgs sit either under a folder
+    // named like the file (classic) or straight at the root (CN).
+    {
+        struct { const char * file; nl::node * slot; } files[] = {
+            {"Mob.nx", &nl::nx::Mob},         {"Mob001.nx", &nl::nx::Mob001},
+            {"Mob002.nx", &nl::nx::Mob002},   {"Mob2.nx", &nl::nx::Mob2},
+            {"String.nx", &nl::nx::String},
+        };
+        for (const auto & e : files) {
+            std::string stem = e.file;
+            stem.resize(stem.size() - 3);
+            nl::node f = nl::nx::add_file(e.file);
+            if (f) *e.slot = f[stem.c_str()] ? f[stem.c_str()] : f;
+        }
+    }
     SetUnhandledExceptionFilter(on_crash);
     if (!collect_roots()) { std::cerr << "Mob.nx not found in cwd\n"; return 2; }
 
