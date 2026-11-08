@@ -357,6 +357,7 @@
         <button class="on" data-m="map" title="地图：按 id/名字浏览，预览 1366×768 客户端画面，导出 map.json + 贴图 + 渲染图">🗺 地图</button>
         <button data-m="mob" title="怪物素材：按 id/名字浏览全部怪物，看每个动作的逐帧动画，导出逐帧 PNG（带锚点 manifest）">👾 怪物素材</button>
         <button data-m="char" title="人物素材：肤色/发型/脸/帽子/衣服/武器随便配，实时合成动画并导出逐帧 PNG">🧑 人物素材</button>
+        <button data-m="skill" title="技能特效：按职业浏览全部技能，播放每个技能的施放/弹道/命中/全屏特效，导出逐帧 PNG">✨ 技能特效</button>
       </div>
       <span style="flex:1"></span>
       <span class="muted" id="mode-hint"></span>
@@ -438,6 +439,25 @@
             <div class="muted" id="cd-out" style="margin-top:4px"></div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- 技能特效：职业 → 技能列表 → 特效逐帧播放 + 导出 -->
+    <div class="pane" id="skdex" hidden>
+      <div class="md-bar">
+        <select id="sk-job" style="max-width:180px"></select>
+        <input type="text" id="sk-q" placeholder="搜索技能 id 或名字 …" />
+        <span class="muted" id="sk-count"></span>
+        <span style="flex:1"></span>
+        <label class="muted" style="display:flex;align-items:center;gap:4px">
+          <input type="checkbox" id="sk-gline" /> 地面线
+        </label>
+        <button class="primary mini" id="sk-export" disabled
+                title="把当前技能的全部特效序列导出成 PNG + manifest.json → .exports/skills/&lt;job&gt;/&lt;skill&gt;/">⬇ 导出到 .exports</button>
+      </div>
+      <div class="md-body">
+        <div class="md-list" id="sk-list"></div>
+        <div class="md-detail" id="sk-detail"><span class="muted">左侧选一个技能：播放全部特效序列（施放 / 弹道 / 命中 / 全屏），导出逐帧 PNG 素材。</span></div>
       </div>
     </div>
   </div>
@@ -752,11 +772,15 @@ async function scan() {
             <td>${cn.string_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
         <tr><td>Mob.nx（怪物素材，${cn.mob_nx ? cn.mob_nx_gb + " GB" : "约 30 GB"}）</td>
             <td>${cn.mob_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
+        <tr><td>Character.nx（人物素材，${cn.char_nx ? cn.char_nx_gb + " GB" : "约 3 GB"}）</td>
+            <td>${cn.char_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
+        <tr><td>Skill.nx（技能特效，${cn.skill_nx ? cn.skill_nx_gb + " GB" : "约 15 GB"}）</td>
+            <td>${cn.skill_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
         </table>
-        <div class="muted" style="margin-top:6px">怪物素材页签已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）；人物素材的国服转换还没做好，该页签暂不可用。</div>`;
+        <div class="muted" style="margin-top:6px">地图 / 找图 / 怪物素材 / 人物素材 / 技能特效页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
       $("#cv-row").style.display = "none";
       // 缺哪个自动补转哪个（本会话只自动触发一次，避免失败后无限重试）
-      const todo = [cn.map_nx, cn.string_nx, cn.mob_nx].some((v) => !v);
+      const todo = [cn.map_nx, cn.string_nx, cn.mob_nx, cn.char_nx, cn.skill_nx].some((v) => !v);
       if (todo && !CNAUTO) {
         CNAUTO = true;
         convert();
@@ -1105,20 +1129,222 @@ function mdClose() {
   setMode("map");
 }
 
+/* ================= 技能特效查看器 ==================
+   职业 → 技能列表（String 中文名）→ 特效序列（effect/ball/hit/screen/…）
+   逐帧播放（按锚点对齐）→ 导出逐帧 PNG + manifest.json。 */
+const SK = { jobs: null, job: null, items: [], sel: null, data: null,
+             timer: null, gen: 0 };
+
+async function skOpen() {
+  if (SK.jobs) { skJobs(); return; }
+  $("#sk-list").innerHTML = '<span class="muted" style="padding:10px;display:block">读取职业列表…</span>';
+  try {
+    const d = await api("/api/skill/jobs");
+    SK.jobs = (d.jobs || []).filter((j) => j.skills > 0);
+    skJobs();
+  } catch (e) {
+    $("#sk-list").innerHTML = `<span class="miss" style="padding:10px;display:block">读取失败：${e.message}</span>`;
+  }
+}
+
+function skJobs() {
+  const sel = $("#sk-job");
+  sel.innerHTML = (SK.jobs || []).map((j) =>
+    `<option value="${j.id}">${j.id}（${j.skills} 技能）</option>`).join("");
+  if (!SK.jobs?.length) {
+    $("#sk-list").innerHTML = '<span class="muted" style="padding:10px;display:block">还没有职业数据（Skill.nx 未转换）</span>';
+    return;
+  }
+  sel.onchange = () => skPickJob(sel.value);
+  skPickJob(SK.job || sel.value);
+}
+
+async function skPickJob(job) {
+  SK.job = job;
+  $("#sk-job").value = job;
+  $("#sk-list").innerHTML = '<span class="muted" style="padding:10px;display:block">读取技能列表…</span>';
+  try {
+    const d = await api("/api/skill/list?job=" + encodeURIComponent(job));
+    if (SK.job !== job) return;
+    SK.items = d.items || [];
+    skRenderList();
+  } catch (e) {
+    $("#sk-list").innerHTML = `<span class="miss" style="padding:10px;display:block">读取失败：${e.message}</span>`;
+  }
+}
+
+function skRenderList() {
+  const q = ($("#sk-q").value || "").trim().toLowerCase();
+  let items = SK.items.filter((s) => s.effects?.length);
+  if (q) items = items.filter((s) => s.id.includes(q) ||
+                                  (s.name || "").toLowerCase().includes(q));
+  $("#sk-count").textContent = `${items.length} 技能`;
+  const el = $("#sk-list");
+  el.innerHTML = items.slice(0, 600).map((s) => {
+    const eff = (s.effects || []).slice(0, 3).join(" / ");
+    return `<div class="it" data-id="${s.id}" title="${eff}">
+      <span class="id">${s.id}</span><span class="nm">${s.name || ""}</span></div>`;
+  }).join("") || '<div class="muted" style="padding:10px">没有匹配</div>';
+  el.querySelectorAll(".it").forEach((it) => {
+    const s = SK.items.find((x) => x.id === it.dataset.id);
+    it.classList.toggle("on", SK.sel && SK.sel.id === it.dataset.id);
+    it.onclick = () => { if (s) skSelect(s); };
+  });
+}
+
+async function skSelect(s) {
+  SK.sel = s;
+  SK.gen++;
+  $$("#sk-list .it").forEach((x) => x.classList.toggle("on", x.dataset.id === s.id));
+  $("#sk-export").disabled = false;
+  const det = $("#sk-detail");
+  det.innerHTML = `<div>技能 <b>${s.id}</b> · ${s.name || "（无名）"}<br>
+    <span class="muted">正在导出特效帧 …</span></div>`;
+  try {
+    const d = await api("/api/skill/frames?job=" + encodeURIComponent(SK.job) +
+                        "&skill=" + encodeURIComponent(s.id));
+    if (SK.sel !== s) return;
+    SK.data = d;
+    skRenderDetail(det, s);
+  } catch (e) {
+    det.innerHTML = `<div>技能 <b>${s.id}</b> · ${s.name || ""}</div>
+      <span class="miss">取特效失败：${e.message}</span>`;
+  }
+}
+
+/* 特效帧按锚点归零后的公共包围盒 */
+function skAnimBox(frames) {
+  let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+  for (const f of frames) {
+    minx = Math.min(minx, -f.ax); miny = Math.min(miny, -f.ay);
+    maxx = Math.max(maxx, f.w - f.ax); maxy = Math.max(maxy, f.h - f.ay);
+  }
+  return { minx, miny, W: Math.round(maxx - minx), H: Math.round(maxy - miny) };
+}
+
+function skRenderDetail(det, s) {
+  const seqs = (SK.data.manifest && SK.data.manifest.seqs) || [];
+  if (!seqs.length) {
+    det.innerHTML = `<div>技能 <b>${s.id}</b> · ${s.name || ""}</div>
+      <span class="muted">这个技能没有特效帧（只有图标）。</span>`;
+    return;
+  }
+  det.innerHTML = `<div class="flexline"><div>技能 <b>${s.id}</b> · ${s.name || "（无名）"}<br>
+      <span class="muted">${seqs.length} 组特效：${seqs.map((q) => q.name).join(" / ")}</span></div></div>
+    <div class="muted" style="margin:4px 0 2px">${SK.data.dir}</div>
+    <div class="mb-player" id="sk-player"></div>
+    <div id="sk-anim"></div>
+    <div id="sk-out" class="muted" style="margin-top:8px"></div>`;
+  const player = $("#sk-player"), animHost = $("#sk-anim");
+
+  const drawPlayer = () => {
+    clearTimeout(SK.timer);
+    const chips = seqs.map((q, i) =>
+      `<button class="pchip${i === 0 ? " on" : ""}" data-a="${i}">▶ ${q.name}</button>`).join("");
+    player.innerHTML = `<div class="pchipbar">${chips}</div>`;
+    const wrap = document.createElement("div");
+    wrap.className = "pstagewrap";
+    const stage = document.createElement("div");
+    stage.className = "mb-stage";
+    wrap.append(stage);
+    player.append(wrap);
+    skPlay(0, stage, 1);
+    player.querySelectorAll(".pchip").forEach((c) => c.onclick = () => {
+      player.querySelectorAll(".pchip").forEach((x) => x.classList.remove("on"));
+      c.classList.add("on");
+      skPlay(+c.dataset.a, stage, 1);
+    });
+  };
+
+  // 静态帧格：每组特效按锚点对齐平铺
+  let html = "";
+  for (const q of seqs) {
+    const box = skAnimBox(q.frames);
+    html += `<div class="animgrp"><div class="ahead">
+        <span class="aname">${q.name}</span>
+        <span class="muted">${q.frames.length} 帧 · 包围盒 ${box.W}×${box.H}</span></div>
+      <div class="fgrid">${q.frames.map((f) => {
+        const left = (-f.ax - box.minx), top = (-f.ay - box.miny);
+        return `<figure class="fcell" style="margin:0"><div class="fbx"
+            style="width:${box.W}px;height:${box.H}px">
+            <img src="${f.url}" loading="lazy"
+                 style="left:${left}px;top:${top}px;width:${f.w}px;height:${f.h}px">
+          </div><figcaption class="fcap">${f.img} ${f.w}×${f.h}</figcaption></figure>`;
+      }).join("")}</div></div>`;
+  }
+  animHost.innerHTML = html;
+  drawPlayer();
+}
+
+function skPlay(i, stage, Z) {
+  clearTimeout(SK.timer);
+  const seqs = (SK.data.manifest && SK.data.manifest.seqs) || [];
+  const q = seqs[i];
+  if (!q || !q.frames.length) return;
+  const gen = SK.gen;
+  const box = skAnimBox(q.frames);
+  stage.style.width = box.W * Z + "px";
+  stage.style.height = box.H * Z + "px";
+  stage.innerHTML = "";
+  const img = document.createElement("img");
+  if ($("#sk-gline")?.checked) {
+    const gl = document.createElement("div");
+    gl.className = "gline"; gl.style.top = -box.miny * Z + "px";
+    const ad = document.createElement("div");
+    ad.className = "adot"; ad.style.left = (-box.minx * Z - 2) + "px";
+    ad.style.top = (-box.miny * Z - 2) + "px";
+    stage.append(gl, ad);
+  }
+  stage.append(img);
+  let k = 0;
+  const step = () => {
+    if (gen !== SK.gen) return;
+    const f = q.frames[k % q.frames.length];
+    img.src = f.url;
+    img.style.left = (-f.ax - box.minx) * Z + "px";
+    img.style.top = (-f.ay - box.miny) * Z + "px";
+    img.style.width = f.w * Z + "px";
+    img.style.height = f.h * Z + "px";
+    k++;
+    SK.timer = setTimeout(step, f.delay > 0 ? f.delay : 120);
+  };
+  step();
+}
+
+async function skExport(btn) {
+  if (!SK.sel) return;
+  const out = $("#sk-out") || $("#sk-detail");
+  if (btn) { btn.disabled = true; btn.textContent = "导出中…"; }
+  try {
+    const job = SK.job, skill = SK.sel.id;
+    const d = await api("/api/skill/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job, skill }),
+    });
+    out.innerHTML = `✅ 已导出 <b>${d.count}</b> 个文件 → <code>${d.dir}</code>`;
+  } catch (e) {
+    out.innerHTML = `<span class="miss">导出失败：${e.message}</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "⬇ 导出到 .exports"; }
+  }
+}
+
 /* ---------------- 三大类切换：地图 / 怪物素材 / 人物素材 ----------------
    三个大类平级，用卡片标题里的分段控件切换；面板互斥显示，切走时停掉动画定时器。 */
 const MODE_HINT = {
   map: "左侧选一张地图 → 预览 / 导出",
   mob: "左侧选一只怪 → 看逐帧动画 / 导出",
   char: "左侧换装 → 实时合成 / 导出",
+  skill: "左侧选职业和技能 → 看特效动画 / 导出",
 };
 let MODE = "map";
 function setMode(m) {
-  if (m !== "mob" && m !== "char") m = "map";
+  if (m !== "mob" && m !== "char" && m !== "skill") m = "map";
   MODE = m;
   $("#pane-map").hidden = m !== "map";
   $("#mobdex").hidden = m !== "mob";
   $("#chardex").hidden = m !== "char";
+  $("#skdex").hidden = m !== "skill";
   $$("#mainseg button").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
   $("#mode-hint").textContent = MODE_HINT[m] || "";
   if (m !== "map") $("#mapzoom").hidden = true;
@@ -1126,6 +1352,8 @@ function setMode(m) {
   else { clearTimeout(MD.timer); MD.gen++; }
   if (m === "char") chOpen();
   else clearTimeout(CH.timer);
+  if (m === "skill") skOpen();
+  else clearTimeout(SK.timer);
 }
 
 /* ---------------- 人物素材（角色）：选装 → 实时合成 → 导出 ---------------- */
@@ -1790,6 +2018,9 @@ document.addEventListener("keydown", (e) => {
 });
 /* 怪物素材查看器事件 */
 $("#md-q").oninput = mdRenderList;
+/* 技能特效查看器事件 */
+$("#sk-q").oninput = skRenderList;
+$("#sk-export").onclick = (e) => skExport(e.currentTarget);
 $("#mobdex .md-bar").onclick = (e) => {
   const b = e.target.closest(".md-flt");
   if (!b) return;
