@@ -25,6 +25,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -239,6 +240,8 @@ static std::vector<std::string> split(const std::string & s, char sep) {
 }
 
 static std::string item_name(const char * cat, const std::string & id) {
+    if (id.empty()) return "";
+    for (char c : id) if (!std::isdigit(static_cast<unsigned char>(c))) return "";
     std::string num = std::to_string(std::stoll(id));   // String keys drop leading zeros
     nl::node n = nl::nx::String["Eqp.img"]["Eqp"][cat][num.c_str()]["name"];
     if (n && n.data_type() == nl::node::type::string) return n.get_string();
@@ -270,6 +273,11 @@ static int cmd_list(const std::string & cat) {
             std::string nm = it.name();
             if (nm.size() < 5 || nm.compare(nm.size() - 4, 4, ".img") != 0) continue;
             std::string id = nm.substr(0, nm.size() - 4);
+            // 国服 Face/Weapon 里混着 "1CommonFaceCN.img" 这种非数字条目，
+            // 不是可选素材；item_name 里 stoll 会抛异常直接崩掉进程。
+            bool numeric = !id.empty();
+            for (char c : id) if (!std::isdigit(static_cast<unsigned char>(c))) { numeric = false; break; }
+            if (!numeric) continue;
             if (!first) std::cout << ",";
             first = false;
             std::cout << "{\"id\":\"" << id << "\",\"name\":\"" << esc(item_name(cat.c_str(), id)) << "\"}";
