@@ -122,14 +122,15 @@
   .browse div { padding: 4px 10px; cursor: pointer; border-radius: 5px; }
   .browse div:hover { background: #0e3b35; }
   .mapimg { display: block; image-rendering: pixelated; cursor: zoom-in; }
-  /* 游戏窗口：1366×768 固定视角（= 客户端画面 = 导出尺寸）。里面的地图是"画布"，
-     按住拖动平移（不缩放）；小地图 HUD 贴在这个窗口上，所以不动。
-     --gv = 显示倍率（DPI 补偿）：1 游戏像素显示成 --gv 个 CSS px，画布仍是 1:1 游戏像素 */
+  /* 游戏窗口：CSS 固定 1366×768（= 客户端画面 = 导出尺寸）。DPI 由浏览器自然处理：
+     系统 125% 缩放时它在屏幕上的物理大小 = 1366×1.25，和真实客户端窗口完全一致。
+     里面的地图是"画布"，按住拖动平移（不缩放）；小地图 HUD 贴在窗口上，所以不动。 */
   .gvbox { position: relative; flex: none; overflow: hidden; border-radius: 6px;
+           width: 1366px; height: 768px;
            background: #0b0f14; border: 1px solid var(--line);
            box-shadow: 0 0 0 1px #0006 inset; }
   .gameview { position: absolute; left: 0; top: 0; width: 1366px; height: 768px;
-              overflow: hidden; transform-origin: 0 0; background: #0b0f14;
+              overflow: hidden; background: #0b0f14;
               cursor: grab; touch-action: none; }
   .gameview.dragging { cursor: grabbing; }
   .mapwrap { position: absolute; left: 0; top: 0; display: inline-block;
@@ -322,24 +323,12 @@ let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加
 const VPW = 1366, VPH = 768;   // 游戏窗口（= 客户端画面）= 唯一导出尺寸
 let VIEWPOS = null;     // 窗口左上角在整张地图里的坐标（游戏像素）；null = 居中
 let VPDRAG = null;      // 拖画布进行中
-let GVS = 1;            // 显示倍率（DPI 补偿）：窗口 CSS 尺寸 = 游戏像素 × GVS，画布仍 1:1
 let DRAGMOVED = 0;      // 刚拖过画布的时间戳 → 抑制那次点击（避免误开放大查看）
 
-/* 显示倍率：1366×768 是游戏的逻辑分辨率，高 DPI 屏上不补偿就会显得偏小，
-   所以固定跟随系统缩放（devicePixelRatio）。 */
-function gvScale() {
-  const dpr = window.devicePixelRatio || 1;
-  return Math.max(1, Math.min(dpr, 3));
-}
-function gvApplyScale() {
-  const gv = $("#gameview"), box = $("#gvbox");
-  if (!gv || !box) return;
-  GVS = gvScale();
-  gv.style.transform = `scale(${GVS})`;
-  box.style.width = VPW * GVS + "px";
-  box.style.height = VPH * GVS + "px";
-  vpPlace();
-}
+/* 显示倍率恒为 1：窗口 CSS 尺寸固定 1366×768，屏幕上的物理大小 = 1366×系统缩放
+   （浏览器自然处理 DPI），和冒险岛客户端窗口在屏幕上的实际大小一致，不再额外放大。
+   留作常量：HUD 拖动等坐标换算统一除以 GVS。 */
+const GVS = 1;
 
 /* 窗口固定不动，整张地图反向平移 —— 就是游戏里人物走动时画布横向滚动的效果 */
 function applyView() {
@@ -398,7 +387,6 @@ window.addEventListener("mouseup", () => {
   const gv = $("#gameview");
   if (gv) gv.classList.remove("dragging");
 });
-window.addEventListener("resize", () => { if ($("#gameview")) gvApplyScale(); });
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
 async function boot() {
@@ -951,7 +939,7 @@ function bindMmHud(d) {
     if (e.button !== 0 || e.target.classList.contains("mmd")) return;
     e.preventDefault(); e.stopPropagation();
     const r = wrap.getBoundingClientRect(), hr = hud.getBoundingClientRect();
-    const dx = (e.clientX - hr.left) / GVS, dy = (e.clientY - hr.top) / GVS;   // 窗口是 scale(GVS) 的，换算回游戏像素
+    const dx = (e.clientX - hr.left) / GVS, dy = (e.clientY - hr.top) / GVS;   // 窗口如有缩放，换算回游戏像素
     const move = (ev) => {
       const x = Math.max(0, Math.min((ev.clientX - r.left) / GVS - dx, VPW - hud.offsetWidth));
       const y = Math.max(0, Math.min((ev.clientY - r.top) / GVS - dy, VPH - hud.offsetHeight));
@@ -1040,7 +1028,6 @@ async function mapLoad(id, preview) {
       <div id="export-out" style="margin-top:6px"></div>`;
     mapData = d;
     bindMinimap(d);
-    gvApplyScale();          // 先算显示倍率（DPI 补偿），窗口尺寸按倍率放大
     bindMmHud(d);
     bindGvDrag();            // 画布拖动 / 滚轮平移
     vpPlace();
