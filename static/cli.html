@@ -132,6 +132,9 @@
                   cursor: pointer; font-size: 13px; }
   .optpop label:hover { color: var(--acc); }
   .optpop label[title] { cursor: help; }
+  /* 工作区选择弹窗：占满卡片宽 */
+  .wspop { left: 16px; right: 16px; top: 46px; width: auto; max-height: 70vh;
+           overflow: auto; }
   /* 游戏窗口：CSS 固定 1366×768（= 客户端画面 = 导出尺寸）。DPI 由浏览器自然处理：
      系统 125% 缩放时它在屏幕上的物理大小 = 1366×1.25，和真实客户端窗口完全一致。
      里面的地图是"画布"，按住拖动平移（不缩放）；小地图 HUD 贴在窗口上，所以不动。 */
@@ -224,23 +227,28 @@
   <div class="sub">wztool web —— 由 wztool 命令行工具驱动（导出功能可全部用 CLI 子命令调用，本页面只是可视化）</div>
   <div class="banner" id="err"></div>
 
-  <!-- ① 工作区 -->
-  <div class="card">
-    <h2><span class="step">1</span> 选择工作区（放 .wz 文件的目录）</h2>
-    <div class="row" style="position:relative">
-      <input type="text" id="ws-path" placeholder="例如 C:\msdata83" style="flex:1;min-width:420px" />
-      <button id="ws-browse">浏览</button>
-      <button class="primary" id="ws-scan">扫描</button>
-      <div class="browse" id="ws-menu" hidden></div>
+  <!-- ① 工作区（收进弹窗，点「选择工作区」展开） -->
+  <div class="card" style="position:relative; padding-bottom:10px">
+    <div class="flexline">
+      <h2 style="margin:0"><span class="step">1</span> 工作区 <span class="muted" id="ws-mini" style="font-weight:400"></span></h2>
+      <button class="mini" id="ws-toggle">📁 选择工作区</button>
     </div>
-    <div class="muted" id="ws-state" style="margin-top:8px">尚未选择</div>
-    <div id="wz-table" style="margin-top:12px"></div>
-    <div class="row" style="margin-top:10px">
-      <label class="muted"><input type="checkbox" id="cv-force" /> 强制重转（忽略已存在的 .nx）</label>
-      <button id="cv-go" disabled>转换为 NX</button>
-      <span class="muted" id="cv-note"></span>
+    <div class="optpop wspop" id="ws-pop" hidden>
+      <div class="row" style="position:relative">
+        <input type="text" id="ws-path" placeholder="例如 C:\msdata83" style="flex:1;min-width:420px" />
+        <button id="ws-browse">浏览</button>
+        <button class="primary" id="ws-scan">扫描</button>
+        <div class="browse" id="ws-menu" hidden></div>
+      </div>
+      <div class="muted" id="ws-state" style="margin-top:8px">尚未选择</div>
+      <div id="wz-table" style="margin-top:12px"></div>
+      <div class="row" style="margin-top:10px">
+        <label class="muted"><input type="checkbox" id="cv-force" /> 强制重转（忽略已存在的 .nx）</label>
+        <button id="cv-go" disabled>转换为 NX</button>
+        <span class="muted" id="cv-note"></span>
+      </div>
+      <div class="log" id="cv-log" hidden></div>
     </div>
-    <div class="log" id="cv-log" hidden></div>
   </div>
 
   <!-- ② 浏览 / 导出 -->
@@ -397,11 +405,19 @@ window.addEventListener("mouseup", () => {
   const gv = $("#gameview");
   if (gv) gv.classList.remove("dragging");
 });
-/* 点「显示设置」弹窗外面 = 关闭（按钮自己的 onclick 已 stopPropagation，不会误关） */
+/* 点弹窗外面 = 关闭（「显示设置」「选择工作区」通用；按钮自己的 onclick 已 stopPropagation） */
 document.addEventListener("click", (e) => {
-  const op = $("#opt-pop");
-  if (op && !op.hidden && !e.target.closest("#opt-pop")) op.hidden = true;
+  for (const id of ["opt-pop", "ws-pop"]) {
+    const p = document.getElementById(id);
+    if (p && !p.hidden && !e.target.closest("#" + id)) p.hidden = true;
+  }
 });
+/* 「选择工作区」按钮：展开/收起工作区弹窗 */
+$("#ws-toggle").onclick = (e) => {
+  e.stopPropagation();
+  const p = $("#ws-pop");
+  p.hidden = !p.hidden;
+};
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
 async function boot() {
@@ -427,6 +443,7 @@ async function scan() {
     });
     WS = d.workspace;
     $("#ws-state").innerHTML = `工作区：<b>${WS}</b> · ${d.wz.length} 个 .wz`;
+    $("#ws-mini").textContent = `：${WS.split(/[\\/]/).pop()} · ${d.wz.length} 个 .wz`;
     const rows = d.wz.map((f) => `
       <tr>
         <td><input type="checkbox" data-f="${f.name}" ${f.name === "Map.wz" || f.name === "Mob.wz" ? "checked" : ""} /></td>
