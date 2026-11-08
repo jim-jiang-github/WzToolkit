@@ -107,6 +107,7 @@ set "PYTHONPATH=%PYLIBS%"
 "%PY%" -m PyInstaller --clean --noconfirm --onefile --name wztool ^
     --add-data "%ROOT%\vendor;vendor" ^
     --add-data "%ROOT%\webui;webui" ^
+    --add-data "%ROOT%\src\mob_boss_ref.json;." ^
     --distpath "%ROOT%\bin" ^
     --workpath "%ROOT%\.build\wztool" ^
     --specpath "%ROOT%\.build\wztool" ^

@@ -537,11 +537,18 @@ def _boss_ref() -> dict:
     """
     global _BOSS_REF
     if _BOSS_REF is None:
-        try:
-            _BOSS_REF = json.loads(
-                (Path(__file__).parent / "mob_boss_ref.json").read_text(encoding="utf-8"))
-        except Exception:
-            _BOSS_REF = {}
+        # 源码跑在 src/ 旁；PyInstaller onefile 解包到 sys._MEIPASS 根
+        cands = [Path(__file__).parent / "mob_boss_ref.json"]
+        me = getattr(sys, "_MEIPASS", "")
+        if me:
+            cands.append(Path(me) / "mob_boss_ref.json")
+        _BOSS_REF = {}
+        for c in cands:
+            try:
+                _BOSS_REF = json.loads(c.read_text(encoding="utf-8"))
+                break
+            except Exception:
+                continue
     return _BOSS_REF
 
 
