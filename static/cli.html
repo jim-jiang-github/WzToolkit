@@ -135,6 +135,21 @@
   /* 工作区选择弹窗：占满卡片宽 */
   .wspop { left: 16px; right: 16px; top: 46px; width: auto; max-height: 70vh;
            overflow: auto; }
+  /* 图片找图弹窗：贴着搜索框下方 */
+  .imgpop { left: 0; right: auto; top: 36px; width: 400px; max-width: 92vw; }
+  .imgpop .is-drop { border: 1.5px dashed var(--line); border-radius: 8px;
+                     padding: 14px 10px; text-align: center; color: var(--mut);
+                     font-size: 12.5px; cursor: pointer; outline: none; }
+  .imgpop .is-drop:focus, .imgpop .is-drop.drag { border-color: var(--acc); color: var(--fg); }
+  .imgpop .is-prev { display: block; max-width: 100%; max-height: 220px; margin: 8px auto 4px;
+                     border: 1px solid var(--line); border-radius: 6px; image-rendering: pixelated; }
+  .imgpop .isres { display: flex; align-items: center; gap: 10px; padding: 6px 8px;
+                   border: 1px solid var(--line); border-radius: 8px; margin-top: 6px;
+                   cursor: pointer; }
+  .imgpop .isres:hover { border-color: var(--acc); background: #ffffff0a; }
+  .imgpop .isres img { width: 120px; height: 56px; object-fit: contain; flex: none;
+                       image-rendering: pixelated; background: #0b0f14; border-radius: 4px; }
+  .imgpop .isres .sc { color: var(--acc); font-size: 12px; flex: none; width: 44px; }
   /* 怪物图鉴弹窗：立绘卡片网格 */
   .dexpop { position: absolute; right: 0; top: 32px; z-index: 30; width: 460px;
             max-height: 70vh; overflow: auto;
@@ -276,7 +291,11 @@
     </div>
     <div class="cols">
       <div class="col-left">
-        <input type="text" id="q" placeholder="搜索 id 或名字 …" style="width:100%;margin-bottom:8px" />
+        <div style="position:relative;display:flex;gap:6px;margin-bottom:8px">
+          <input type="text" id="q" placeholder="搜索 id 或名字 …" style="flex:1;min-width:0" />
+          <button id="imgsearch-btn" title="粘贴截图找地图：截一张游戏里的小地图（或整窗截图），Ctrl+V 粘贴进来直接搜">🖼 找图</button>
+          <div class="optpop imgpop" id="img-pop" hidden></div>
+        </div>
         <div class="filters" id="filters">
           <button class="flt on" data-f="all">全部</button>
           <button class="flt" data-f="boss">BOSS</button>
@@ -421,13 +440,139 @@ window.addEventListener("mouseup", () => {
   const gv = $("#gameview");
   if (gv) gv.classList.remove("dragging");
 });
-/* 点弹窗外面 = 关闭（「显示设置」「选择工作区」「怪物图鉴」通用；按钮自己的 onclick 已 stopPropagation） */
+/* 点弹窗外面 = 关闭（「显示设置」「选择工作区」「怪物图鉴」「图片找图」通用；按钮自己的 onclick 已 stopPropagation） */
 document.addEventListener("click", (e) => {
-  for (const id of ["opt-pop", "ws-pop", "dex-pop"]) {
+  for (const id of ["opt-pop", "ws-pop", "dex-pop", "img-pop"]) {
     const p = document.getElementById(id);
     if (p && !p.hidden && !e.target.closest("#" + id)) p.hidden = true;
   }
 });
+
+/* ---- 图片找图：粘贴截图 → /api/map/imgsearch 模板匹配全库小地图 ---- */
+let IMGQ = null;        // 粘贴进来的截图 dataURL
+let IMGSEQ = 0;         // 搜索请求序号（弹窗重开/重复点击时丢弃过期响应）
+
+function imgPopHTML() {
+  return `
+    <div class="optgrp">截图找地图：在游戏里截一张<b>小地图</b>（整窗截图也行）</div>
+    <div class="is-drop" id="is-drop" tabindex="0">点这里然后 <b>Ctrl+V</b> 粘贴截图<br>或把图片拖进来 / 点击选择文件</div>
+    <input type="file" id="is-file" accept="image/*" hidden />
+    <img class="is-prev" id="is-prev" hidden />
+    <div class="row" style="margin-top:6px;align-items:center">
+      <button class="primary mini" id="is-go" disabled>搜索</button>
+      <span class="muted" id="is-status"></span>
+    </div>
+    <div id="is-results"></div>`;
+}
+
+function imgPopSetImage(dataUrl) {
+  IMGQ = dataUrl;
+  const pop = $("#img-pop");
+  const prev = $("#is-prev"), drop = $("#is-drop"), go = $("#is-go");
+  if (!pop || !prev) return;
+  prev.src = dataUrl; prev.hidden = false;
+  if (drop) drop.style.display = "none";
+  if (go) go.disabled = false;
+}
+
+async function imgDoSearch(seq) {
+  if (!IMGQ) return;
+  const st = $("#is-status"), out = $("#is-results");
+  if (!st || !out) return;
+  st.textContent = "搜索中…";
+  try {
+    const d = await api("/api/map/imgsearch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: IMGQ }),
+    });
+    if (seq !== IMGSEQ) return;                    // 弹窗已重开，丢弃过期响应
+    if (d.building) {
+      st.textContent = "正在建立小地图索引（首次约 10 秒）…";
+      setTimeout(() => imgDoSearch(seq), 1000);
+      return;
+    }
+    st.textContent = d.results.length ? "" : "没找到相似的地图";
+    out.innerHTML = d.results.map((r) => `
+      <div class="isres" data-id="${r.id}">
+        <img src="${r.thumb}" loading="lazy">
+        <div style="flex:1;min-width:0">
+          <div><b>${r.id}</b>${r.name ? ` · ${r.name}` : ""}</div>
+          <div class="muted" style="font-size:11.5px">${r.street || ""}${r.scale !== 1 ? ` · 截图缩放 ${Math.round(r.scale * 100)}%` : ""}</div>
+        </div>
+        <span class="sc">${Math.round(r.score * 100)}%</span>
+      </div>`).join("");
+    for (const el of out.querySelectorAll(".isres")) {
+      el.onclick = (e) => {
+        e.stopPropagation();
+        $("#img-pop").hidden = true;
+        TAB = "map";
+        $("#tab-map").classList.add("on"); $("#tab-mob").classList.remove("on");
+        renderList();
+        mapLoad(el.dataset.id, true);
+      };
+    }
+  } catch (e) {
+    if (seq === IMGSEQ) st.textContent = "出错：" + e.message;
+  }
+}
+
+function bindImgPop() {
+  const btn = $("#imgsearch-btn"), pop = $("#img-pop");
+  if (!btn || !pop) return;
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    if (!pop.hidden) { pop.hidden = true; return; }
+    pop.innerHTML = imgPopHTML();
+    pop.hidden = false;
+    IMGQ = null; ++IMGSEQ;
+    const drop = $("#is-drop"), file = $("#is-file"), go = $("#is-go");
+    // 粘贴：弹窗开着时全局截获 Ctrl+V 的图片
+    const onPaste = (ev) => {
+      if (pop.hidden) return;
+      for (const it of ev.clipboardData?.items || []) {
+        if (it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (!f) continue;
+          const rd = new FileReader();
+          rd.onload = () => imgPopSetImage(rd.result);
+          rd.readAsDataURL(f);
+          ev.preventDefault();
+          return;
+        }
+      }
+    };
+    document.addEventListener("paste", onPaste);
+    // 弹窗关掉时摘掉监听（用MutationObserver观察hidden太重，改成每次渲染重挂；这里用一次性flag）
+    pop._onPaste = onPaste;
+    drop.onpaste = onPaste;
+    drop.onclick = () => file.click();
+    drop.onkeydown = (ev) => { if (ev.key === "v" && (ev.ctrlKey || ev.metaKey)) file.click(); };
+    drop.ondragover = (ev) => { ev.preventDefault(); drop.classList.add("drag"); };
+    drop.ondragleave = () => drop.classList.remove("drag");
+    drop.ondrop = (ev) => {
+      ev.preventDefault(); drop.classList.remove("drag");
+      const f = ev.dataTransfer?.files?.[0];
+      if (f && f.type.startsWith("image/")) {
+        const rd = new FileReader();
+        rd.onload = () => imgPopSetImage(rd.result);
+        rd.readAsDataURL(f);
+      }
+    };
+    file.onchange = () => {
+      const f = file.files?.[0];
+      if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => imgPopSetImage(rd.result);
+      rd.readAsDataURL(f);
+    };
+    go.onclick = (e2) => { e2.stopPropagation(); ++IMGSEQ; imgDoSearch(IMGSEQ); };
+  };
+  // 关弹窗时摘掉全局 paste（hidden 变化时触发）
+  new MutationObserver(() => {
+    if (pop.hidden && pop._onPaste) document.removeEventListener("paste", pop._onPaste);
+  }).observe(pop, { attributes: true, attributeFilter: ["hidden"] });
+}
+bindImgPop();
 /* 「选择工作区」按钮：展开/收起工作区弹窗 */
 $("#ws-toggle").onclick = (e) => {
   e.stopPropagation();
