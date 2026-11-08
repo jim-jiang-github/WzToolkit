@@ -61,7 +61,12 @@ if getattr(sys, "frozen", False):
             break
     VENDOR = Path(_ME) / "vendor" if _ME and (Path(_ME) / "vendor").exists() else ROOT / "vendor"
 else:
+    # 源码模式：本文件在 src\ 里，往上找带 vendor\ / static\ 的那层当项目根
     ROOT = Path(__file__).resolve().parent
+    for _cand in (ROOT, *ROOT.parents):
+        if (_cand / "vendor").exists() or (_cand / "static").exists():
+            ROOT = _cand
+            break
     VENDOR = ROOT / "vendor"
 
 BIN = ROOT / "bin"
