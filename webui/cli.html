@@ -43,6 +43,19 @@
   .log { background: #0b0f14; border: 1px solid var(--line); border-radius: 7px;
          padding: 8px 10px; font: 12px/1.5 Consolas, monospace; max-height: 170px;
          overflow: auto; white-space: pre-wrap; margin-top: 10px; }
+  .progbox { margin-top: 10px; }
+  .prog-head { display: flex; justify-content: space-between; align-items: baseline;
+               gap: 10px; font-size: 12.5px; }
+  .prog-head b { font-weight: 600; color: #cfe0ff; }
+  .prog-bar { position: relative; height: 8px; margin-top: 6px; border-radius: 5px;
+              background: #0b0f14; border: 1px solid var(--line); overflow: hidden; }
+  .prog-bar i { position: absolute; top: 0; bottom: 0; left: 0; width: 0;
+                background: linear-gradient(90deg, #2f6fd0, #63a6ff);
+                border-radius: 5px; transition: width .35s ease; }
+  .prog-bar.indet i { animation: progs 1.1s linear infinite; }
+  @keyframes progs { from { left: -35%; width: 35%; } to { left: 100%; width: 35%; } }
+  .prog-sub { font-size: 11.5px; margin-top: 5px; }
+  .rc-btn { font-size: 12px; padding: 2px 9px; }
   .cols { display: grid; grid-template-columns: 300px 1fr; gap: 14px;
           flex: 1; min-height: 0; }
   .col-left { display: flex; flex-direction: column; min-height: 0; }
@@ -344,6 +357,11 @@
         <label class="muted"><input type="checkbox" id="cv-force" /> 强制重转（忽略已存在的 .nx）</label>
         <button id="cv-go" disabled>转换为 NX</button>
         <span class="muted" id="cv-note"></span>
+      </div>
+      <div class="progbox" id="prog-box" hidden>
+        <div class="prog-head"><b id="prog-stage">准备中…</b><span class="muted" id="prog-pct"></span></div>
+        <div class="prog-bar" id="prog-bar"><i id="prog-fill"></i></div>
+        <div class="prog-sub muted" id="prog-sub"></div>
       </div>
       <div class="log" id="cv-log" hidden></div>
     </div>
@@ -765,17 +783,19 @@ async function scan() {
         `工作区：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
       $("#ws-mini").textContent = `：国服官方 · ${cn.map_nx ? "已转换" : "待转换"}`;
       $("#wz-table").innerHTML = `
-        <table><tr><th>数据源</th><th>状态</th></tr>
+        <table><tr><th>数据源</th><th>状态</th><th></th></tr>
         <tr><td>Map.nx（全量 10 分片 + Back/Tile/Obj 位图，约 23 GB）</td>
-            <td>${cn.map_nx ? `<span class="ok">已转换（${cn.map_nx_mb} MB）</span>` : '<span class="miss">未转换</span>'}</td></tr>
+            <td>${cn.map_nx ? `<span class="ok">已转换（${cn.map_nx_mb} MB）</span>` : '<span class="miss">未转换</span>'}</td>
+            <td style="text-align:right"><button class="mini rc-btn" id="rc-go"
+                title="补齐缺失的 .nx，并强制重建全库小地图库（小地图 PNG + 找图索引）">🔄 重新转换</button></td></tr>
         <tr><td>String.nx（地图名等中文表）</td>
-            <td>${cn.string_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
+            <td>${cn.string_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td><td></td></tr>
         <tr><td>Mob.nx（怪物素材，${cn.mob_nx ? cn.mob_nx_gb + " GB" : "约 30 GB"}）</td>
-            <td>${cn.mob_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
+            <td>${cn.mob_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td><td></td></tr>
         <tr><td>Character.nx（人物素材，${cn.char_nx ? cn.char_nx_gb + " GB" : "约 3 GB"}）</td>
-            <td>${cn.char_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
+            <td>${cn.char_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td><td></td></tr>
         <tr><td>Skill.nx（技能特效，${cn.skill_nx ? cn.skill_nx_gb + " GB" : "约 15 GB"}）</td>
-            <td>${cn.skill_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td></tr>
+            <td>${cn.skill_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td><td></td></tr>
         </table>
         <div class="muted" style="margin-top:6px">地图 / 找图 / 怪物素材 / 人物素材 / 技能特效页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
       $("#cv-row").style.display = "none";
@@ -821,6 +841,7 @@ async function convert() {
     $("#cv-log").hidden = false;
     $("#cv-note").textContent = "";
     TIMER = setInterval(pollJob, 1000);
+    startProgress();
   } catch (e) { fail(e); $("#cv-go").disabled = false; }
 }
 
@@ -835,6 +856,71 @@ async function pollJob() {
       scan();            // 刷新 nx 状态 & 列表
     }
   } catch (e) { fail(e); }
+}
+
+let PTIMER = null;
+
+async function reconvert() {
+  const btn = $("#rc-go");
+  if (btn) btn.disabled = true;
+  $("#cv-note").textContent = "";
+  try {
+    const d = await api("/api/reconvert", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (!d.started) { $("#cv-note").textContent = d.message || ""; if (btn) btn.disabled = false; return; }
+    $("#cv-log").hidden = false;
+    startProgress();
+  } catch (e) { fail(e); if (btn) btn.disabled = false; }
+}
+
+function startProgress() {
+  $("#prog-box").hidden = false;
+  $("#cv-log").hidden = false;
+  $("#prog-bar").classList.remove("indet");
+  $("#prog-fill").style.width = "0";
+  $("#prog-stage").textContent = "准备中…";
+  $("#prog-sub").textContent = "";
+  if (PTIMER) return;
+  PTIMER = setInterval(tickProgress, 800);
+  tickProgress();
+}
+
+async function tickProgress() {
+  let p;
+  try { p = await api("/api/progress"); } catch (e) { return; }
+  // 优先级：小地图索引 > 兜底生成 > 转换。重新转换时 _job 全程 running，
+  // 但那时候用户真正想看的是解压进度，不能被「转换」段挡在前面。
+  const seg = p.minimap.running
+    ? { name: p.minimap.stage || "小地图索引（全库解压）", done: p.minimap.done, total: p.minimap.total }
+    : p.auto.running
+    ? { name: p.auto.stage || "兜底小地图（1×1 退化图）", done: p.auto.done, total: p.auto.total }
+    : p.convert.running
+    ? { name: p.convert.stage || "转换", done: p.convert.done, total: p.convert.total }
+    : null;
+  const box = $("#prog-box"), bar = $("#prog-bar"), fill = $("#prog-fill");
+  if (!seg) {
+    clearInterval(PTIMER); PTIMER = null;
+    const bad = p.convert.error || p.minimap.error;
+    $("#prog-stage").textContent = bad ? "出错" : "已完成";
+    $("#prog-pct").textContent = "";
+    $("#prog-sub").textContent = bad
+      || (p.ready ? "小地图库就绪：可以浏览地图、找图、导出小地图了" : "");
+    bar.classList.remove("indet");
+    fill.style.width = "100%";
+    if (bad) fill.style.background = "#c0392b";
+    setTimeout(() => { box.hidden = true; fill.style.background = ""; }, 5000);
+    const b = $("#rc-go"); if (b) b.disabled = false;
+    return;
+  }
+  $("#prog-stage").textContent = seg.name;
+  const hasTotal = seg.total > 0;
+  bar.classList.toggle("indet", !hasTotal);
+  fill.style.width = hasTotal ? Math.min(100, (seg.done / seg.total) * 100) + "%" : "35%";
+  $("#prog-pct").textContent = hasTotal ? `${seg.done} / ${seg.total}` : "";
+  $("#prog-sub").textContent = !hasTotal
+    ? (seg.done ? `已处理 ${seg.done} 张…` : "启动中…")
+    : (seg.done >= seg.total ? "收尾中…" : "解压全库小地图，请勿关闭页面");
 }
 
 async function loadLists() {
@@ -1995,6 +2081,16 @@ async function browseOpen() {
 $("#ws-scan").onclick = scan;
 $("#ws-browse").onclick = browseOpen;
 $("#cv-go").onclick = convert;
+$("#wz-table").addEventListener("click", (e) => {
+  if (e.target && e.target.id === "rc-go") reconvert();
+});
+// 页面打开时若后台已在跑（转换 / 小地图索引 / 兜底生成），直接把进度条接上
+(async () => {
+  try {
+    const p = await api("/api/progress");
+    if (p.convert.running || p.minimap.running || p.auto.running) startProgress();
+  } catch (e) { /* 服务还没起来，忽略 */ }
+})();
 $("#q").oninput = renderList;
 function bindFilters(sel, setter) {
   $(sel).onclick = (e) => {
