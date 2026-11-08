@@ -1,18 +1,18 @@
 # WzToolkit
 
-把冒险岛的 `.wz` 资源文件**导入 → 转换 → 浏览 → 导出**的工具：
+把冒险岛的地图 `.wz` 资源**导入 → 转换 → 浏览 → 导出**的工具：
 **CLI 优先**（`wztool`，供 AI / 其他程序直接调用），附带可选 Web 页面。
+只做**地图导出**（含小地图、截图找图），不含训练集/自动打怪之类的功能。
 
 ```
 选一个放 .wz 的目录（工作区）
    │  wztool convert …  把选中的 .wz 转成 .nx（.nx 落在 .wz 旁边）
    ▼
-wztool mobs / maps   列出怪物与地图（--json 全字段）
+wztool maps          列出全部地图（--json 全字段）
    ▼
-wztool mob-export / map-export
-   ├─ exports\mobs\<id>\*.png         逐帧 sprite（直接可用于训练合成 / 图鉴）
+wztool map-export
    └─ exports\maps\<id>\{map.json, img\, window.png}
-                                    map.json 含 life（刷怪表）/ foothold / ladderRope；
+                                    map.json 含 life（刷怪表）/ foothold / ladderRope / portal；
                                     window.png = 1366×768 导出窗口（--view 选位置）
 wztool map-minimap 101040000        渲染游戏内小地图（miniMap canvas + 标记）→ PNG
 ```
@@ -26,7 +26,7 @@ powershell -File build.ps1
 # 2) CLI（推荐 / 自动化入口；已附带编译好的 wztool.exe）
 wztool --help                           # 全部子命令与示例（面向 AI/程序编写）
 wztool workspace "D:\MapleStory\nxrun"   # 设置工作区
-wztool mobs --json                      # 机器可读输出
+wztool maps --json                      # 机器可读输出
 wztool map-info 000050000               # 查地图尺寸/世界坐标/刷怪数（不渲染，秒级）
 wztool map-export 000050000 --mobs      # 导出地图并把怪物画进预览图
 wztool map-export 000050000 --no-bg     # 不画背景（天幕/云/山全跳过，PNG 透明），
@@ -45,47 +45,23 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
 - **不上传文件**：wz 动辄几百 MB，WebUI 只选本地目录路径，转换 / 导出全部在本机跑。
 - **工作区约定**：所有原生工具按「当前目录 + 裸文件名」找 `Map.nx` / `Mob.nx`，
   所以转换和导出都以你选的目录为工作目录；`.nx` 永远生成在 `.wz` 旁边。
-- **常见顺序**：`Map.wz` 和 `Mob.wz` 是最有用的两个；想要怪物名字出现在目录名里，
-  顺带转一下 `String.wz`（nxmob 的 --named 会用它）。
+- **常见顺序**：`Map.wz` 必需；想把怪物画进画面/图鉴，再转 `Mob.wz`；
+  想要怪物、地图名字显示出来，顺带转 `String.wz`（nxmob / 页面都会用它）。
 - **缓存**：预览产物放 `.cache\`（可随时清：`wztool clear-cache` 或
   接口 `POST /api/export/clear-cache`），正式导出放 `exports\`。
 - 转换 `Map.wz`（约 640MB）需要几分钟，页面会显示进度日志。
 
-## 帧尺寸 / manifest.csv
+## 怪物 / BOSS 判定
 
-WZ 里**每一帧的画布都是按自己的包围盒裁出来的**（同一只怪 stand_00 是 28×28、
-stand_01 可能是 31×28、die 帧甚至 46×18），所以单看 PNG 尺寸会觉得"忽大忽小" ——
-那是原图如此，不是导错。真正决定画面位置的是 `origin`（锚点，通常在脚底中心），
-导出时会一并写进 `manifest.csv`：
+怪物的 BOSS 档位只用 WZ 官方字段判定（`nxmob info` 一次全量导出）：
+`info/boss=1` 算 BOSS，再按 **maxHP** 分档——**大 BOSS** = maxHP ≥ 1000 万
+（Zakum / Horntail / Pink Bean 一档），其余 BOSS 次一档。
 
-```
-id,name,anim,frame,file,w,h,ox,oy,delay
-2130103,"Jr. Necki",stand,0,"stand_00.png",28,28,14,28,500
-```
-
-- `ox,oy`：PNG 左上角到锚点的像素距离。把每帧按 `(-ox,-oy)` 摆到同一张画布上，
-  帧与帧才对得齐；这张公共画布的尺寸就是该动画**在客户端里的真实包围盒**。
-- `delay`：该帧停留毫秒数（WZ 没写时是 0，客户端按默认 ~120ms 播）。
-
-WebUI 预览默认 **1x = 客户端真实渲染尺寸**（缩放按钮切 2x/4x 只为看清楚），
-播放器里蓝横线是站地线、蓝点是锚点像素 —— 要和游戏里量到的大小/识别框比对时直接用 1x。
-
-## BOSS 识别
-
-列表里 BOSS 会用颜色标出来，判定只用 WZ 官方字段（`nxmob info` 一次全量导出）：
-
-- **info/boss=1** → BOSS（客户端画长血条、放 boss 音乐看的就是这个标记）；
-  再按 **maxHP** 分档：
-  - **大 BOSS**（深红底 + 红字 + 徽标）：maxHP ≥ 1000 万（Zakum / Horntail / Pink Bean 一档）
-  - **BOSS**（暗橙底 + 橙字）：其余 boss 标记的（如 Mano、King Clang）
-- 悬停任意一行可以看到 Lv / HP；列表上方有「全部 / BOSS / 大 BOSS」筛选。
-- **链接怪**：`info/link` 指向另一只怪、自己没帧的（如 Greatest Oldies →
-  Latest Hits Compilation），预览时自动导出目标怪并标注「画面同 xxx」，
-  和客户端行为一致。
-- 状态图标、检查用假怪（如 "A transparent item for checking elimination"）按 id 段
-  和名字剔除，不算 BOSS。
-- 地图详情的「刷怪」标签用同一套判定着色（大部分大 boss 是脚本刷的，`life` 里
-  未必有，标签没色就是普通怪）。
+- 地图详情的「刷怪点」按档位着色（红=普通怪 / 橙=BOSS / 品红=大BOSS）；
+- 「怪物图鉴」卡片上同样标 BOSS / 大BOSS；
+- **合成怪物时大 BOSS 一律不出现**（只刷大 BOSS 的图会得到没有怪的画面），
+  高阶 BOSS 与普通怪照常出现；
+- 状态图标、检查用假怪按 id 段和名字剔除。
 
 ## 地图
 
@@ -106,8 +82,7 @@ WebUI 预览默认 **1x = 客户端真实渲染尺寸**（缩放按钮切 2x/4x 
     （= 客户端画面 = 唯一导出尺寸），整张 1:1 地图是窗口里的**画布**：
     按住拖动 / 滚轮平移（不能缩放），窗口固定不动 —— 就是游戏里人物走动时
     背景横向滚动的效果。窗口 CSS 固定 1366×768，屏幕上的物理大小 = 1366×系统缩放
-    （浏览器自然处理 DPI），与真实客户端窗口在屏幕上的大小一致；导出 /
-    导出YOLO 都是窗口里的画面（传送门蓝圈点击直接跳目标图，NPC / 刷怪点可开关）；
+    （浏览器自然处理 DPI），与真实客户端窗口在屏幕上的大小一致；导出 都是窗口里的画面（传送门蓝圈点击直接跳目标图，NPC / 刷怪点可开关）；
   - 还有「**小地图 HUD**」：把小地图窗口按客户端的画法直接贴在**游戏窗口**上，
     固定不随画布移动。
     位置/尺寸严格照源码——`UIMiniMap` 继承 `UIDragElement<PosMINIMAP>`，    位置 = 设置项 `PosMINIMAP`（**默认 `(0,0)` 即视口左上角**，拖动后写回设置）；
