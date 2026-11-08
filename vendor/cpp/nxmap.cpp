@@ -308,16 +308,52 @@ static int cmd_mini_all(const std::string & outdir) {
     return 0;
 }
 
+// ---------------------------------------------------------------- 全库传送门表
+// `nxmap portal-all <out.csv>`：单进程遍历所有地图，把 portal 节点导成 CSV
+// （mapid,pn,pt,x,y,tm）。做小地图合成时要用 pt=2 的地面传送口坐标在画布上画圈，
+// 逐图导出 map.json 太慢（1.4 万张），这里只碰 portal 子树，几十秒跑完。
+static int cmd_portal_all(const std::string & outpath) {
+    if (!load_cn()) return 2;
+    std::ofstream f(outpath, std::ios::binary);
+    if (!f) {
+        std::cerr << "cannot write: " << outpath << "\n";
+        return 2;
+    }
+    f << "\xEF\xBB\xBF" << "mapid,pn,pt,x,y,tm\n";
+    int maps = 0, rows = 0;
+    for_each_map_img([&](nl::node img) {
+            std::string id = stem_of(img.name());
+            nl::node pr = img["portal"];
+            if (!pr) return;
+            ++maps;
+            for (auto it = pr.begin(); it != pr.end(); ++it) {
+                nl::node p = *it;
+                f << csv_esc(id) << "," << csv_esc(jget_str(p, "pn")) << ","
+                  << jget_int(p, "pt") << "," << jget_int(p, "x") << ","
+                  << jget_int(p, "y") << "," << jget_int(p, "tm") << "\n";
+                ++rows;
+            }
+            if ((maps % 200) == 0) std::cerr << "maps: " << maps << "\r";
+    });
+    f.close();
+    std::cerr << "\nmaps with portal: " << maps << ", portal rows: " << rows << "\n";
+    std::cout << "portal-all -> " << outpath << "  rows=" << rows << "\n";
+    return 0;
+}
+
 int main(int argc, char ** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "life") == 0)
         return cmd_life();
     if (argc >= 3 && std::strcmp(argv[1], "mini-all") == 0)
         return cmd_mini_all(argv[2]);
+    if (argc >= 3 && std::strcmp(argv[1], "portal-all") == 0)
+        return cmd_portal_all(argv[2]);
     if (argc < 3) {
         std::cerr << "usage:\n"
                      "  nxmap <mapid> <outdir>\n"
                      "  nxmap life        # 全库刷怪表 CSV（mapid,mapname,type,id,x,y,fh,mobtime）\n"
-                     "  nxmap mini-all <outdir>  # 全库小地图索引（<id>.png + index.json）\n";
+                     "  nxmap mini-all <outdir>  # 全库小地图索引（<id>.png + index.json）\n"
+                     "  nxmap portal-all <out.csv>  # 全库传送门表（mapid,pn,pt,x,y,tm）\n";
         return 1;
     }
     const std::string mapid = argv[1];
