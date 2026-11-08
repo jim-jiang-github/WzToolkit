@@ -881,7 +881,7 @@ function mzClose() { $("#mapzoom").hidden = true; }
    标记坐标 = (世界坐标 + centerX/centerY) / 2^mag（后端已换算成 canvas 像素）。
    传送门只画 pt=2 的（update_static_markers 同款），点击直接跳目标图。
    小地图只以 HUD 形式叠在预览图上，不再单独出卡片。 */
-const MMSHOW = { p: true, n: true, m: true };   // 标记开关（HUD 用，换图后保持）
+const MMSHOW = { p: true, n: true, m: true };   // 标记开关（HUD 用，换图后重置回默认）
 function bindMinimap(d) {
   if (!d.minimap) return;
   for (const [id, key] of [["mm-p", "p"], ["mm-n", "n"], ["mm-m", "m"]]) {
@@ -986,6 +986,11 @@ function bindMmHud(d) {
 
 async function mapLoad(id, preview) {
   if (mapRef && mapRef.id !== id) VIEWPOS = null;   // 换图：窗口回地图正中
+  // 换图时配置全部回到默认（不延续上一张图的设置）
+  if (!mapRef || mapRef.id !== id) {
+    NOBG = false; EXPORTMOBS = false; NOBOSS = false; DENSITY = 1;
+    MMSHOW.p = true; MMSHOW.n = true; MMSHOW.m = true;
+  }
   mapRef = { id, preview };
   const det = $("#detail");
   det.innerHTML = `<div>地图 <b>${id}</b><br><span class="muted">导出 + 渲染中（大图要几秒）…</span></div>`;
