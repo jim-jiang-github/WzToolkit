@@ -372,9 +372,18 @@ static int cmd_dump(int argc, char ** argv) {
                 nl::node img = nl::nx::Character[category_of(slot)][ (pad8(id) + ".img").c_str() ];
                 if (!img) continue;
                 if (!std::strcmp(slot, "face")) {
+                    // 脸的位图在 default/<layer> 里（通常是 default/face，带 brow 锚点），
+                    // default 节点本身没有 bitmap —— 两个层级都要试。
                     nl::node fd = img["default"];
-                    if (fd.get_bitmap())
+                    if (fd.get_bitmap()) {
                         emit(layers, "face", "face", fd, std::string("face") + id + "_default");
+                    } else {
+                        for (nl::node c : fd) {
+                            if (!c.get_bitmap()) continue;
+                            emit(layers, "face", std::string(c.name()), c,
+                                 std::string("face") + id + "_default_" + c.name());
+                        }
+                    }
                     continue;
                 }
                 nl::node fr = img[action.c_str()][std::to_string(f).c_str()];
