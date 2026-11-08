@@ -567,6 +567,7 @@ document.addEventListener("click", (e) => {
 /* ---- 图片找图：粘贴截图 → /api/map/imgsearch 模板匹配全库小地图 ---- */
 let IMGQ = null;        // 粘贴进来的截图 dataURL
 let IMGSEQ = 0;         // 搜索请求序号（弹窗重开/重复点击时丢弃过期响应）
+let IMGT0 = 0;          // 本次搜索起点（显示「已等 N 秒」，索引首次要解压一分钟）
 
 function imgPopHTML() {
   return `
@@ -603,10 +604,14 @@ async function imgDoSearch(seq) {
     });
     if (seq !== IMGSEQ) return;                    // 弹窗已重开，丢弃过期响应
     if (d.building) {
-      st.textContent = "正在建立小地图识别索引（首次要几分钟，之后每次秒出）…";
+      // 首次要先把 14000+ 张小地图从 Map.nx 解出来（约一分钟，只做一次）
+      if (!IMGT0) IMGT0 = Date.now();
+      const sec = Math.round((Date.now() - IMGT0) / 1000);
+      st.textContent = `首次正在解压小地图库（约 1 分钟，只做一次）… 已等 ${sec}s`;
       setTimeout(() => imgDoSearch(seq), 1000);
       return;
     }
+    IMGT0 = 0;
     st.textContent = d.results.length ? "" : "没找到相似的地图";
     out.innerHTML = d.results.map((r) => `
       <div class="isres" data-id="${r.id}">
@@ -637,7 +642,7 @@ function bindImgPop() {
     if (!pop.hidden) { pop.hidden = true; return; }
     pop.innerHTML = imgPopHTML();
     pop.hidden = false;
-    IMGQ = null; ++IMGSEQ;
+    IMGQ = null; IMGT0 = 0; ++IMGSEQ;
     const drop = $("#is-drop"), file = $("#is-file"), go = $("#is-go");
     // 粘贴：弹窗开着时全局截获 Ctrl+V 的图片
     const onPaste = (ev) => {

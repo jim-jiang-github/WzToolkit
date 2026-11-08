@@ -658,6 +658,7 @@ def c_maps() -> dict:
 
 MMIDX = CACHE / "minimap"
 _mmjob: dict = {"running": False, "error": ""}
+_mm_lock = threading.Lock()
 
 
 def _minimap_ready() -> bool:
@@ -675,9 +676,17 @@ def _minimap_ready() -> bool:
 
 
 def _minimap_build() -> None:
-    """后台线程：mini-all 全库导小地图（先写临时目录，成功后整体替换）。"""
+    """后台线程：mini-all 全库导小地图（先写临时目录，成功后整体替换）。
+
+    这一步是「一次性解压」：把 Map.nx 里 14000+ 张 canvas 全部落成 PNG 目录，
+    之后所有找图都只读这个目录 + 签名索引，不再碰 23GB 的 Map.nx。
+    用非阻塞锁防重入（服务启动预热、转换完自动预热、首次搜索兜底可能同时来）。
+    """
+    if not _mm_lock.acquire(blocking=False):
+        return
     nxdir = _nx_dir()
     tmp = CACHE / "minimap.building"
+    _mmjob.update(running=True, error="")
     try:
         if tmp.exists():
             drop_dir(tmp)
@@ -695,6 +704,28 @@ def _minimap_build() -> None:
         _mmjob["error"] = str(exc)
     finally:
         _mmjob["running"] = False
+        _mm_lock.release()
+
+
+def minimap_warmup(delay: float = 0.0) -> None:
+    """后台预热小地图库：数据源在、索引不在/过期就悄悄建好（不阻塞请求）。
+
+    以前是等用户第一次点「找图」才在请求线程里开始解压，他要干等一分钟；
+    现在服务启动后、数据转换完成后都主动预热一次，用户点的时候一般已经好了。
+    """
+    def run() -> None:
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            if _minimap_ready():
+                return
+        except CliError:                       # 没有 Map.nx：还没转换，不用建
+            return
+        except Exception:                      # noqa: BLE001
+            return
+        _minimap_build()
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 # 小地图识别索引 --------------------------------------------------------------
@@ -720,8 +751,28 @@ def _thumbs_stale() -> bool:
         return True
 
 
+def _thumb_one(mid: str):
+    """一张小地图 → 64×64 归一化 int8 签名（纯色图留全 0：能进候选但分数为 0）。"""
+    g = cv2.imread(str(MMIDX / f"{mid}.png"), cv2.IMREAD_GRAYSCALE)
+    if g is None:
+        return None
+    t = cv2.resize(g, (THUMB_PX, THUMB_PX),
+                   interpolation=cv2.INTER_AREA).astype(np.float32)
+    t -= t.mean()
+    std = float(t.std())
+    if std >= 1e-3:
+        t = np.clip(t / std * 127.0, -127, 127)
+    else:
+        t = np.zeros_like(t)
+    return t.astype(np.int8)
+
+
 def _thumbs_build() -> None:
-    """把每张小地图压成 64×64 归一化签名，存 thumbs.npz（约 59MB）。"""
+    """把每张小地图压成 64×64 归一化签名，存 thumbs.npz（约 59MB）。
+
+    cv2.imread 解码时会放 GIL，8 线程并行比串行快 4 倍左右
+    （14449 张：12.4s → 3s 上下）。
+    """
     if cv2 is None or np is None:
         return
     if _thumbs["building"]:
@@ -731,18 +782,14 @@ def _thumbs_build() -> None:
         index = json.loads((MMIDX / "index.json").read_text(encoding="utf-8"))
         mapnx = _nx_dir() / "Map.nx"
         mids = sorted(index.keys())
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            rows = list(ex.map(_thumb_one, mids))
         arr = np.zeros((len(mids), THUMB_PX, THUMB_PX), dtype=np.int8)
         kept: list[str] = []
-        for mid in mids:
-            g = cv2.imread(str(MMIDX / f"{mid}.png"), cv2.IMREAD_GRAYSCALE)
-            if g is None:
+        for mid, t in zip(mids, rows):
+            if t is None:
                 continue
-            t = cv2.resize(g, (THUMB_PX, THUMB_PX),
-                           interpolation=cv2.INTER_AREA).astype(np.float32)
-            t -= t.mean()
-            std = float(t.std())
-            if std >= 1e-3:            # 纯色图留全 0：能进候选但分数为 0
-                arr[len(kept)] = np.clip(t / std * 127.0, -127, 127).astype(np.int8)
+            arr[len(kept)] = t
             kept.append(mid)
         tmp = MMIDX / "thumbs.npz.tmp"
         with open(tmp, "wb") as f:
@@ -821,9 +868,8 @@ def c_map_imgsearch(image: str) -> dict:
     if cv2 is None or np is None:
         raise CliError("缺依赖：先跑 python scripts\\deps.py（依赖装在 .pylibs\\ 里）", 1)
     if not _minimap_ready():
-        if not _mmjob["running"]:
-            _mmjob.update(running=True, error="")
-            threading.Thread(target=_minimap_build, daemon=True).start()
+        # 小地图库还没解出来（正常情况启动时就预热过了）：后台补建，这次让前端轮询
+        minimap_warmup()
         return {"building": True}
     raw_b64 = image.split(",", 1)[-1] if image.startswith("data:") else image
     buf = np.frombuffer(base64.b64decode(raw_b64), dtype=np.uint8)
@@ -2106,6 +2152,9 @@ def _web_convert(names: list[str], force: bool) -> dict:
                     _convert_one(wz, lambda s: _job["log"].append(s))
                     _job["done"] += 1
             _job["log"].append("全部完成 ✔")
+            # 数据刚变 —— 顺手把小地图库（找图用的 PNG 目录 + 签名索引）预热出来，
+            # 别等用户第一次点「找图」才现解压（那一次要等一分钟）
+            minimap_warmup(delay=1.0)
         except Exception as exc:              # noqa: BLE001
             _job["error"] = str(exc)
             _job["log"].append(f"出错：{exc}")
@@ -2154,6 +2203,9 @@ def cmd_web(args) -> int:
     except OSError as e:
         raise CliError(f"端口 {port} 起不来（{e}）；试试 wztool web --port 8001", 1)
     print(f"wztool web 已启动: {url}  （CLI 版页面；Ctrl+C 退出）")
+    # 启动即预热小地图库（找图用）：用户点「找图」时一般已经建好，
+    # 不用干等一分钟；延迟几秒让地图列表/接口先响应。
+    minimap_warmup(delay=3.0)
     if not args.no_open:
         try:
             import webbrowser
