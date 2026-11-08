@@ -101,6 +101,7 @@ _lock = threading.Lock()
 _ws: Path | None = None                        # 工作区（放 .wz / .nx 的目录，或国服客户端目录）
 _job: dict = {"id": 0, "running": False, "log": [], "done": 0, "total": 0, "error": ""}
 _lists: dict = {}                              # mobs / maps / life 缓存（键: 文件 mtime）
+_BOSS_REF: dict | None = None                  # boss 参照表懒加载
 _UNSET = object()                              # 国服探测哨兵：None=确认不是，对象=还没探测
 _cn_data: Path | None | object = _UNSET
 
@@ -528,39 +529,76 @@ def _mob_tier(raw_id: str, name: str, boss: int, hp: int) -> str:
     return "big" if hp >= 10_000_000 else "boss"
 
 
+def _boss_ref() -> dict:
+    """静态参照表：国际服数据里 boss=1 的怪 id → [hp, level]（src/mob_boss_ref.json）。
+
+    国服数值数据在加密的 Mob_00000.ms 里读不出来（boss/level/hp 全是 -1），
+    BOSS 档位靠这张表按 id 回退。id 语义各服通用，命中即可信。
+    """
+    global _BOSS_REF
+    if _BOSS_REF is None:
+        try:
+            _BOSS_REF = json.loads(
+                (Path(__file__).parent / "mob_boss_ref.json").read_text(encoding="utf-8"))
+        except Exception:
+            _BOSS_REF = {}
+    return _BOSS_REF
+
+
+def _apply_boss_ref(items: list[dict]) -> None:
+    """数据源完全读不到数值（全部 hp<=0）时，用参照表补 boss 档位/血量/等级。"""
+    if any(it.get("hp", 0) is not None and it.get("hp", -1) > 0 for it in items):
+        return                      # 数据源自带数值（国际服等），不动
+    ref = _boss_ref()
+    for it in items:
+        hit = ref.get(it["id"])
+        if not hit:
+            continue
+        it["boss"] = 1
+        if it.get("hp", -1) is None or it.get("hp", -1) <= 0:
+            it["hp"] = hit[0]
+        if it.get("level", -1) is None or it.get("level", -1) <= 0:
+            it["level"] = hit[1]
+        it["tier"] = _mob_tier(it["raw"], it["name"], it["boss"], it["hp"])
+
+
 def mob_meta(mobnx: Path) -> list[dict]:
     """跑 nxmob info 拿每只怪的 boss/等级/血量 + link 目标 + 自身帧数（按 mtime 缓存）。"""
     cache = CACHE / f"mobinfo2_{int(mobnx.stat().st_mtime)}.json"
+    items: list[dict] | None = None
     if cache.exists():
         try:
-            return json.loads(cache.read_text(encoding="utf-8"))
+            items = json.loads(cache.read_text(encoding="utf-8"))
+        except Exception:
+            items = None
+    if items is None:
+        out = _run(["nxmob", "info"], _nx_dir(), timeout=300)
+        items = []
+        for row in csv.reader(out.splitlines()):
+            if len(row) < 6 or not row[0].isdigit():
+                continue
+            raw, name = row[0], row[1]
+            try:
+                boss, lv, hp, exp = (int(x) for x in row[2:6])
+            except ValueError:
+                boss = lv = hp = exp = 0
+            link = row[6].strip().lstrip("0") if len(row) > 6 else ""
+            try:
+                frames = int(row[7]) if len(row) > 7 else 0
+            except ValueError:
+                frames = 0
+            items.append({"raw": raw, "id": raw.lstrip("0"), "name": name,
+                          "boss": boss, "level": lv, "hp": hp, "exp": exp,
+                          "link": link, "frames": frames,
+                          "tier": _mob_tier(raw, name, boss, hp)})
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
-    out = _run(["nxmob", "info"], _nx_dir(), timeout=300)
-    items: list[dict] = []
-    for row in csv.reader(out.splitlines()):
-        if len(row) < 6 or not row[0].isdigit():
-            continue
-        raw, name = row[0], row[1]
-        try:
-            boss, lv, hp, exp = (int(x) for x in row[2:6])
-        except ValueError:
-            boss = lv = hp = exp = 0
-        link = row[6].strip().lstrip("0") if len(row) > 6 else ""
-        try:
-            frames = int(row[7]) if len(row) > 7 else 0
-        except ValueError:
-            frames = 0
-        items.append({"raw": raw, "id": raw.lstrip("0"), "name": name,
-                      "boss": boss, "level": lv, "hp": hp, "exp": exp,
-                      "link": link, "frames": frames,
-                      "tier": _mob_tier(raw, name, boss, hp)})
+    # 参照表回退放在缓存之后：缓存里存的是原始值，boss 补丁每次都生效
+    _apply_boss_ref(items)
     items.sort(key=lambda x: int(x["id"]))
-    try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
     return items
 
 
