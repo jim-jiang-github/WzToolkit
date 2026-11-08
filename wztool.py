@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
 """wztool —— WzToolkit 命令行工具（CLI-first，供人类与其他程序/AI 直接调用）。
 
-功能：导入 .wz → 转成 .nx → 导出地图（map.json / 贴图 / 渲染预览 / 客户端画面窗口 /
-小地图 / 截图找图）。只做地图相关的导出，不含训练集之类的功能。
+功能：导入 .wz → 转成 .nx → 浏览导出怪物素材（逐帧动画 PNG + 锚点 manifest）与地图
+（map.json / 贴图 / 渲染预览 / 客户端画面窗口 / 小地图 / 截图找图）。
+不含训练集、挂机之类的功能。
 所有子命令都支持 --json 机器可读输出；退出码：0 成功，1 业务错误，2 参数错误。
 
 常用示例::
 
     wztool workspace "D:/MapleStory/nxrun"        # 1. 设置工作区（放 .wz/.nx 的目录）
     wztool convert Map.wz Mob.wz String.wz        # 2. wz → nx（耗时任务，同步执行）
-    wztool maps --json                            # 3. 列出全部地图（JSON）
-    wztool map-export 000050000 --mobs            # 4. 导出地图（预览图带怪物）
-    wztool map-minimap 000050000                  # 5. 渲染游戏内小地图
-    wztool web                                    # 6. 启动 Web 页面（人看，可选）
+    wztool mobs --json                            # 3. 列出全部怪物（JSON）
+    wztool mob-export 0100100                     # 4. 导出一只怪的全部动画帧
+    wztool maps --json                            # 5. 列出全部地图（JSON）
+    wztool map-export 000050000 --mobs            # 6. 导出地图（预览图带怪物）
+    wztool map-minimap 000050000                  # 7. 渲染游戏内小地图
+    wztool web                                    # 8. 启动 Web 页面（人看，可选）
 
 坐标与文件格式与客户端一致：怪物帧 PNG 带锚点(ox,oy=脚底中心)，
 地图 map.json 含刷怪表(life)/地面(foothold)/绳梯(ladderRope)。
@@ -404,6 +407,47 @@ def life_index(ws: Path, mapnx: Path) -> dict[str, list[dict]]:
     return idx
 
 
+def c_mobs() -> dict:
+    """全部怪物列表（图鉴/素材浏览用）：id/name/tier/level/hp/link/frames/img_ok。"""
+    ws = _need_ws()
+    mobnx = ws / "Mob.nx"
+    if not mobnx.exists():
+        raise CliError("工作区里没有 Mob.nx —— 先转换 Mob.wz", 1)
+    key = f"mobs:{mobnx.stat().st_mtime}"
+    if _lists.get("key") != key:
+        items = mob_meta(ws, mobnx)
+        byid = {it["id"]: it for it in items}
+        for it in items:
+            if not it.get("name"):
+                it["name"] = mob_names().get(it["id"]) or ""
+            # 有图 = 自己有帧，或 link 链条终点有帧（客户端就是渲染目标怪）
+            seen: set = set()
+            cur, ok = it, False
+            for _ in range(5):
+                if cur["id"] in seen:
+                    break
+                seen.add(cur["id"])
+                if cur.get("frames", 0) > 0:
+                    ok = True
+                    break
+                cur = byid.get(cur.get("link") or "")
+                if not cur:
+                    break
+            it["img_ok"] = ok
+        _lists.update(key=key, mobs=items)
+    return {"mobs": _lists["mobs"]}
+
+
+def c_mob_maps(kid: str) -> dict:
+    """这只怪自然刷新在哪些地图（life 反向聚合）。"""
+    ws = _need_ws()
+    mapnx = ws / "Map.nx"
+    if not mapnx.exists():
+        raise CliError("工作区里没有 Map.nx —— 先转换 Map.wz", 1)
+    idx = life_index(ws, mapnx)
+    return {"maps": idx.get(kid.lstrip("0"), [])}
+
+
 def c_maps() -> dict:
     ws = _need_ws()
     mapnx = ws / "Map.nx"
@@ -683,6 +727,75 @@ def c_mob_icon(raw: str) -> dict:
             "url": f"/preview/{pick.relative_to(CACHE).as_posix()}",
             "w": w, "h": h, "ox": ox, "oy": oy,
             "anims": anims}
+
+
+def _read_manifest(outdir: Path, root: Path, url_prefix: str, pngs: list[Path]) -> list[dict]:
+    """把 nxmob 的 manifest.csv 解析成帧表（含 origin/锚点/延迟）。
+
+    每帧 PNG 都按自己的包围盒裁出来（28x28、31x28…），画面位置由 ox/oy 决定。
+    """
+    man = outdir / "manifest.csv"
+    if not man.exists():
+        return []
+    by_name: dict[str, Path] = {}
+    for p in pngs:
+        by_name.setdefault(p.name, p)
+    out: list[dict] = []
+    rows = list(csv.reader(man.read_text(encoding="utf-8-sig").splitlines()))
+    for f in rows[1:]:
+        if len(f) < 10:
+            continue
+        p = by_name.get(f[4])
+        if p is None:
+            continue
+        try:
+            w, h, ox, oy, delay = (int(x) for x in f[5:10])
+        except ValueError:
+            continue
+        out.append({"file": f[4],
+                    "path": str(p),
+                    "url": url_prefix + p.relative_to(root).as_posix(),
+                    "anim": f[2], "frame": int(f[3]),
+                    "w": w, "h": h, "ox": ox, "oy": oy, "delay": delay})
+    return out
+
+
+def c_mob_export(raw: str, preview: bool = False) -> dict:
+    """导出一只怪的全部动画帧 PNG（逐帧，含锚点 manifest）。
+
+    preview=True 只出预览（.cache，重复调用秒回）；默认导出到 exports/mobs/。
+    链接怪（info/link）自动顺链导出目标怪。
+    """
+    ws = _need_ws()
+    raw = str(raw).strip()
+    if not re.fullmatch(r"\d+", raw):
+        raise CliError("怪 id 不合法（应为数字）", 2)
+    raw_req = raw
+    mobnx = ws / "Mob.nx"
+    if mobnx.exists():
+        meta = {m["id"]: m for m in mob_meta(ws, mobnx)}
+        raw = _resolve_mob_link(raw, meta)
+        raw = (meta.get(raw) or {}).get("raw") or raw.zfill(7)
+    link_info = {"from": raw_req, "to": raw} if raw != raw_req else None
+    if preview:
+        outdir = _ensure_mob_preview(raw, ws)
+    else:
+        outdir = EXPORTS / "mobs" / raw
+        if outdir.exists():
+            drop_dir(outdir)
+        outdir.parent.mkdir(parents=True, exist_ok=True)
+        _run(["nxmob", "export", str(outdir), "--only", raw, "--named"], ws,
+             timeout=600)
+    pngs = sorted(outdir.rglob("*.png"))
+    if not pngs:
+        raise CliError("没导出任何帧（这只怪可能没有图片资源）", 1)
+    root = CACHE if preview else EXPORTS
+    prefix = "/preview/" if preview else "/exports/"
+    return {"dir": str(outdir), "count": len(pngs),
+            "pngs": [prefix + p.relative_to(root).as_posix() for p in pngs[:400]],
+            "png_paths": [str(p) for p in pngs],
+            "frames": _read_manifest(outdir, root, prefix, pngs),
+            "preview": preview, "link": link_info}
 
 
 def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
@@ -1249,7 +1362,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     # ---- 路由 ----
     # POST-only 路由集合：GET 打过来回 405（与旧 FastAPI 行为一致），别的才 404
-    _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert",
+    _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert", "/api/mob/export",
                    "/api/map/export", "/api/map/imgsearch", "/api/export/clear-cache"}
 
     def do_GET(self):
@@ -1261,8 +1374,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_state)
         elif path == "/api/job":
             self._api(c_job)
+        elif path == "/api/mobs":
+            self._api(c_mobs)
         elif path.startswith("/api/mob/icon/"):
             self._api(c_mob_icon, path.rsplit("/", 1)[-1])
+        elif path.startswith("/api/mob/") and path.endswith("/maps"):
+            self._api(c_mob_maps, path[len("/api/mob/"):-len("/maps")])
         elif path == "/api/maps":
             self._api(c_maps)
         elif path == "/api/map/imgindex":
@@ -1294,6 +1411,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_workspace, b["path"])
         elif path == "/api/convert":
             self._api(_web_convert, b.get("files") or [], bool(b.get("force")))
+        elif path == "/api/mob/export":
+            self._api(c_mob_export, str(b.get("raw") or ""), bool(b.get("preview")))
         elif path == "/api/map/export":
             vp = b.get("view")      # 导出窗口左上角世界坐标 {x, y}；缺省地图正中
             view = None
@@ -1315,8 +1434,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_map_imgsearch, str(img))
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
-        elif path in ("/api/state", "/api/job", "/api/maps") \
-                or path.startswith("/api/mob/icon/"):
+        elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps") \
+                or path.startswith("/api/mob/icon/") \
+                or (path.startswith("/api/mob/") and path.endswith("/maps")):
             self._send_json(405, {"detail": f"Method Not Allowed: {path} 是 GET 接口"})
         else:
             self._send_json(404, {"detail": f"no route: {path}"})
@@ -1402,6 +1522,32 @@ def cmd_job(a) -> int:
     return 0
 
 
+def cmd_mobs(a) -> int:
+    d = c_mobs()
+    if a.json or not a.filter:
+        _out(d, a.json)
+        return 0
+    items = d["mobs"]
+    if a.filter == "boss":
+        items = [m for m in items if m["tier"] in ("boss", "big")]
+    elif a.filter == "big":
+        items = [m for m in items if m["tier"] == "big"]
+    if a.name:
+        print("id,name,tier,level,hp,boss,link,frames")
+        for m in items:
+            print(f"{m['id']},{m['name']},{m['tier']},{m['level']},{m['hp']},{m['boss']},{m['link']},{m['frames']}")
+    else:
+        for m in items:
+            print(f"{m['id']}\t{m['name']}\t{m['tier']}\tLv{m['level']}\tHP {m['hp']}")
+    print(f"# 共 {len(items)} 只", file=sys.stderr)
+    return 0
+
+
+def cmd_mob_maps(a) -> int:
+    _out(c_mob_maps(a.id), a.json)
+    return 0
+
+
 def cmd_maps(a) -> int:
     d = c_maps()
     if a.json or not a.filter:
@@ -1436,6 +1582,28 @@ def cmd_map_info(a) -> int:
 
 def cmd_mob_icon(a) -> int:
     _out(c_mob_icon(a.id), a.json)
+    return 0
+
+
+def cmd_mob_export(a) -> int:
+    d = c_mob_export(a.id, preview=a.preview)
+    if a.json:
+        _out(d, True)
+    else:
+        link = f"（链接怪 → 画面同 {d['link']['to']}）" if d.get("link") else ""
+        print(f"已导出 {d['count']} 帧 → {d['dir']} {link}")
+    return 0
+
+
+def cmd_mob_frames(a) -> int:
+    """列出一只怪有哪些动画（stand/move/jump/hit/die1…）与帧数。"""
+    d = c_mob_export(a.id, preview=True)
+    anims: dict[str, int] = {}
+    for f in d.get("frames", []):
+        anims[f["anim"]] = max(anims.get(f["anim"], 0), f["frame"] + 1)
+    data = {"id": a.id, "dir": d["dir"], "total_frames": d["count"],
+            "link": d.get("link"), "anims": anims}
+    _out(data, a.json)
     return 0
 
 
@@ -1486,10 +1654,12 @@ def build_parser() -> argparse.ArgumentParser:
   1. wztool state --json                      # 看有没有设置工作区
   2. wztool workspace "D:/path/to/nxrun"       # 设置工作区（放 .wz/.nx 的目录）
   3. wztool convert Mob.wz Map.wz String.wz    # wz → nx（需要 bin\\ 里的原生工具）
-  4. wztool maps --json                        # 地图列表（含 life_maps=有怪的图）
-  5. wztool map-info 000050000 --json          # 地图元信息（不渲染，含可导窗口范围）
-  6. wztool map-export 000050000 --mobs        # → exports/maps/000050000/（map.json + 贴图 + 窗口图）
-  7. wztool map-minimap 000050000              # → 游戏内小地图 PNG
+  4. wztool mobs --json                        # 怪物列表（图鉴/素材浏览）
+  5. wztool mob-export 0100100                 # → exports/mobs/0100100/（逐帧 PNG + manifest.csv）
+  6. wztool maps --json                        # 地图列表（含 life_maps=有怪的图）
+  7. wztool map-info 000050000 --json          # 地图元信息（不渲染，含可导窗口范围）
+  8. wztool map-export 000050000 --mobs        # → exports/maps/000050000/（map.json + 贴图 + 窗口图）
+  9. wztool map-minimap 000050000              # → 游戏内小地图 PNG
 
 约定:
   - 所有 id 兼容带/不带前导 0（"0100100" 与 "100100" 等价）。
@@ -1525,6 +1695,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("job", help="查询后台任务进度（web 模式下 convert 用）")
     _j(p); p.set_defaults(fn=cmd_job)
 
+    p = sub.add_parser("mobs", help="列出全部怪物（tier=big/boss/normal，含等级血量）",
+                       epilog="不加 --json 时只打印表格式列表；--name 加中文名列。")
+    p.add_argument("--filter", choices=["all", "boss", "big"], default="",
+                   help="按档位筛：boss=BOSS+大BOSS，big=只看大BOSS")
+    p.add_argument("--name", action="store_true", help="非 JSON 输出带名字列")
+    _j(p); p.set_defaults(fn=cmd_mobs)
+
+    p = sub.add_parser("mob-maps", help="这只怪自然刷新在哪些地图（life 反向聚合）")
+    p.add_argument("id", help="怪 id（带不带前导 0 都行）")
+    _j(p); p.set_defaults(fn=cmd_mob_maps)
+
     p = sub.add_parser("maps", help="列出全部地图 id（life_maps=有怪自然刷新的图）")
     p.add_argument("--filter", choices=["all", "mob", "empty"], default="",
                    help="mob=只看有怪的图，empty=只看无怪图")
@@ -1536,6 +1717,18 @@ def build_parser() -> argparse.ArgumentParser:
                               "导出图固定 1366×768（客户端画面），--view 选窗口位置。")
     p.add_argument("id", help="9 位地图 id（链接图自动转向目标图）")
     _j(p); p.set_defaults(fn=cmd_map_info)
+
+    p = sub.add_parser("mob-frames", help="列出一只怪的动画列表与帧数（stand/move/die1…）")
+    p.add_argument("id", help="怪 id")
+    _j(p); p.set_defaults(fn=cmd_mob_frames)
+
+    p = sub.add_parser("mob-export", help="导出一只怪的全部动画帧 PNG + manifest.csv",
+                       epilog="输出: exports/mobs/<id>/（--preview 时进 .cache/mob/<id>/）。\n"
+                              "manifest.csv 列: mob,anim,frame,file,w,h,ox,oy,delay；\n"
+                              "ox/oy=锚点(脚底中心)，把各帧对到同一画布用它。")
+    p.add_argument("id", help="怪 id（链接怪自动转向目标怪）")
+    p.add_argument("--preview", action="store_true", help="只出预览缓存，不进 exports")
+    _j(p); p.set_defaults(fn=cmd_mob_export)
 
     p = sub.add_parser("mob-icon", help="取一只怪的 stand 帧（路径/尺寸/锚点）",
                        epilog="给刷怪点叠怪、做图鉴头像用；ox/oy=脚底中心锚点。")
