@@ -296,8 +296,12 @@ static int cmd_mini_all(const std::string & outdir) {
                 << ",\"mag\":" << jget_int(mm, "mag")
                 << ",\"name\":\"" << json_escape(mn.name) << "\""
                 << ",\"street\":\"" << json_escape(mn.street) << "\"}";
-            if ((with_mm % 200) == 0)
-                std::cerr << "minimaps: " << with_mm << "\r";
+            // 进度必须落文件：Windows 下 stdout/stderr 接管道是全缓冲的，进度要等
+            // 进程退出才吐出来（WebUI 进度条就会一直卡 0）。写个计数文件最可靠。
+            if ((with_mm % 50) == 0) {
+                std::ofstream pf(fs::path(outdir) / "_progress", std::ios::trunc);
+                pf << with_mm;
+            }
     });
     idx << "\n}\n";
     std::ofstream f(fs::path(outdir) / "index.json");
@@ -333,7 +337,10 @@ static int cmd_portal_all(const std::string & outpath) {
                   << jget_int(p, "y") << "," << jget_int(p, "tm") << "\n";
                 ++rows;
             }
-            if ((maps % 200) == 0) std::cerr << "maps: " << maps << "\r";
+            if ((maps % 200) == 0) {
+                std::fprintf(stderr, "maps: %d\r", maps);
+                std::fflush(stderr);
+            }
     });
     f.close();
     std::cerr << "\nmaps with portal: " << maps << ", portal rows: " << rows << "\n";
