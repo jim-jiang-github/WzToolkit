@@ -31,22 +31,58 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT / ".pylibs") not in sys.path:          # 依赖只走 .pylibs，不动系统 Python
     sys.path.insert(0, str(ROOT / ".pylibs"))
 
-from PIL import Image  # noqa: E402
+from PIL import Image, ImageDraw  # noqa: E402
 
 MMIDX = ROOT / ".cache" / "minimap"
 MAPCACHE = ROOT / ".cache" / "map"
+PORTALS = ROOT / ".cache" / "portals.csv"   # nxmap portal-all 产出（全库传送门表）
+PORTAL_RING = 2                             # 传送门圈半径（canvas 像素）
+PORTAL_LIFT = 3                             # 传送门上移量：脚底坐标会压在地面线上
 
 
-def collect(only: list[str] | None, want_all: bool) -> list[dict]:
+def load_portals() -> dict[str, list[tuple[int, int, int]]]:
+    """mapid → [(pt, x, y)]，来自 `nxmap portal-all`。缺文件时返回空（只贴黑底不画圈）。"""
+    out: dict[str, list[tuple[int, int, int]]] = {}
+    if not PORTALS.exists():
+        return out
+    import csv
+
+    with PORTALS.open(encoding="utf-8-sig", newline="") as f:
+        for r in csv.DictReader(f):
+            try:
+                out.setdefault(r["mapid"], []).append(
+                    (int(r["pt"]), int(r["x"]), int(r["y"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+    return out
+
+
+def compose(png: Path, pts: list[tuple[int, int, int]],
+            cx: float, cy: float, scale: float) -> Image.Image:
+    """官方 canvas 贴到纯黑底上，再按客户端公式把 pt=2 传送口画成蓝圈。"""
+    src = Image.open(png).convert("RGBA")
+    canvas = Image.new("RGBA", src.size, (0, 0, 0, 255))
+    canvas.alpha_composite(src)
+    dr = ImageDraw.Draw(canvas)
+    for pt, x, y in pts:
+        if pt != 2:
+            continue
+        px, py = (x + cx) / scale, (y + cy) / scale - PORTAL_LIFT
+        dr.ellipse([px - PORTAL_RING, py - PORTAL_RING,
+                    px + PORTAL_RING, py + PORTAL_RING],
+                   outline=(64, 160, 255, 255), width=1)
+    return canvas
+
+
+def collect(only: list[str] | None, want_all: bool,
+            portals_map: dict[str, list[tuple[int, int, int]]] | None = None) -> list[dict]:
     idx = json.loads((MMIDX / "index.json").read_text(encoding="utf-8"))
     rows: list[dict] = []
     for mid, v in sorted(idx.items()):
-        if not want_all:
-            if not v.get("auto"):
+        if only:                               # 指定 id 时不再过滤来源
+            if mid not in only:
                 continue
-            if only and mid not in only:
-                continue
-        elif only and mid not in only:
+        elif not want_all and not v.get("auto"):
             continue
         png = MMIDX / f"{mid}.png"
         if not png.exists():
@@ -63,6 +99,8 @@ def collect(only: list[str] | None, want_all: bool) -> list[dict]:
         cx, cy = float(v.get("centerX") or 0), float(v.get("centerY") or 0)
         ww, wh = round(cw * scale), round(ch * scale)
         portals = None
+        if portals_map and mid in portals_map:
+            portals = sum(1 for pt, _, _ in portals_map[mid] if pt == 2)
         mjf = MAPCACHE / mid / "map.json"
         if mjf.exists():
             try:
@@ -70,7 +108,8 @@ def collect(only: list[str] | None, want_all: bool) -> list[dict]:
                 mm = mj.get("miniMap") or {}
                 ww = int(mm.get("w") or ww)
                 wh = int(mm.get("h") or wh)
-                portals = sum(1 for p in mj.get("portal", []) if p.get("pt") == 2)
+                if portals is None:
+                    portals = sum(1 for p in mj.get("portal", []) if p.get("pt") == 2)
             except Exception:                  # noqa: BLE001
                 pass
         sub = "auto" if auto else "official"
@@ -268,7 +307,7 @@ apply();
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="批量导出全库小地图 + 坐标映射表 + 图鉴页")
-    ap.add_argument("--out", default=str(ROOT / ".exports" / "minimap-demo"))
+    ap.add_argument("--out", default=str(ROOT / ".exports" / "minimap"))
     ap.add_argument("--all", action="store_true", help="导出全库（官方 canvas + 自动兜底）")
     ap.add_argument("--only", default="", help="只导这些 id，逗号分隔")
     ap.add_argument("--zoom", type=int, default=0,
@@ -288,16 +327,30 @@ def main() -> int:
     (out / "official").mkdir(exist_ok=True)
     (out / "auto").mkdir(exist_ok=True)
 
-    rows = collect(only, args.all)
+    portals_map = load_portals()
+    if not portals_map:
+        print("警告：没有 .cache/portals.csv，官方 canvas 只会贴黑底、不画传送点\n"
+              "      先生成它：cd .cache/cn && bin/nxmap.exe portal-all ../../.cache/portals.csv")
+
+    rows = collect(only, args.all, portals_map)
     if not rows:
         print("没有可导出的小地图（先让服务预热生成兜底图）")
         return 1
 
     n_off = n_auto = 0
+    n_ring = 0
     for i, r in enumerate(rows):
-        shutil.copy2(MMIDX / f"{r['id']}.png", out / r["file"])
+        src_png = MMIDX / f"{r['id']}.png"
+        if r["src"] == "official":
+            # 官方 canvas 是透明底：贴黑底 + 画传送门圈
+            img = compose(src_png, portals_map.get(r["id"], []),
+                          r["centerX"], r["centerY"], r["scale"])
+            img.save(out / r["file"])
+            n_ring += sum(1 for pt, _, _ in portals_map.get(r["id"], []) if pt == 2)
+        else:
+            shutil.copy2(src_png, out / r["file"])   # auto 生成图本来就是黑底带圈
         if args.zoom > 0:
-            with Image.open(MMIDX / f"{r['id']}.png") as im:
+            with Image.open(out / r["file"]) as im:
                 big = im.convert("RGBA").resize(
                     (im.width * args.zoom, im.height * args.zoom), Image.NEAREST)
             big.save(out / f"{r['id']}@{args.zoom}x.png")
@@ -314,15 +367,19 @@ def main() -> int:
                     "count": len(rows), "official": n_off, "auto": n_auto,
                     "zoom": args.zoom,
                     "source": ".cache/minimap/ (nxmap mini-all + 预热兜底)",
-                    "method": {"official": "WZ miniMap/canvas 原样导出（客户端同款，透明底）",
-                               "auto": "无背景渲染缩 1/2^mag → 黑底 → 只画 pt=2 传送口"},
+                    "method": {"official": "WZ miniMap/canvas + 纯黑底 + pt=2 传送口蓝圈（上移 3px）",
+                               "auto": "无背景渲染缩 1/2^mag → 黑底 → 只画 pt=2 传送口（上移 3px）"},
+                    "portalRings": n_ring,
+                    "portalLift": PORTAL_LIFT,
+                    "portalRadius": PORTAL_RING,
                     "coord": {"scale": "scale = 2^mag",
                               "world_to_px": "px = (world + center) / scale",
                               "px_to_world": "world = px * scale - center"},
                     "maps": rows}, ensure_ascii=False, indent=1), encoding="utf-8")
 
     print(f"\n导出 {len(rows)} 张 → {out}")
-    print(f"  official {n_off} + auto {n_auto}；index.json + data.js + index.html")
+    print(f"  official {n_off} + auto {n_auto}；传送门圈 {n_ring} 个（上移 {PORTAL_LIFT}px）")
+    print("  index.json + data.js + index.html")
     if args.zoom > 0:
         print(f"  另有 {args.zoom}x 放大 PNG {len(rows)} 个")
     return 0
