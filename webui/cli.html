@@ -61,6 +61,16 @@
          padding: 8px 10px; font: 12px/1.5 Consolas, monospace; max-height: 170px;
          overflow: auto; white-space: pre-wrap; margin-top: 10px; }
   .progbox { margin-top: 10px; }
+  /* 工作区栏自带背景进度条：导入时整条栏底部涌起半透明进度填充 */
+  .wsbar { position: relative; overflow: hidden; }
+  .wsbar #ws-prog { position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+    background: linear-gradient(90deg, rgba(47,109,208,.30), rgba(99,166,255,.30));
+    pointer-events: none; transition: width .5s ease; z-index: 0; }
+  .wsbar #ws-prog.indet { width: 100%; animation: wsindet 1.4s linear infinite; }
+  @keyframes wsindet { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+  .wsbar > * { position: relative; z-index: 1; }
+  #ws-prog-text { font-size: 12px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 60%; }
   /* 工作区整条栏可点：手型光标 + hover 提示 */
   .wsbar { cursor: pointer; border-radius: 7px; padding: 4px 6px; margin: -4px -6px 0; }
   .wsbar:hover { background: rgba(255, 255, 255, .06); }
@@ -365,7 +375,10 @@
   <!-- ① 工作区（收进弹窗，点整条工作区栏展开/收起） -->
   <div class="card" style="position:relative; padding-bottom:10px">
     <div class="flexline wsbar" id="ws-bar" title="点击展开 / 收起工作区面板">
+      <i id="ws-prog" aria-hidden="true"></i>
       <h2 style="margin:0"><span class="step">1</span> 工作区 <span class="muted" id="ws-mini" style="font-weight:400"></span></h2>
+      <span style="flex:1"></span>
+      <span class="muted" id="ws-prog-text"></span>
     </div>
     <div class="optpop wspop" id="ws-pop" hidden>
       <div class="pathfield">
@@ -1011,6 +1024,23 @@ async function tickProgress() {
   if (busy !== BUSY) { BUSY = busy; refreshLock(); }   // 导入中锁住下方浏览区
   const cvb = $("#cn-cv-all"); if (cvb) cvb.disabled = busy;
   const wpb = $("#wipe-go"); if (wpb) wpb.disabled = busy;
+  // 工作区栏背景进度条：导入时整条栏后面涌起半透明进度
+  const wf = $("#ws-prog"), wt = $("#ws-prog-text");
+  if (wf && wt) {
+    if (busy && seg && seg.total > 0) {
+      const pct = Math.min(100, ((seg.done + (seg.frac || 0)) / seg.total) * 100);
+      wf.classList.remove("indet");
+      wf.style.width = pct + "%";
+      wt.textContent = `${pct.toFixed(0)}% · ${seg.name}`;
+    } else if (busy && seg) {                 // 没有总数（如小地图索引）→ 流动动画
+      wf.classList.add("indet");
+      wt.textContent = seg.name;
+    } else {
+      wf.classList.remove("indet");
+      wf.style.width = "0";
+      wt.textContent = "";
+    }
+  }
   const box = $("#prog-box"), bar = $("#prog-bar"), fill = $("#prog-fill");
   if (!seg) {
     clearInterval(PTIMER); PTIMER = null;
