@@ -1901,7 +1901,11 @@ function btGeom() {
   const st = $("#bt-stage");
   const W = st.clientWidth || 900;
   const G = Math.round((st.clientHeight || 430) * 0.62);   // 地面 y（和 .btground 对齐）
-  return { W, G, charX: Math.round(W * 0.24), mobX: Math.round(W * 0.76), Z: 2 };
+  // 攻击距离：游戏里贴身输出也就一两百像素，人物/怪物以舞台中线为界
+  // 相隔 ~150 游戏像素（×2 缩放），窄屏再收紧，别隔着半张图对砍
+  const gap = Math.min(300, Math.max(140, Math.round(W * 0.28)));
+  const cx = Math.round(W / 2);
+  return { W, G, charX: cx - gap / 2, mobX: cx + gap / 2, Z: 2 };
 }
 
 function btInfo() {
