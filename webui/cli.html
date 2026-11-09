@@ -785,8 +785,8 @@ function bindImgPop() {
   }).observe(pop, { attributes: true, attributeFilter: ["hidden"] });
 }
 bindImgPop();
-/* 「📁 选择工作区」：展开/收起面板（已有工作区时不再自动弹窗）；
-   路径框本身可点击——点它弹选文件夹对话框换目录 */
+/* 「📁 选择工作区」：只展开/收起面板，不弹对话框；
+   选目录在面板里点路径框（点它弹选文件夹对话框换目录） */
 async function pickDir() {
   $("#ws-pop").hidden = false;          // 让用户能看到输入框和扫描结果
   try {
@@ -800,10 +800,7 @@ async function pickDir() {
 $("#ws-toggle").onclick = (e) => {
   e.stopPropagation();
   const p = $("#ws-pop");
-  const opening = p.hidden;
-  p.hidden = !opening;
-  // 首次展开（还没选过工作区）→ 顺带弹一次选择对话框；以后只展开面板
-  if (opening && !$("#ws-path").value.trim()) pickDir();
+  p.hidden = !p.hidden;                 // 纯 toggle——弹不弹选择框由面板里的路径框决定
 };
 $("#ws-path").onclick = pickDir;
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
