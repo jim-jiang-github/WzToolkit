@@ -120,6 +120,7 @@
                    border: 1px solid var(--line); border-radius: 8px; margin-top: 6px;
                    cursor: pointer; }
   .imgpop .isres:hover { border-color: var(--acc); background: #ffffff0a; }
+  .imgpop .isres.cls { cursor: default; }      /* 怀旧服结果点不开浏览，别给手型 */
   .imgpop .isres img { width: 120px; height: 56px; object-fit: contain; flex: none;
                        image-rendering: pixelated; background: #0b0f14; border-radius: 4px; }
   .imgpop .isres .sc { color: var(--acc); font-size: 12px; flex: none; width: 44px; }
@@ -605,14 +606,20 @@ document.addEventListener("click", (e) => {
   }
 });
 
-/* ---- 图片找图：粘贴截图 → /api/map/imgsearch 模板匹配全库小地图 ---- */
+/* ---- 图片找图：粘贴截图 → 模板匹配全库小地图（现代版 / 怀旧服双数据源） ---- */
 let IMGQ = null;        // 粘贴进来的截图 dataURL
 let IMGSEQ = 0;         // 搜索请求序号（弹窗重开/重复点击时丢弃过期响应）
 let IMGT0 = 0;          // 本次搜索起点（显示「已等 N 秒」，索引首次要解压一分钟）
+let IMGSRC = "mod";     // 数据源：mod = 现代版库，cls = 怀旧服 canvas 库
 
 function imgPopHTML() {
   return `
     <div class="optgrp">截图找地图：在游戏里截一张<b>小地图</b>（整窗截图也行）</div>
+    <div class="row" style="margin:0 0 6px;align-items:center">
+      <span class="muted" style="font-size:11.5px;margin-right:6px">数据源</span>
+      <button class="mini" id="is-src-mod">现代版</button>
+      <button class="mini" id="is-src-cls">怀旧服</button>
+    </div>
     <div class="is-drop" id="is-drop" tabindex="0">点这里然后 <b>Ctrl+V</b> 粘贴截图<br>或把图片拖进来 / 点击选择文件</div>
     <input type="file" id="is-file" accept="image/*" hidden />
     <img class="is-prev" id="is-prev" hidden />
@@ -621,6 +628,13 @@ function imgPopHTML() {
       <span class="muted" id="is-status"></span>
     </div>
     <div id="is-results"></div>`;
+}
+
+function imgSrcSyncUI() {
+  const bm = $("#is-src-mod"), bc = $("#is-src-cls");
+  if (!bm || !bc) return;
+  bm.classList.toggle("primary", IMGSRC === "mod");
+  bc.classList.toggle("primary", IMGSRC === "cls");
 }
 
 function imgPopSetImage(dataUrl) {
@@ -639,23 +653,37 @@ async function imgDoSearch(seq) {
   if (!st || !out) return;
   st.textContent = "搜索中…";
   try {
-    const d = await api("/api/map/imgsearch", {
+    const d = await api(IMGSRC === "cls" ? "/api/clsimgsearch" : "/api/map/imgsearch", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image: IMGQ }),
     });
     if (seq !== IMGSEQ) return;                    // 弹窗已重开，丢弃过期响应
     if (d.building) {
-      // 首次要先把 14000+ 张小地图从 Map.nx 解出来（约一分钟，只做一次）
-      if (!IMGT0) IMGT0 = Date.now();
-      const sec = Math.round((Date.now() - IMGT0) / 1000);
-      st.textContent = `首次正在解压小地图库（约 1 分钟，只做一次）… 已等 ${sec}s`;
-      setTimeout(() => imgDoSearch(seq), 1000);
+      if (IMGSRC === "cls") {
+        // 怀旧服库首次要解 Unity 包提取 canvas（约 1-2 分钟，只做一次）
+        let msg = "怀旧服小地图库构建中…（首次约 1-2 分钟，只做一次）";
+        try {
+          const ix = await api("/api/clsimgindex");
+          if (ix.building) msg = `怀旧服小地图库构建中 ${ix.done}/${ix.total}：${ix.stage || ""}`;
+          if (ix.error) msg = "构建失败：" + ix.error;
+        } catch (_) {}
+        st.textContent = msg;
+      } else {
+        // 首次要先把 14000+ 张小地图从 Map.nx 解出来（约一分钟，只做一次）
+        if (!IMGT0) IMGT0 = Date.now();
+        const sec = Math.round((Date.now() - IMGT0) / 1000);
+        st.textContent = `首次正在解压小地图库（约 1 分钟，只做一次）… 已等 ${sec}s`;
+      }
+      setTimeout(() => imgDoSearch(seq), 1500);
       return;
     }
     IMGT0 = 0;
-    st.textContent = d.results.length ? "" : "没找到相似的地图";
+    const weak = IMGSRC === "cls" && d.results.length && d.results[0].score < 0.6;
+    st.textContent = d.results.length
+      ? (weak ? "最像的是这张，但分数偏低（<0.6）——截图最好只截小地图面板本身" : "")
+      : "没找到相似的地图";
     out.innerHTML = d.results.map((r) => `
-      <div class="isres" data-id="${r.id}">
+      <div class="isres${IMGSRC === "cls" ? " cls" : ""}" data-id="${r.id}"${IMGSRC === "cls" ? ' title="怀旧服地图暂不支持点开浏览"' : ""}>
         <img src="${r.thumb}" loading="lazy">
         <div style="flex:1;min-width:0">
           <div><b>${r.id}</b>${r.name ? ` · ${r.name}` : ""}</div>
@@ -666,6 +694,7 @@ async function imgDoSearch(seq) {
     for (const el of out.querySelectorAll(".isres")) {
       el.onclick = (e) => {
         e.stopPropagation();
+        if (IMGSRC === "cls") return;              // 怀旧服 id 不在现代地图库里，点不开
         $("#img-pop").hidden = true;
         mapLoad(el.dataset.id, true);
       };
@@ -725,6 +754,9 @@ function bindImgPop() {
       rd.readAsDataURL(f);
     };
     go.onclick = (e2) => { e2.stopPropagation(); ++IMGSEQ; imgDoSearch(IMGSEQ); };
+    imgSrcSyncUI();
+    $("#is-src-mod").onclick = (e2) => { e2.stopPropagation(); IMGSRC = "mod"; imgSrcSyncUI(); };
+    $("#is-src-cls").onclick = (e2) => { e2.stopPropagation(); IMGSRC = "cls"; imgSrcSyncUI(); };
   };
   // 关弹窗时摘掉全局 paste（hidden 变化时触发）
   new MutationObserver(() => {
@@ -779,6 +811,12 @@ async function scan() {
       // 国服官方数据源：没有 .wz 列表，显示数据源状态；转换全自动，
       // 不放「强制重转」复选框和转换按钮（选好后缺什么自动补转什么）
       const cn = d.cn;
+      const cls = d.cls || null;
+      const clsRow = cls && cls.dir ? `
+        <tr><td>怀旧服小地图库（mxdclassic 的 canvas 素材，怀旧服找图用）</td>
+            <td>${cls.ready ? `<span class="ok">已建好（${cls.count} 张）</span>` : '<span class="miss">未建</span>'}</td>
+            <td style="text-align:right"><button class="mini" id="cls-go"
+                title="从怀旧服 Unity 数据包提取 canvas 小地图并建找图索引（首次约 1-2 分钟）">${cls.ready ? "🔄 重建" : "🖼 建库"}</button></td></tr>` : "";
       $("#ws-state").innerHTML =
         `工作区：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
       $("#ws-mini").textContent = `：国服官方 · ${cn.map_nx ? "已转换" : "待转换"}`;
@@ -788,6 +826,7 @@ async function scan() {
             <td>${cn.map_nx ? `<span class="ok">已转换（${cn.map_nx_mb} MB）</span>` : '<span class="miss">未转换</span>'}</td>
             <td style="text-align:right"><button class="mini rc-btn" id="rc-go"
                 title="补齐缺失的 .nx，并强制重建全库小地图库（小地图 PNG + 找图索引）">🔄 重新转换</button></td></tr>
+        ${clsRow}
         <tr><td>String.nx（地图名等中文表）</td>
             <td>${cn.string_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td><td></td></tr>
         <tr><td>Mob.nx（怪物素材，${cn.mob_nx ? cn.mob_nx_gb + " GB" : "约 30 GB"}）</td>
@@ -874,6 +913,19 @@ async function reconvert() {
   } catch (e) { fail(e); if (btn) btn.disabled = false; }
 }
 
+async function clsBuild() {
+  const btn = $("#cls-go");
+  if (btn) btn.disabled = true;
+  $("#cv-note").textContent = "";
+  try {
+    const d = await api("/api/clsbuild", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (!d.started) { if (btn) btn.disabled = false; return; }
+    startProgress();
+  } catch (e) { fail(e); if (btn) btn.disabled = false; }
+}
+
 function startProgress() {
   $("#prog-box").hidden = false;
   $("#cv-log").hidden = false;
@@ -889,28 +941,32 @@ function startProgress() {
 async function tickProgress() {
   let p;
   try { p = await api("/api/progress"); } catch (e) { return; }
-  // 优先级：小地图索引 > 兜底生成 > 转换。重新转换时 _job 全程 running，
-  // 但那时候用户真正想看的是解压进度，不能被「转换」段挡在前面。
+  // 优先级：小地图索引 > 兜底生成 > 怀旧服小地图库 > 转换。重新转换时 _job 全程
+  // running，但那时候用户真正想看的是解压进度，不能被「转换」段挡在前面。
   const seg = p.minimap.running
     ? { name: p.minimap.stage || "小地图索引（全库解压）", done: p.minimap.done, total: p.minimap.total }
     : p.auto.running
     ? { name: p.auto.stage || "兜底小地图（1×1 退化图）", done: p.auto.done, total: p.auto.total }
+    : p.cls && p.cls.running
+    ? { name: p.cls.stage || "怀旧服小地图库", done: p.cls.done, total: p.cls.total }
     : p.convert.running
     ? { name: p.convert.stage || "转换", done: p.convert.done, total: p.convert.total }
     : null;
   const box = $("#prog-box"), bar = $("#prog-bar"), fill = $("#prog-fill");
   if (!seg) {
     clearInterval(PTIMER); PTIMER = null;
-    const bad = p.convert.error || p.minimap.error;
+    const bad = p.convert.error || p.minimap.error || (p.cls && p.cls.error);
     $("#prog-stage").textContent = bad ? "出错" : "已完成";
     $("#prog-pct").textContent = "";
     $("#prog-sub").textContent = bad
-      || (p.ready ? "小地图库就绪：可以浏览地图、找图、导出小地图了" : "");
+      || ((p.ready ? "小地图库就绪：可以浏览地图、找图、导出小地图了" : "")
+          + (p.cls && p.cls.ready ? "；怀旧服找图也就绪" : ""));
     bar.classList.remove("indet");
     fill.style.width = "100%";
     if (bad) fill.style.background = "#c0392b";
     setTimeout(() => { box.hidden = true; fill.style.background = ""; }, 5000);
     const b = $("#rc-go"); if (b) b.disabled = false;
+    if ($("#cls-go")) scan();            // 怀旧服库建完：刷新状态行
     return;
   }
   $("#prog-stage").textContent = seg.name;
@@ -920,7 +976,9 @@ async function tickProgress() {
   $("#prog-pct").textContent = hasTotal ? `${seg.done} / ${seg.total}` : "";
   $("#prog-sub").textContent = !hasTotal
     ? (seg.done ? `已处理 ${seg.done} 张…` : "启动中…")
-    : (seg.done >= seg.total ? "收尾中…" : "解压全库小地图，请勿关闭页面");
+    : (seg.name.includes("怀旧服")
+       ? (seg.done >= seg.total ? "收尾中…" : "从 Unity 包提取 canvas，请勿关闭页面")
+       : (seg.done >= seg.total ? "收尾中…" : "解压全库小地图，请勿关闭页面"));
 }
 
 async function loadLists() {
@@ -2083,12 +2141,14 @@ $("#ws-browse").onclick = browseOpen;
 $("#cv-go").onclick = convert;
 $("#wz-table").addEventListener("click", (e) => {
   if (e.target && e.target.id === "rc-go") reconvert();
+  if (e.target && e.target.id === "cls-go") clsBuild();
 });
-// 页面打开时若后台已在跑（转换 / 小地图索引 / 兜底生成），直接把进度条接上
+// 页面打开时若后台已在跑（转换 / 小地图索引 / 兜底生成 / 怀旧服小地图库），直接把进度条接上
 (async () => {
   try {
     const p = await api("/api/progress");
-    if (p.convert.running || p.minimap.running || p.auto.running) startProgress();
+    if (p.convert.running || p.minimap.running || p.auto.running
+        || (p.cls && p.cls.running)) startProgress();
   } catch (e) { /* 服务还没起来，忽略 */ }
 })();
 $("#q").oninput = renderList;
