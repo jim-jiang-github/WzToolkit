@@ -566,13 +566,17 @@
     <div class="pane" id="battle" hidden>
       <div class="md-bar">
         <button class="primary mini" id="bt-roll" title="人物 / 技能 / 怪物 / 伤害样式全部重新随机">🎲 换一批</button>
+        <div class="seg" id="bt-kind" title="抽卡的怪物池：普通怪 / Boss">
+          <button data-k="mob" class="on">👾 怪物</button>
+          <button data-k="boss">👑 Boss</button>
+        </div>
         <button class="mini" id="bt-atk">⚔️ 攻击</button>
         <label class="muted" style="display:flex;align-items:center;gap:4px">
           <input type="checkbox" id="bt-auto" checked> 自动攻击</label>
         <span class="muted" id="bt-info"></span>
       </div>
       <div class="btstage" id="bt-stage"><span class="muted" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">抽卡中 …</span></div>
-      <div class="muted" id="bt-note" style="margin-top:6px">人物 / 技能 / 怪物 / 伤害样式全部随机——点「🎲 换一批」重新抽；「⚔️ 攻击」打一轮：技能特效 + 怪物受击 + 真实排版的伤害数字（5% 概率 Miss）。需要 Mob.nx / Character.nx / Skill.nx / 伤害数字库都已就绪。</div>
+      <div class="muted" id="bt-note" style="margin-top:6px">人物 / 技能 / 怪物 / 伤害样式全部随机——点「🎲 换一批」重新抽；「👾 怪物 / 👑 Boss」切换抽卡怪物池；「⚔️ 攻击」打一轮：技能特效 + 怪物受击 + 真实排版的伤害数字（5% 概率 Miss）。需要 Mob.nx / Character.nx / Skill.nx / 伤害数字库都已就绪。</div>
     </div>
   </div>
 
@@ -1795,9 +1799,10 @@ const BT_CATS = ["hair", "face", "cap", "coat", "pants", "longcoat",
                  "shoes", "glove", "cape", "shield", "weapon"];
 const BT = {
   gen: 0, loaded: false,
+  kind: "mob",                          // 怪物池：mob 普通怪 / boss Boss
   parts: null, jobs: null, skl: {}, mobs: null, dmgSets: null,
   char: null, charSpec: null, charAct: "stand1", ci: 0,
-  mob: null, mobName: "", mobAct: "stand", mobIdle: "stand", mi: 0,
+  mob: null, mobName: "", mobAct: "stand", mobIdle: "stand", mi: 0, mobScale: 2,
   skill: null, skillName: "", skillJob: "", dmgSetId: "",
   tChar: 0, tMob: 0, tAuto: 0, timers: [], busy: false,
 };
@@ -1847,16 +1852,27 @@ async function btRollMob() {
     BT.mobs = (d.mobs || []).filter((m) => m.img_ok);
   }
   if (!BT.mobs.length) throw new Error("没有可显示的怪物（Mob.nx 没转换？）");
+  // 怪物池按页签开关分流：👑 Boss 只抽 boss=1 的，👾 怪物抽其余的
+  const pool = BT.mobs.filter((m) => (BT.kind === "boss") === !!m.boss);
+  if (!pool.length) throw new Error(BT.kind === "boss"
+    ? "Boss 池是空的（Mob.nx 里没有 boss 标记且有图的怪）" : "普通怪池是空的");
   for (let t = 0; t < 6; t++) {
-    const m = BT.mobs[Math.floor(Math.random() * BT.mobs.length)];
+    const m = pool[Math.floor(Math.random() * pool.length)];
     try {
       BT.mob = await api("/api/mob/icon/" + m.id);
-      BT.mobName = m.name || m.id;
+      BT.mobName = (m.boss ? "👑 " : "") + (m.name || m.id);
       // 待机动作优先级：stand → move → fly → 第一套（别拿 attack1 当站桩，体型差太多）
       const anims = BT.mob.anims || {};
       BT.mobIdle = ["stand", "move", "fly"].find((a) => anims[a]) || Object.keys(anims)[0];
       BT.mobAct = BT.mobIdle;
       BT.mi = 0;
+      // Boss 体型常常比舞台还大（×2 直接溢出）：按待机帧算一个稳定缩放，
+      // 上限仍是 2，整套动画用同一个值，不会逐帧跳变
+      const st = $("#bt-stage");
+      const stageH = (st && st.clientHeight) || 430, stageW = (st && st.clientWidth) || 900;
+      const G = stageH * 0.90;
+      BT.mobScale = Math.max(0.4, Math.min(2,
+        (G - 16) / Math.max(1, BT.mob.h), (stageH - 16) / Math.max(1, BT.mob.w)));
       return;
     } catch (e) { /* 这只怪资源坏了，换一只 */ }
   }
@@ -1989,14 +2005,15 @@ function btLoops() {
     }
     const f = list[BT.mi++];
     const g = btGeom(), img = $("#bt-mob img");
-    const mox = f.ox ?? f.w / 2, moy = f.oy ?? f.h;   // 锚点：脚底中心
+    const Z = BT.mobScale || 2;                     // 大怪按舞台收缩后的稳定缩放
+    const mox = f.ox ?? f.w / 2, moy = f.oy ?? f.h;   // 锚点：脚底中心（可见底部）
     img.src = f.url;
-    img.style.width = f.w * g.Z + "px"; img.style.height = f.h * g.Z + "px";
-    img.style.left = (g.mobX - mox * g.Z) + "px";
-    img.style.top = (g.G - moy * g.Z) + "px";
+    img.style.width = f.w * Z + "px"; img.style.height = f.h * Z + "px";
+    img.style.left = (g.mobX - mox * Z) + "px";
+    img.style.top = (g.G - moy * Z) + "px";
     const sh = $("#bt-mbshadow");
-    if (sh) { sh.style.width = Math.round(f.w * g.Z * .7) + "px";
-      sh.style.left = (g.mobX - f.w * g.Z * .35) + "px"; sh.style.top = (g.G - 4) + "px"; }
+    if (sh) { sh.style.width = Math.round(f.w * Z * .7) + "px";
+      sh.style.left = (g.mobX - f.w * Z * .35) + "px"; sh.style.top = (g.G - 4) + "px"; }
     BT.tMob = setTimeout(stepMob, 110);
   };
   stepChar(); stepMob();
@@ -2041,13 +2058,18 @@ function btAttack() {
   let hitDelay = 650, total = 1600;
   if (playable.length) {
     total = Math.max(total, btPlaySeq(playable[0],   // 第一组：施法特效，放人物身上
-      () => btGeom().charX, () => btGeom().G - 40) + 300);
+      () => btGeom().charX, () => btGeom().G - 85) + 300);
     const onMob = playable.slice(1);      // 其余组：弹道/命中，叠怪物身上
     if (onMob.length) {
       let longest = 0;
       onMob.forEach((q) => {
-        longest = Math.max(longest, btPlaySeq(q,
-          () => btGeom().mobX, () => btGeom().G - 60));
+        // 命中点跟着怪物身体中心走（按缩放后身高算），大 Boss 不再悬在半空
+        const mobMid = () => {
+          const g = btGeom();
+          const mh = BT.mob ? BT.mob.h * (BT.mobScale || 2) : 120;
+          return g.G - Math.min(mh * 0.45, 260);
+        };
+        longest = Math.max(longest, btPlaySeq(q, () => btGeom().mobX, mobMid));
       });
       hitDelay = Math.max(300, longest * 0.45);
       total = Math.max(total, longest + 300);
@@ -2093,9 +2115,10 @@ function btSpawnDamage() {
   }
   if (!html) return;
   layer.style.width = W + "px"; layer.style.height = H + "px";
-  const mobH = Math.min((BT.mob && BT.mob.h) || 120, 150);
+  // 数字弹在怪物头顶：按缩放后的实际身高算，但别顶出舞台（大 Boss 贴顶）
+  const mobScrH = BT.mob ? BT.mob.h * (BT.mobScale || 2) : 240;
   layer.style.left = Math.round(g.mobX - W / 2) + "px";
-  layer.style.top = Math.round(g.G - mobH * Z * 0.8 - H - 14) + "px";
+  layer.style.top = Math.max(8, Math.round(g.G - mobScrH * 0.8 - H - 14)) + "px";
   layer.innerHTML = html;
   st.appendChild(layer);
   setTimeout(() => layer.remove(), 1700);
@@ -2110,6 +2133,11 @@ function btAuto() {
 $("#bt-roll").onclick = btRoll;
 $("#bt-atk").onclick = btAttack;
 $("#bt-auto").onchange = btAuto;
+$$("#bt-kind button").forEach((b) => b.onclick = () => {
+  $$("#bt-kind button").forEach((x) => x.classList.remove("on"));
+  b.classList.add("on");
+  BT.kind = b.dataset.k === "boss" ? "boss" : "mob";   // 切池子，下一次抽卡生效
+});
 
 /* ---------------- 三大类切换：地图 / 怪物素材 / 人物素材 ----------------
    三个大类平级，用卡片标题里的分段控件切换；面板互斥显示，切走时停掉动画定时器。 */
