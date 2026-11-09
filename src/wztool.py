@@ -3154,9 +3154,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 
 def _web_convert(names: list[str], force: bool) -> dict:
-    """web 版转换：后台线程跑，前端轮询 /api/job（和页面现有约定一致）。"""
+    """web 版转换：后台线程跑，前端轮询 /api/job（和页面现有约定一致）。
+
+    国服模式下一键全包：缺的 nx 依次转 + 怀旧服小地图库没建好就顺手建上
+    （前端不再有单独的「建库」按钮，一个按钮把数据备齐）。
+    """
     _need_tools()
     todo: list[Path] = []
+    cls_todo = False
     if _cn_mode() is not None:
         paths = {"String.nx": CN_NX / "String.nx", "Map.nx": CN_NX / "Map.nx",
                  "Mob.nx": CN_NX / "Mob.nx", "Character.nx": CN_NX / "Character.nx",
@@ -3165,7 +3170,9 @@ def _web_convert(names: list[str], force: bool) -> dict:
         todo_names = [n for n in ("String.nx", "Map.nx", "Mob.nx",
                                   "Character.nx", "Skill.nx")
                       if (not names or n in names) and not paths[n].exists()]
-        if not todo_names:
+        # 怀旧服小地图库（mxdclassic）没建好 → 并进这次任务，转完自动建
+        cls_todo = _cls_w_dir() is not None and not _cls_ready() and not _clsjob["running"]
+        if not todo_names and not cls_todo:
             return {"started": False, "message": "国服数据已转换完成（.cache\\cn）"}
         cn_todo = todo_names
     else:
@@ -3175,6 +3182,8 @@ def _web_convert(names: list[str], force: bool) -> dict:
             return {"started": False, "message": "选中的都已是 .nx（要重转勾「强制重转」）"}
         cn_todo = None
     total = len(cn_todo) if cn_todo is not None else len(todo)
+    if cn_todo is not None and cls_todo:
+        total += 1                      # 小地图库算最后一项，进度条能走满
     with _lock:
         if _job["running"]:
             raise CliError("已有转换在跑，等它完成", 1)
@@ -3184,8 +3193,13 @@ def _web_convert(names: list[str], force: bool) -> dict:
     def work():
         try:
             if cn_todo is not None:
-                c_convert_cn(lambda s: _job["log"].append(s), cn_todo)
-                _job["done"] = total
+                if cn_todo:
+                    c_convert_cn(lambda s: _job["log"].append(s), cn_todo)
+                    _job["done"] = total - (1 if cls_todo else 0)
+                if cls_todo:
+                    _job["log"].append("转换完成，接着构建怀旧服小地图库…")
+                    _cls_build()
+                    _job["done"] = total
             else:
                 for wz in todo:
                     _convert_one(wz, lambda s: _job["log"].append(s))

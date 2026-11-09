@@ -542,7 +542,7 @@ function api(path, opts) {
 }
 function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + e.message; }
 
-let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [];
+let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [], CN_NEED_CLS = false;
 let mapSel = null;
 let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // =「显示怪物」开关：勾选后页面与导出图都把怪物合成进去
@@ -843,7 +843,7 @@ async function scan() {
       // 不再扫描后自动全量重转（全量要 1 小时上下，只测怀旧服找图时不需要等）。
       const cn = d.cn;
       const cls = d.cls || null;
-      // 收集所有缺失项，给一个批量转换按钮（不再一行一个按钮）
+      // 收集所有缺失项；怀旧服小地图库没建好也算「缺失」，一起交给后端一键备齐
       const missing = [];
       if (!cn.string_nx) missing.push("String.nx");
       if (!cn.map_nx) missing.push("Map.nx");
@@ -851,18 +851,19 @@ async function scan() {
       if (!cn.char_nx) missing.push("Character.nx");
       if (!cn.skill_nx) missing.push("Skill.nx");
       CN_MISSING = missing;
+      CN_NEED_CLS = !!(cls && cls.dir && !cls.ready && !cls.building);
       const clsRow = cls && cls.dir ? `
         <tr><td>怀旧服小地图库（mxdclassic 的 canvas 素材，怀旧服找图用）</td>
-            <td>${cls.ready ? `<span class="ok">已建好（${cls.count} 张）</span>` : '<span class="miss">未建</span>'}</td>
-            <td style="text-align:right">${cls.ready ? "" : `<button class="mini" id="cls-go"
-                title="从怀旧服 Unity 数据包提取 canvas 小地图并建找图索引（首次约 1-2 分钟）">🖼 建库</button>`}</td></tr>` : "";
+            <td>${cls.ready ? `<span class="ok">已建好（${cls.count} 张）</span>`
+                : (cls.building ? '<span class="ok">构建中…</span>' : '<span class="miss">未建（点「转换缺失数据」会自动建）</span>')}</td>
+            <td></td></tr>` : "";
       $("#ws-state").innerHTML =
         `工作区：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
       $("#ws-mini").textContent = `：国服官方 · ${cn.map_nx ? "已转换" : "待转换"}`;
       $("#wz-table").innerHTML = `
-        <table><tr><th>数据源</th><th>状态</th><th style="text-align:right">${missing.length
+        <table><tr><th>数据源</th><th>状态</th><th style="text-align:right">${(missing.length || CN_NEED_CLS)
             ? `<button class="mini" id="cn-cv-all"
-                title="把缺失的 ${missing.length} 项一次性排队转换（转完进度条自动停）">⬇ 转换缺失数据</button>`
+                title="把缺失的 nx 一次性排队转换；怀旧服小地图库没建好也会接着自动建（转完进度条自动停）">⬇ 转换缺失数据</button>`
             : ""}</th></tr>
         <tr><td>Map.nx（全量 10 分片 + Back/Tile/Obj 位图，约 23 GB）</td>
             <td>${cn.map_nx ? `<span class="ok">已转换（${cn.map_nx_mb} MB）</span>` : '<span class="miss">未转换</span>'}</td>
@@ -885,7 +886,7 @@ async function scan() {
             <td style="text-align:right"><button class="mini" id="wipe-go"
                 title="把 .cache 彻底删干净（数据量大时要几分钟）——之后点「⬇ 转换缺失数据」重转">🗑 清除</button></td></tr>
         </table>
-        <div class="muted" style="margin-top:6px">缺数据时点右上角「⬇ 转换缺失数据」，一次把缺的全部转上，进度条实时显示。地图 / 找图 / 怪物素材 / 人物素材 / 技能特效页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
+        <div class="muted" style="margin-top:6px">缺数据时点右上角「⬇ 转换缺失数据」，缺的 nx 一次转上、怀旧服小地图库也自动建，进度条实时显示。地图 / 找图 / 怪物素材 / 人物素材 / 技能特效页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
       loadLists();
       return;
     }
@@ -955,19 +956,6 @@ async function wipeData() {
   } catch (e) { fail(e); $("#cv-note").textContent = ""; if (btn) { btn.disabled = false; btn.textContent = "🗑 清除"; } }
 }
 
-async function clsBuild() {
-  const btn = $("#cls-go");
-  if (btn) btn.disabled = true;
-  $("#cv-note").textContent = "";
-  try {
-    const d = await api("/api/clsbuild", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
-    });
-    if (!d.started) { if (btn) btn.disabled = false; return; }
-    startProgress();
-  } catch (e) { fail(e); if (btn) btn.disabled = false; }
-}
-
 function startProgress() {
   $("#prog-box").hidden = false;
   $("#cv-log").hidden = false;
@@ -1007,7 +995,7 @@ async function tickProgress() {
     fill.style.width = "100%";
     if (bad) fill.style.background = "#c0392b";
     setTimeout(() => { box.hidden = true; fill.style.background = ""; }, 5000);
-    if ($("#cls-go") || $("#wipe-go")) scan();   // 怀旧服库建完/清除后：刷新状态行
+    if ($("#wipe-go")) scan();   // 清除/批量转换完成后：刷新状态行
     return;
   }
   $("#prog-stage").textContent = seg.name;
@@ -2146,9 +2134,8 @@ async function exportWindow() {
 
 $("#wz-table").addEventListener("click", (e) => {
   const t = e.target;
-  if (t && t.id === "cn-cv-all" && CN_MISSING.length) convert(CN_MISSING);
+  if (t && t.id === "cn-cv-all" && (CN_MISSING.length || CN_NEED_CLS)) convert(CN_MISSING);
   if (t && t.id === "wipe-go") wipeData();
-  if (t && t.id === "cls-go") clsBuild();
 });
 // 页面打开时若后台已在跑（转换 / 小地图索引 / 兜底生成 / 怀旧服小地图库），直接把进度条接上
 (async () => {
