@@ -815,8 +815,8 @@ async function scan() {
       const clsRow = cls && cls.dir ? `
         <tr><td>怀旧服小地图库（mxdclassic 的 canvas 素材，怀旧服找图用）</td>
             <td>${cls.ready ? `<span class="ok">已建好（${cls.count} 张）</span>` : '<span class="miss">未建</span>'}</td>
-            <td style="text-align:right"><button class="mini" id="cls-go"
-                title="从怀旧服 Unity 数据包提取 canvas 小地图并建找图索引（首次约 1-2 分钟）">${cls.ready ? "🔄 重建" : "🖼 建库"}</button></td></tr>` : "";
+            <td style="text-align:right">${cls.ready ? "" : `<button class="mini" id="cls-go"
+                title="从怀旧服 Unity 数据包提取 canvas 小地图并建找图索引（首次约 1-2 分钟）">🖼 建库</button>`}</td></tr>` : "";
       $("#ws-state").innerHTML =
         `工作区：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
       $("#ws-mini").textContent = `：国服官方 · ${cn.map_nx ? "已转换" : "待转换"}`;
