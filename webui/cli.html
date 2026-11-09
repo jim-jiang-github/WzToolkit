@@ -808,8 +808,12 @@ async function pickDir() {
     if (d.path) { $("#ws-path").value = d.path; scan(); }
   } catch (e) { fail(e); }
 }
-/* 工作区：点整条栏展开/收起面板（面板内点击不冒泡）；选目录点面板里的路径框 */
-$("#ws-bar").onclick = () => { $("#ws-pop").hidden = !$("#ws-pop").hidden; };
+/* 工作区：点整条栏展开/收起面板（stopPropagation 防止被全局"点外面关闭"立刻关掉；
+   面板内点击也不冒泡）；选目录点面板里的路径框 */
+$("#ws-bar").onclick = (e) => {
+  e.stopPropagation();
+  $("#ws-pop").hidden = !$("#ws-pop").hidden;
+};
 $("#ws-pop").onclick = (e) => e.stopPropagation();
 $("#ws-path").onclick = pickDir;
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
