@@ -1959,8 +1959,8 @@ function btLoops() {
     const g = btGeom(), img = $("#bt-char img");
     img.src = f.url;
     img.style.width = f.w * g.Z + "px"; img.style.height = f.h * g.Z + "px";
-    img.style.left = (g.charX - f.w * g.Z / 2) + "px";
-    img.style.top = (g.G - f.h * g.Z) + "px";
+    img.style.left = (g.charX - (f.ox ?? f.w / 2) * g.Z) + "px";
+    img.style.top = (g.G - (f.oy ?? f.h) * g.Z) + "px";
     const sh = $("#bt-chshadow");
     if (sh) { sh.style.width = "90px"; sh.style.left = (g.charX - 45) + "px"; sh.style.top = (g.G - 4) + "px"; }
     BT.tChar = setTimeout(stepChar, f.delay > 0 ? f.delay : 100);
@@ -1977,10 +1977,11 @@ function btLoops() {
     }
     const f = list[BT.mi++];
     const g = btGeom(), img = $("#bt-mob img");
+    const mox = f.ox ?? f.w / 2, moy = f.oy ?? f.h;   // 锚点：脚底中心
     img.src = f.url;
     img.style.width = f.w * g.Z + "px"; img.style.height = f.h * g.Z + "px";
-    img.style.left = (g.mobX - f.ox * g.Z) + "px";
-    img.style.top = (g.G - f.oy * g.Z) + "px";
+    img.style.left = (g.mobX - mox * g.Z) + "px";
+    img.style.top = (g.G - moy * g.Z) + "px";
     const sh = $("#bt-mbshadow");
     if (sh) { sh.style.width = Math.round(f.w * g.Z * .7) + "px";
       sh.style.left = (g.mobX - f.w * g.Z * .35) + "px"; sh.style.top = (g.G - 4) + "px"; }
@@ -2003,10 +2004,11 @@ function btPlaySeq(q, xFn, yFn) {
   const step = () => {
     if (gen !== BT.gen || k >= q.frames.length) { img.remove(); return; }
     const f = q.frames[k++], Z = 2;
+    const ax = f.ax ?? f.w / 2, ay = f.ay ?? f.h / 2;   // 锚点：默认图中心
     img.src = f.url;
     img.style.width = f.w * Z + "px"; img.style.height = f.h * Z + "px";
-    img.style.left = (xFn() - f.ax * Z) + "px";
-    img.style.top = (yFn() - f.ay * Z) + "px";
+    img.style.left = (xFn() - ax * Z) + "px";
+    img.style.top = (yFn() - ay * Z) + "px";
     setTimeout(step, f.delay > 0 ? f.delay : 120);
   };
   step();
