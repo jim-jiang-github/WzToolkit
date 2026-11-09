@@ -329,17 +329,112 @@ def c_browse(path: str = "") -> dict:
     return {"path": str(p), "dirs": dirs[:500]}
 
 
-def c_pickdir() -> dict:
-    """弹 Windows 原生「选择文件夹」对话框。WebUI 跑在本机，弹窗直接出现在
-    用户桌面；取消返回 {"path": ""}。用的是 shell 的 SHBrowseForFolder
-    （ctypes 直调，零第三方依赖，PyInstaller 打包不用带 tkinter）。
-    注意 64 位下返回的 pidl 是指针——必须显式声明 restype，不然被截成 32 位。"""
+def c_pickdir(initial: str = "") -> dict:
+    """弹 Windows **现代**「选择文件夹」对话框（IFileOpenDialog + FOS_PICKFOLDERS，
+    跟资源管理器/「另存为」同款：左侧导航栏、地址栏、搜索框、可新建文件夹）。
+    initial 为初始定位目录；取消返回 {"path": ""}。
+
+    全用 ctypes 直调 COM，零第三方依赖（PyInstaller 不用带 tkinter）。
+    两个 64 位坑必须显式声明类型，否则指针被截成 32 位：
+      - GetForegroundWindow 的返回值（HWND）
+      - COM 接口方法（一律按 c_void_p 传 this + 手工走虚表）
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    ole32 = ctypes.windll.ole32
+    shell32 = ctypes.windll.shell32
+    user32 = ctypes.windll.user32
+    HR = ctypes.c_long                     # HRESULT（32 位有符号）
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                    ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+    ole32.CLSIDFromString.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(GUID)]
+    ole32.CLSIDFromString.restype = HR
+    ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+    user32.GetForegroundWindow.restype = wintypes.HWND
+
+    def _guid(lit: str) -> GUID:
+        g = GUID()
+        ole32.CLSIDFromString(lit, ctypes.byref(g))
+        return g
+
+    def _vt(obj, idx: int, restype, *argtypes):
+        """取 COM 对象虚表第 idx 项，包成可调用函数（第一个参数固定为 this）。"""
+        vt = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vt[idx])
+
+    clsid = _guid("{DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7}")     # CLSID_FileOpenDialog
+    iid = _guid("{D57C7288-D4AD-4768-BE02-9D969532D960}")       # IID_IFileOpenDialog
+    iid_item = _guid("{43826D1E-E718-42EE-BC55-A1E261C37BFE}")  # IID_IShellItem
+
+    hr_init = ole32.CoInitializeEx(None, 0x2)                   # COINIT_APARTMENTTHREADED
+    try:
+        dlg = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(ctypes.byref(clsid), None, 1,
+                                    ctypes.byref(iid), ctypes.byref(dlg))
+        if hr < 0 or not dlg:
+            return _pickdir_legacy()                            # 极老系统才走这里
+        release = _vt(dlg, 2, ctypes.c_ulong)                   # IUnknown::Release
+        try:
+            get_opt = _vt(dlg, 10, HR, ctypes.POINTER(ctypes.c_uint))   # GetOptions
+            set_opt = _vt(dlg, 9, HR, ctypes.c_uint)                    # SetOptions
+            set_title = _vt(dlg, 17, HR, ctypes.c_wchar_p)              # SetTitle
+            set_folder = _vt(dlg, 12, HR, ctypes.c_void_p)              # SetFolder
+            show = _vt(dlg, 3, HR, wintypes.HWND)                       # IModalWindow::Show
+            get_result = _vt(dlg, 20, HR, ctypes.POINTER(ctypes.c_void_p))
+
+            opt = ctypes.c_uint(0)
+            if get_opt(dlg, ctypes.byref(opt)) >= 0:
+                # NOCHANGEDIR(0x8)|PICKFOLDERS(0x20)|FORCEFILESYSTEM(0x40)|PATHMUSTEXIST(0x800)
+                set_opt(dlg, opt.value | 0x8 | 0x20 | 0x40 | 0x800)
+            set_title(dlg, "选择工作区 —— 游戏客户端目录（mxdclassic / 冒险岛online）")
+
+            if initial:                                          # 打开时定位到上次的目录
+                psi = ctypes.c_void_p()
+                shell32.SHCreateItemFromParsingName.restype = HR
+                shell32.SHCreateItemFromParsingName.argtypes = [
+                    ctypes.c_wchar_p, ctypes.c_void_p,
+                    ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)]
+                if shell32.SHCreateItemFromParsingName(
+                        initial, None, ctypes.byref(iid_item), ctypes.byref(psi)) >= 0 and psi:
+                    set_folder(dlg, psi)
+                    _vt(psi, 2, ctypes.c_ulong)(psi)             # Release
+
+            if show(dlg, user32.GetForegroundWindow()) < 0:       # 用户点了取消
+                return {"path": ""}
+            item = ctypes.c_void_p()
+            if get_result(dlg, ctypes.byref(item)) < 0 or not item:
+                return {"path": ""}
+            try:
+                get_name = _vt(item, 5, HR, ctypes.c_uint,
+                               ctypes.POINTER(ctypes.c_wchar_p))  # IShellItem
+                buf = ctypes.c_wchar_p()
+                if get_name(item, 0x80058000, ctypes.byref(buf)) < 0:   # SIGDN_FILESYSPATH
+                    return {"path": ""}
+                out = buf.value or ""
+                ole32.CoTaskMemFree(ctypes.cast(buf, ctypes.c_void_p))
+            finally:
+                _vt(item, 2, ctypes.c_ulong)(item)               # Release
+            p = Path(out)
+            return {"path": str(p)} if p.is_absolute() and p.is_dir() else {"path": ""}
+        finally:
+            release(dlg)
+    finally:
+        if hr_init >= 0:
+            ole32.CoUninitialize()
+
+
+def _pickdir_legacy() -> dict:
+    """兜底：老式 SHBrowseForFolder（仅在 IFileOpenDialog 创建失败时使用）。"""
     import ctypes
     from ctypes import wintypes
     user32 = ctypes.windll.user32
     ole32 = ctypes.windll.ole32
     shell32 = ctypes.windll.shell32
-    ole32.CoInitializeEx(None, 0x2)          # COINIT_APARTMENTTHREADED
+    ole32.CoInitializeEx(None, 0x2)
     try:
         class BROWSEINFO(ctypes.Structure):
             _fields_ = [("hwndOwner", wintypes.HWND),
@@ -354,12 +449,13 @@ def c_pickdir() -> dict:
         shell32.SHBrowseForFolderW.argtypes = [ctypes.POINTER(BROWSEINFO)]
         shell32.SHGetPathFromIDListW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
         ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+        user32.GetForegroundWindow.restype = wintypes.HWND
         bi = BROWSEINFO()
-        bi.hwndOwner = user32.GetForegroundWindow()   # 挂到前台窗口上，保证弹在最前
-        bi.lpszTitle = "选择工作区：游戏客户端目录（mxdclassic / 冒险岛online）或放 .wz 的目录"
+        bi.hwndOwner = user32.GetForegroundWindow()
+        bi.lpszTitle = "选择工作区：游戏客户端目录（mxdclassic / 冒险岛online）"
         disp = ctypes.create_unicode_buffer(wintypes.MAX_PATH)  # 必须留引用，否则被 GC
         bi.pszDisplayName = ctypes.cast(disp, ctypes.c_wchar_p)
-        bi.ulFlags = 0x1 | 0x40              # BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE
+        bi.ulFlags = 0x1 | 0x40
         pidl = shell32.SHBrowseForFolderW(ctypes.byref(bi))
         if not pidl:
             return {"path": ""}
@@ -367,9 +463,7 @@ def c_pickdir() -> dict:
         ok = shell32.SHGetPathFromIDListW(pidl, ctypes.cast(out, ctypes.c_wchar_p))
         ole32.CoTaskMemFree(pidl)
         p = Path(out.value) if ok else None
-        if not (p and p.is_absolute() and p.is_dir()):
-            return {"path": ""}
-        return {"path": str(p)}
+        return {"path": str(p)} if (p and p.is_absolute() and p.is_dir()) else {"path": ""}
     finally:
         ole32.CoUninitialize()
 
@@ -2988,7 +3082,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/browse":
             self._api(c_browse, b.get("path") or "")
         elif path == "/api/pickdir":
-            self._api(c_pickdir)
+            self._api(c_pickdir, str(b.get("path") or ""))
         elif path == "/api/scan":
             if not b.get("path"):
                 self._send_json(400, {"detail": "path 必填"})
