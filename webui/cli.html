@@ -1640,10 +1640,10 @@ function dmgRenderDetail() {
   $("#dmg-detail").innerHTML = `
     <div><b>${s.id}</b> · ${s.cn || "（未命名样式）"}
       <span class="muted">· ${s.frames.length} 帧 · 特殊帧：${specials.map((f) => f.k).join(" / ") || "无"}</span></div>
-    <div class="muted" style="margin:8px 0 4px">预览（按每帧 origin 锚点对齐基线，2× 放大）：</div>
+    <div class="muted" style="margin:8px 0 4px">模拟游戏内渲染（客户端 DamageNumber 算法：首位大号、波浪错位、固定间距，2× 放大）：</div>
     <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
-      <input type="text" id="dmg-text" value="1234567890" maxlength="14"
-             style="width:140px;padding:4px 8px" title="输入任意数字，只用到这套里有的字符">
+      <input type="text" id="dmg-text" value="196" maxlength="14"
+             style="width:140px;padding:4px 8px" title="输入伤害数字（0-9），或 Miss / guard / resist / counter / shot">
       <span id="dmg-canvas-wrap"></span>
     </div>
     ${specials.length ? `
@@ -1658,22 +1658,71 @@ function dmgRenderDetail() {
   dmgRenderCanvas(s, by);
 }
 
+/* 客户端 DamageNumber.cpp 的排版常量：固定推进表（0-9）+ 首位/暴击修正 +
+   其余数字波浪形 ±2px 错位；首位用大号图（NoXxx1），其余用 NoXxx0 */
+const DMG_ADV = { "0": 24, "1": 20, "2": 22, "3": 22, "4": 24,
+                  "5": 23, "6": 24, "7": 22, "8": 24, "9": 24 };
+function dmgAdvance(c, first, critical) {
+  let a = DMG_ADV[c] || 0;
+  if (critical) a += first ? 8 : 4;
+  else if (first) a += 2;
+  return a;
+}
+
 function dmgRenderCanvas(s, by) {
-  const text = ($("#dmg-text").value || "").slice(0, 14);
-  const specs = [...text].map((ch) => by[ch]).filter(Boolean);
   const wrap = $("#dmg-canvas-wrap");
-  if (!specs.length) { wrap.innerHTML = '<span class="muted">这套里没有输入的字符</span>'; return; }
-  const base = Math.max(...specs.map((f) => f.oy));     // 基线 = 最大的 origin.y
-  let x = 0, bottom = 0;
-  const imgs = specs.map((f) => {
-    const top = base - f.oy;
-    const h = `<img src="${f.url}" style="position:absolute;left:${x}px;top:${top}px;width:${f.w}px;height:${f.h}px">`;
-    x += f.w + 2;
-    bottom = Math.max(bottom, top + f.h);
-    return h;
-  }).join("");
-  wrap.innerHTML = `<span style="display:inline-block;width:${x * 2}px;height:${bottom * 2}px">
-      <span class="dmgscale" style="width:${x}px;height:${bottom}px">${imgs}</span></span>`;
+  const raw = ($("#dmg-text").value || "").trim();
+  // 整词匹配特殊帧（Miss / guard / resist / counter / shot）
+  const special = s.frames.find((f) => f.k === raw);
+  if (special) {
+    wrap.innerHTML = `<span style="display:inline-block;width:${special.w * 2}px;height:${special.h * 2}px">
+      <span class="dmgscale" style="width:${special.w}px;height:${special.h}px;position:relative">
+        <img src="${special.url}" style="position:absolute;left:0;top:0;width:${special.w}px;height:${special.h}px"></span></span>`;
+    return;
+  }
+  // 配对：NoXxx0/NoXxx1 互为一组 —— 首位用 -1（大号），其余用 -0（小号）
+  const m = s.id.match(/^(No.*)([01])$/);
+  const pair = m ? DMG.sets.find((t) => t.id === m[1] + (m[2] === "0" ? "1" : "0")) : null;
+  const restSet = (pair && /0$/.test(pair.id) ? pair : s);
+  const firstSet = (pair && /1$/.test(pair.id) ? pair : s);
+  const critical = firstSet.id.startsWith("NoCri");
+  const rby = {};
+  restSet.frames.forEach((f) => rby[f.k] = f);
+
+  const chars = [...raw].filter((c) => DMG_ADV[c] && by[c] && rby[c]);
+  if (!chars.length) {
+    wrap.innerHTML = '<span class="muted">输入数字（0-9），或 Miss / guard 等特殊帧名</span>';
+    return;
+  }
+  // 按客户端算法排版：锚点坐标（x, y），位图绘制在 (x-ox, y-oy)
+  const boxes = [];
+  let x = 0;
+  const f0 = firstSet.frames.find((f) => f.k === chars[0]) || by[chars[0]];
+  boxes.push([f0, -f0.ox, -f0.oy]);
+  x += dmgAdvance(chars[0], true, critical);
+  for (let i = 1; i < chars.length; i++) {
+    const c = chars[i];
+    const f = rby[c];
+    const yc = (i - 1) % 2 ? -2 : 2;             // 波浪形：+2 / -2 交替
+    boxes.push([f, x - f.ox, yc - f.oy]);
+    const adv = i < chars.length - 1
+      ? Math.round((dmgAdvance(c, false, critical)
+                    + dmgAdvance(chars[i + 1], false, critical)) / 2)
+      : dmgAdvance(c, false, critical);
+    x += adv;
+  }
+  // 求包围盒，归一化到 (0,0)
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  boxes.forEach(([f, bx, byy]) => {
+    minX = Math.min(minX, bx); minY = Math.min(minY, byy);
+    maxX = Math.max(maxX, bx + f.w); maxY = Math.max(maxY, byy + f.h);
+  });
+  const W = maxX - minX, H = maxY - minY;
+  const imgs = boxes.map(([f, bx, byy]) =>
+    `<img src="${f.url}" style="position:absolute;left:${bx - minX}px;top:${byy - minY}px;width:${f.w}px;height:${f.h}px">`).join("");
+  wrap.innerHTML = `<span style="display:inline-block;width:${W * 2}px;height:${H * 2}px">
+      <span class="dmgscale" style="width:${W}px;height:${H}px;position:relative">${imgs}</span></span>
+    <div class="muted" style="font-size:12px;margin-top:4px">首位 ${firstSet.id}（大号）· 其余 ${restSet.id} · 波浪错位 ±2px${critical ? " · 暴击间距" : ""}</div>`;
 }
 
 async function dmgExport(btn) {
