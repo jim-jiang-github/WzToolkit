@@ -245,3 +245,4 @@ tmp/
 /debug.log
 /run.log
 bin/wztool.exe
+*.tmp
