@@ -824,8 +824,7 @@ async function scan() {
         <table><tr><th>数据源</th><th>状态</th><th></th></tr>
         <tr><td>Map.nx（全量 10 分片 + Back/Tile/Obj 位图，约 23 GB）</td>
             <td>${cn.map_nx ? `<span class="ok">已转换（${cn.map_nx_mb} MB）</span>` : '<span class="miss">未转换</span>'}</td>
-            <td style="text-align:right"><button class="mini rc-btn" id="rc-go"
-                title="补齐缺失的 .nx，并强制重建全库小地图库（小地图 PNG + 找图索引）">🔄 重新转换</button></td></tr>
+            <td></td></tr>
         ${clsRow}
         <tr><td>String.nx（地图名等中文表）</td>
             <td>${cn.string_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td><td></td></tr>
@@ -835,6 +834,10 @@ async function scan() {
             <td>${cn.char_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td><td></td></tr>
         <tr><td>Skill.nx（技能特效，${cn.skill_nx ? cn.skill_nx_gb + " GB" : "约 15 GB"}）</td>
             <td>${cn.skill_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td><td></td></tr>
+        <tr><td>清除全部数据（转换产物 + 小地图库 + 怀旧服库；.exports 导出成品不动）</td>
+            <td></td>
+            <td style="text-align:right"><button class="mini" id="wipe-go"
+                title="清空 .cache 后自动重新转换（页面有进度条）——想从头来一遍时用这个">🗑 清除</button></td></tr>
         </table>
         <div class="muted" style="margin-top:6px">地图 / 找图 / 怪物素材 / 人物素材 / 技能特效页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
       $("#cv-row").style.display = "none";
@@ -899,17 +902,17 @@ async function pollJob() {
 
 let PTIMER = null;
 
-async function reconvert() {
-  const btn = $("#rc-go");
+async function wipeData() {
+  if (!confirm("清除 .cache 全部数据？\n\n（转换产物 Map.nx/Mob.nx… + 小地图库 + 怀旧服小地图库；.exports 导出成品不动）\n清完会自动重新转换，页面有进度条，不用手动点。")) return;
+  const btn = $("#wipe-go");
   if (btn) btn.disabled = true;
   $("#cv-note").textContent = "";
   try {
-    const d = await api("/api/reconvert", {
+    await api("/api/export/clear-cache", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
     });
-    if (!d.started) { $("#cv-note").textContent = d.message || ""; if (btn) btn.disabled = false; return; }
-    $("#cv-log").hidden = false;
-    startProgress();
+    CNAUTO = false;               // 让 scan() 里的自动转换重新生效（带进度条）
+    await scan();
   } catch (e) { fail(e); if (btn) btn.disabled = false; }
 }
 
@@ -965,8 +968,7 @@ async function tickProgress() {
     fill.style.width = "100%";
     if (bad) fill.style.background = "#c0392b";
     setTimeout(() => { box.hidden = true; fill.style.background = ""; }, 5000);
-    const b = $("#rc-go"); if (b) b.disabled = false;
-    if ($("#cls-go")) scan();            // 怀旧服库建完：刷新状态行
+    if ($("#cls-go") || $("#wipe-go")) scan();   // 怀旧服库建完/清除后：刷新状态行
     return;
   }
   $("#prog-stage").textContent = seg.name;
@@ -2140,7 +2142,7 @@ $("#ws-scan").onclick = scan;
 $("#ws-browse").onclick = browseOpen;
 $("#cv-go").onclick = convert;
 $("#wz-table").addEventListener("click", (e) => {
-  if (e.target && e.target.id === "rc-go") reconvert();
+  if (e.target && e.target.id === "wipe-go") wipeData();
   if (e.target && e.target.id === "cls-go") clsBuild();
 });
 // 页面打开时若后台已在跑（转换 / 小地图索引 / 兜底生成 / 怀旧服小地图库），直接把进度条接上
