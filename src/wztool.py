@@ -1942,12 +1942,42 @@ def _ensure_mob_preview(raw: str, ws: Path) -> Path:
     return outdir
 
 
-def _mob_anchor(w: int, h: int, ox: int, oy: int) -> tuple[int, int]:
+def _png_feet_oy(p: Path, h: int) -> int:
+    """帧 PNG 里最后一个「肉眼可见」行（该行存在 alpha>=100 的像素）的行号+1。
+
+    幽灵/烟雾类怪（幽灵白雪人等）的底部是一段渐隐尾巴：alpha 从 255 一路掉到
+    17~85，贴图确实贴着 canvas 底，但深色背景上那段尾巴完全看不见——按 canvas
+    底对齐就会显得整只怪浮空。按可见底部做竖直锚点，普通怪（脚踩实线）结果
+    不变，幽灵怪的可见身体才踩在地面上。打不开图就退回 canvas 高度。
+    """
+    try:
+        from PIL import Image
+        with Image.open(p) as im:
+            if im.mode != "RGBA":
+                im = im.convert("RGBA")
+            w, ih = im.size
+            if ih != h:
+                return h                       # manifest 和图对不上，别瞎修
+            data = im.tobytes()                # RGBA 行主序
+        step = w * 4
+        for y in range(ih - 1, -1, -1):
+            row = data[y * step:(y + 1) * step]
+            for i in range(3, step, 4):
+                if row[i] >= 100:
+                    return y + 1
+    except Exception:
+        pass
+    return h
+
+
+def _mob_anchor(w: int, h: int, ox: int, oy: int,
+                path: "Path | None" = None) -> tuple[int, int]:
     """怪物帧锚点兜底：国服 Mob.nx 的帧节点下没有 origin 属性，nxmob 写出的
     manifest 全是 (0,0)——那是「贴图左上角」而不是锚点，会把怪摆到地面右下方。
-    没有真锚点时按怪物通用规则取脚底中心。"""
+    没有真锚点时按怪物通用规则取脚底中心；竖直方向尽量用 _png_feet_oy 的
+    「可见底部」而不是 canvas 底（幽灵怪的渐隐尾巴在深色背景上看不见）。"""
     if ox == 0 and oy == 0:
-        return w // 2, h
+        return w // 2, (_png_feet_oy(path, h) if path else h)
     return ox, oy
 
 
@@ -1981,14 +2011,14 @@ def _mob_anim_frames(ws: Path, kind_id: str) -> dict:
                 w, h, ox, oy = (int(x) for x in f[5:9])
             except ValueError:
                 continue
-            ox, oy = _mob_anchor(w, h, ox, oy)
+            ox, oy = _mob_anchor(w, h, ox, oy, by_name[f[4]])
             anims.setdefault(f[2], []).append((by_name[f[4]], w, h, ox, oy))
     if not anims and by_name:          # 兜底：没有 manifest 就按文件名前缀分组
         from PIL import Image
         for name, p in sorted(by_name.items()):
             with Image.open(p) as im:
                 w, h = im.size
-            anims.setdefault(name.split("_")[0], []).append((p, w, h, w // 2, h))
+            anims.setdefault(name.split("_")[0], []).append((p, w, h, w // 2, _png_feet_oy(p, h)))
     return anims
 
 
@@ -2066,7 +2096,7 @@ def _read_manifest(outdir: Path, root: Path, url_prefix: str, pngs: list[Path]) 
             w, h, ox, oy, delay = (int(x) for x in f[5:10])
         except ValueError:
             continue
-        ox, oy = _mob_anchor(w, h, ox, oy)
+        ox, oy = _mob_anchor(w, h, ox, oy, p)
         out.append({"file": f[4],
                     "path": str(p),
                     "url": url_prefix + p.relative_to(root).as_posix(),
