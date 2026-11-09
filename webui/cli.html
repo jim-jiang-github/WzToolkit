@@ -375,7 +375,8 @@
       </div>
       <div class="muted" id="ws-state" style="margin-top:8px">尚未选择</div>
       <div id="wz-table" style="margin-top:12px"></div>
-      <div class="row" id="cv-row" style="margin-top:10px">
+      <!-- 老式 .wz 目录工作流专用：默认藏起来，只有扫描到非国服目录才显示（国服用表格里的批量转换） -->
+      <div class="row" id="cv-row" style="margin-top:10px;display:none">
         <label class="muted"><input type="checkbox" id="cv-force" /> 强制重转（忽略已存在的 .nx）</label>
         <button id="cv-go" disabled>转换为 NX</button>
         <span class="muted" id="cv-note"></span>
