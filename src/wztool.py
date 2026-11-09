@@ -288,6 +288,7 @@ def c_state() -> dict:
     cn = _cn_mode()
     return {"workspace": str(_ws) if _ws else None,
             "cn": {"data": str(cn), "nx_dir": str(CN_NX)} if cn else None,
+            "cls": _cls_state(),
             "tools_ok": tools_ok(),
             "exports": str(EXPORTS),
             "ui": c_ui()["ui"]}
@@ -1185,6 +1186,434 @@ def c_map_imgsearch(image: str) -> dict:
                     "w": meta.get("cw"), "h": meta.get("ch"),
                     "thumb": f"/preview/minimap/{mid}.png"})
     return {"building": False, "results": out}
+
+
+# 怀旧服（mxdclassic）小地图库 -------------------------------------------------
+# 用户玩的怀旧服是 Unity 重制客户端，数据在 mxdclassic\...\StreamingAssets\aa\w\*.bundle。
+# 游戏内左上角小地图 = 包里 spritesheet atlas 上的 miniMap/canvas 素材缩放显示
+# （2026-11-09 用「勇士部落东入口」实测：canvas 101040000 与游戏画面 0.767 强匹配）。
+# 库 = 把 canvas 按 alpha 裁剪提取成透明 PNG（.cache\minimap-cls\），找图走多尺度匹配
+# （游戏里显示倍率不固定，和现代版的单尺度匹配不同）。地图名由服务器下发，本地没有。
+
+CLS_MMIDX = CACHE / "minimap-cls"
+CLS_THUMBS_NPZ = CLS_MMIDX / "thumbs.npz"
+_clsjob: dict = {"running": False, "error": "", "done": 0, "total": 0, "stage": ""}
+_cls_lock = threading.Lock()
+_cls_thumbs: dict = {"state": None, "building": False}
+
+
+def _cls_w_dir() -> Path | None:
+    """怀旧服客户端的 Addressables 目录（…\\aa），工作区选 mxdclassic / 安装根都行。"""
+    if _ws is None:
+        return None
+
+    def ok(p: Path) -> bool:
+        w = p / "w"
+        if not w.is_dir():
+            return False
+        return next(w.glob("spritesheet_*.bundle"), None) is not None
+
+    rel = Path("Maplestory_Classic_Data") / "StreamingAssets" / "aa"
+    cands = [_ws / rel, _ws / "mxdclassic" / rel]
+    up = _ws
+    for _ in range(3):                      # 覆盖选安装根 / mxd 的情况
+        up = up.parent
+        if up == up.parent:
+            break
+        cands.append(up / "mxdclassic" / rel)
+    for c in cands:
+        if ok(c):
+            return c
+    return None
+
+
+def _cls_ready() -> bool:
+    """库建好了且来源 bundle 没变（客户端更新后自动过期）。"""
+    try:
+        meta = json.loads((CLS_MMIDX / "index.meta.json").read_text(encoding="utf-8"))
+        b = Path(meta["bundle"])
+        return (CLS_MMIDX / "index.json").is_file() and CLS_THUMBS_NPZ.is_file() \
+            and b.is_file() and b.stat().st_mtime == meta.get("mtime") \
+            and b.stat().st_size == meta.get("size")
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def _cls_state() -> dict:
+    w = _cls_w_dir()
+    n = 0
+    if w is not None and _cls_ready():
+        try:
+            n = len(json.loads((CLS_MMIDX / "index.json").read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            n = 0
+    return {"dir": str(w) if w else None, "ready": _cls_ready(), "count": n,
+            "building": _clsjob["running"]}
+
+
+def _cls_bundle_meta() -> Path | None:
+    """上次用过的来源 bundle（还在且 mtime 没变就复用，免去全包探测）。"""
+    try:
+        meta = json.loads((CLS_MMIDX / "index.meta.json").read_text(encoding="utf-8"))
+        b = Path(meta["bundle"])
+        if b.is_file() and b.stat().st_mtime == meta.get("mtime"):
+            return b
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+
+def _cls_build() -> None:
+    """后台线程：定位 canvas atlas → 提取 523 张透明 PNG → 建找图签名。
+
+    bundle 里的 canvas 存在一张大 spritesheet atlas 上（透明区 RGB 是相邻贴图
+    的杂色），所以提取必须按 alpha 裁内容区、RGB 预乘 alpha（透明=黑，和找图
+    匹配的底色约定一致），PNG 保留透明通道给人看。
+    bundle 定位：压缩存储没法快扫字符串，只能 UnityPy 开包——按体积从大到小
+    试（canvas atlas 是最大的那个），找到就记进 meta，之后复用不再探测。
+    """
+    if not _cls_lock.acquire(blocking=False):
+        return
+    try:
+        import struct
+        try:
+            import UnityPy
+        except ImportError:
+            raise CliError("缺 UnityPy —— 先跑 python scripts\\deps.py（依赖装在 .pylibs\\）", 1)
+        _clsjob.update(running=True, error="", done=0, total=0, stage="定位数据包")
+        w = _cls_w_dir()
+        if w is None:
+            raise CliError("找不到怀旧服数据（…\\mxdclassic\\Maplestory_Classic_Data\\"
+                           "StreamingAssets\\aa）—— 工作区选 mxdclassic 或安装根目录", 1)
+        cached = _cls_bundle_meta()
+        env = None
+        bundle = None
+        if cached is not None:
+            bundle = cached
+            _clsjob.update(stage=f"打开 {bundle.name[:20]}…")
+            env = UnityPy.load(str(bundle))
+            if not any(o.type.name == "MonoBehaviour" and b"miniMap/canvas" in o.get_raw_data()[:400]
+                       for o in env.objects):
+                env = None                        # 缓存的包里没有了（客户端大更新）：重新探测
+        if env is None:
+            cands = sorted((w / "w").glob("spritesheet_*.bundle"),
+                           key=lambda p: p.stat().st_size, reverse=True)
+            for i, p in enumerate(cands[:6]):
+                _clsjob.update(stage=f"探测数据包 {i + 1}/{min(6, len(cands))}：{p.name[:20]}…")
+                env = UnityPy.load(str(p))
+                if any(o.type.name == "MonoBehaviour" and b"miniMap/canvas" in o.get_raw_data()[:400]
+                       for o in env.objects):
+                    bundle = p
+                    break
+                env = None
+        if env is None or bundle is None:
+            raise CliError("canvas atlas 不在前 6 大的 spritesheet 里 —— 客户端结构变了，"
+                           "把 aa\\w 目录发出来看看", 1)
+
+        # 描述符：MonoBehaviour 里 [0,0,0,W,H,pivX,pivY,0]（W×H 是真实区域）
+        _clsjob.update(stage="解析 canvas 描述符")
+        desc: dict[str, tuple[int, int]] = {}
+        for o in env.objects:
+            if o.type.name != "MonoBehaviour":
+                continue
+            raw = o.get_raw_data()
+            if b"miniMap/canvas" not in raw[:400]:
+                continue
+            ss = re.findall(rb"[\x20-\x7e]{4,}", raw[:160])
+            if len(ss) < 4 or not ss[1].startswith(b"Map/Map/Map"):
+                continue
+            k = (raw.find(b"miniMap/canvas") + 14 + 3) & ~3
+            if k + 32 > len(raw):
+                continue
+            f = struct.unpack("<8f", raw[k:k + 32])
+            if f[3] > 1 and f[4] > 1:
+                desc[ss[0].decode("utf-8", "replace")] = (int(f[3]), int(f[4]))
+        if not desc:
+            raise CliError("canvas 描述符解析失败（一个都没解到）", 1)
+
+        _clsjob.update(stage="提取小地图", done=0, total=len(desc))
+        if CLS_MMIDX.exists():
+            drop_dir(CLS_MMIDX)                  # 旧库整目录进 trash，不逐文件删
+        CLS_MMIDX.mkdir(parents=True, exist_ok=True)
+        index: dict[str, dict] = {}
+        for o in env.objects:
+            if o.type.name != "Texture2D":
+                continue
+            t = o.read()
+            if not t.m_Name.endswith("_0"):
+                continue
+            mid = t.m_Name[:-2]
+            if mid not in desc:
+                continue
+            img = np.array(t.image.convert("RGBA"))
+            a = img[:, :, 3]
+            ys, xs = np.where(a > 0)
+            if len(xs) == 0:
+                continue
+            x0, x1 = int(xs.min()), int(xs.max()) + 1
+            y0, y1 = int(ys.min()), int(ys.max()) + 1
+            crop = img[y0:y1, x0:x1]
+            h, w = crop.shape[:2]
+            if w < 8 or h < 8:
+                continue
+            # RGB 预乘 alpha：透明=黑（atlas 杂色绝不能进库），PNG 仍带透明通道
+            bgra = cv2.cvtColor(crop, cv2.COLOR_RGBA2BGRA)
+            al = (bgra[:, :, 3:4].astype(np.float32) / 255.0)
+            bgra[:, :, :3] = (bgra[:, :, :3].astype(np.float32) * al).astype(np.uint8)
+            cv2.imwrite(str(CLS_MMIDX / f"{mid}.png"), bgra)
+            index[mid] = {"cw": w, "ch": h}
+            _clsjob["done"] = len(index)
+        if not index:
+            raise CliError("一张 canvas 都没提取到 —— 贴图和描述符没对上", 1)
+        (CLS_MMIDX / "index.json").write_text(
+            json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
+        st = bundle.stat()
+        (CLS_MMIDX / "index.meta.json").write_text(json.dumps({
+            "bundle": str(bundle), "mtime": st.st_mtime, "size": st.st_size,
+            "bundle_atime": time.time(), "count": len(index)}), encoding="utf-8")
+        _clsjob["total"] = _clsjob["done"] = len(index)
+        _cls_thumbs_build(progress=True)
+        _clsjob["stage"] = ""
+    except Exception as exc:                    # noqa: BLE001
+        _clsjob["error"] = str(exc)
+    finally:
+        _clsjob["running"] = False
+        _cls_lock.release()
+
+
+def _cls_thumb_one(mid: str):
+    g = cv2.imread(str(CLS_MMIDX / f"{mid}.png"), cv2.IMREAD_GRAYSCALE)
+    if g is None:
+        return None
+    t = cv2.resize(g, (THUMB_PX, THUMB_PX),
+                   interpolation=cv2.INTER_AREA).astype(np.float32)
+    t -= t.mean()
+    std = float(t.std())
+    if std >= 1e-3:
+        t = np.clip(t / std * 127.0, -127, 127)
+    else:
+        t = np.zeros_like(t)
+    return t.astype(np.int8)
+
+
+def _cls_thumbs_build(progress: bool = False) -> None:
+    """怀旧服库的 64×64 归一化签名（500 来张，秒级）。"""
+    if cv2 is None or np is None:
+        return
+    if _cls_thumbs["building"]:
+        return
+    _cls_thumbs["building"] = True
+    try:
+        index = json.loads((CLS_MMIDX / "index.json").read_text(encoding="utf-8"))
+        mids = sorted(index.keys())
+        if progress:
+            _clsjob.update(stage="生成找图签名", done=0, total=len(mids))
+        rows = [_cls_thumb_one(m) for m in mids]
+        arr = np.zeros((len(mids), THUMB_PX, THUMB_PX), dtype=np.int8)
+        kept: list[str] = []
+        for mid, t in zip(mids, rows):
+            if t is None:
+                continue
+            arr[len(kept)] = t
+            kept.append(mid)
+        tmp = CLS_MMIDX / "thumbs.npz.tmp"
+        with open(tmp, "wb") as f:
+            np.savez_compressed(f, mids=np.array(kept), thumbs=arr[:len(kept)],
+                                stamp=np.float64(time.time()))
+        os.replace(tmp, CLS_THUMBS_NPZ)
+        if progress:
+            _clsjob["done"] = _clsjob["total"]
+        _cls_thumbs["state"] = None
+    except Exception:                        # noqa: BLE001
+        pass
+    finally:
+        _cls_thumbs["building"] = False
+
+
+def _cls_thumbs_load():
+    """返回 (mids, float32 签名矩阵)；库不在/未建返回 None。"""
+    if cv2 is None or np is None:
+        return None
+    if not _cls_ready():
+        return None
+    st = _cls_thumbs["state"]
+    if st is not None and st["bundle_mtime"] == json.loads(
+            (CLS_MMIDX / "index.meta.json").read_text(encoding="utf-8")).get("mtime"):
+        return st["mids"], st["arr"]
+    try:
+        with np.load(CLS_THUMBS_NPZ, allow_pickle=False) as z:
+            st = {"bundle_mtime": json.loads((CLS_MMIDX / "index.meta.json")
+                   .read_text(encoding="utf-8")).get("mtime"),
+                  "mids": z["mids"], "arr": z["thumbs"].astype(np.float32)}
+    except Exception:                        # noqa: BLE001
+        return None
+    _cls_thumbs["state"] = st
+    return st["mids"], st["arr"]
+
+
+def _cls_score_one(qg, cg):
+    """查询图 vs 一张怀旧服 canvas：多尺度双向匹配（等比尺度，粗排用）。
+
+    游戏里显示倍率不固定（勇士部落东入口实测 ~1.5×，面板还会裁边），和现代版
+    「单尺度+长宽比硬淘汰」不同：这里以面积比 f0 为基准扫 ±倍率，双向模板匹配
+    取最高分。返回 (score, canvas 相对查询图的缩放倍数)。"""
+    qh, qw = qg.shape
+    ch, cw = cg.shape
+    if qh < 8 or qw < 8 or ch < 8 or cw < 8:
+        return None
+    f0 = math.sqrt((qw * qh) / float(cw * ch))
+    best = (-1.0, 1.0)
+    for mult in (0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0, 2.5):
+        r, f = _cls_match_at(qg, cg, f0 * mult, f0 * mult)
+        if r is not None and r > best[0]:
+            best = (r, f)
+    return best if best[0] > 0 else None
+
+
+def _cls_score_aniso(qg, cg):
+    """精排：在各等比尺度附近允许 ±8% 的各向异性缩放。
+
+    实测游戏内小地图不是严格等比——面板把 canvas 塞进窗口时横向多裁/纵向少裁
+    会带 ~4% 的纵横比偏差，等比网格恰好会跨过最佳对齐点（东入口两张截图在纯
+    等比下只有 0.45，各向异性网格直接拉回 0.75）。粗排用 _cls_score_one，只有
+    前几名才值得花这份算力。"""
+    qh, qw = qg.shape
+    ch, cw = cg.shape
+    if qh < 8 or qw < 8 or ch < 8 or cw < 8:
+        return None
+    f0 = math.sqrt((qw * qh) / float(cw * ch))
+    best = (-1.0, 1.0)
+    for gm in (0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0, 2.5):
+        gf = f0 * gm
+        for dx in (-0.08, -0.04, 0, 0.04, 0.08):
+            for dy in (-0.08, -0.04, 0, 0.04, 0.08):
+                r, f = _cls_match_at(qg, cg, gf * (1 + dx), gf * (1 + dy))
+                if r is not None and r > best[0]:
+                    best = (r, f)
+    return best if best[0] > 0 else None
+
+
+def _cls_match_at(qg, cg, fx, fy):
+    """canvas 按 (fx, fy) 缩放后与查询图双向模板匹配；落不进任一方向的尺度
+    （一边大一边小，无法整窗对齐）返回 (None, f)。"""
+    qh, qw = qg.shape
+    ch, cw = cg.shape
+    nw = max(8, int(round(cw * fx)))
+    nh = max(8, int(round(ch * fy)))
+    interp = cv2.INTER_AREA if fx < 1 and fy < 1 else cv2.INTER_LINEAR
+    c2 = cv2.resize(cg, (nw, nh), interpolation=interp)
+    try:
+        if nw <= qw and nh <= qh:              # canvas 缩进查询图里
+            r = float(cv2.matchTemplate(qg, c2, cv2.TM_CCOEFF_NORMED).max())
+        elif nw >= qw and nh >= qh:           # 查询图是 canvas 的一部分
+            r = float(cv2.matchTemplate(c2, qg, cv2.TM_CCOEFF_NORMED).max())
+        else:
+            return None, fx
+        return r, (fx + fy) / 2
+    except cv2.error:
+        return None, fx
+
+
+def c_cls_imgsearch(image: str) -> dict:
+    """怀旧服截图找图：.cache\\minimap-cls 的 canvas 三级匹配。
+
+    粗筛（64×64 签名）→ 等比多尺度粗排 → 前 15 名各向异性精排。
+    整窗截图（带 UI 的大图）先按宽度降到 700px 以内，否则 matchTemplate 要跑分钟级。"""
+    if cv2 is None or np is None:
+        raise CliError("缺依赖：先跑 python scripts\\deps.py（依赖装在 .pylibs\\ 里）", 1)
+    if _cls_w_dir() is None:
+        raise CliError("当前工作区找不到怀旧服客户端（mxdclassic 的 Unity 数据包）", 1)
+    if not _cls_ready():
+        if not _clsjob["running"]:
+            threading.Thread(target=_cls_build, daemon=True).start()
+        return {"building": True}
+    th = _cls_thumbs_load()
+    if th is None:                            # 签名还没落盘（正在建）：前端轮询
+        return {"building": True}
+    mids, arr = th
+    raw_b64 = image.split(",", 1)[-1] if image.startswith("data:") else image
+    buf = np.frombuffer(base64.b64decode(raw_b64), dtype=np.uint8)
+    q = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    if q is None:
+        raise CliError("图片解析失败 —— 确认粘贴的是截图", 2)
+    if q.shape[1] > 560:                      # 整窗截图降采样：面板撑死几百像素宽，
+        s = 560.0 / q.shape[1]                # 全窗大图不降的话 matchTemplate 要跑分钟级
+        q = cv2.resize(q, (560, max(8, int(round(q.shape[0] * s)))),
+                       interpolation=cv2.INTER_AREA)
+    qg = cv2.cvtColor(q, cv2.COLOR_BGR2GRAY)
+    q64 = cv2.resize(qg, (THUMB_PX, THUMB_PX),
+                     interpolation=cv2.INTER_AREA).astype(np.float32)
+    q64 -= q64.mean()
+    qn = float(q64.std())
+    if qn < 1e-3:
+        raise CliError("截图几乎是纯色（没有可识别的地形），换一张小地图截图", 2)
+    q64 /= qn
+    coarse = arr.reshape(len(mids), -1) @ q64.reshape(-1)
+    cand_mids = [str(mids[i]) for i in np.argsort(coarse)[::-1][:60]]
+
+    def rough(mid: str):
+        cg = cv2.imread(str(CLS_MMIDX / f"{mid}.png"), cv2.IMREAD_GRAYSCALE)
+        if cg is None:
+            return None
+        r = _cls_score_one(qg, cg)
+        return None if not r else [r[0], r[1], mid]
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        s1 = [c for c in ex.map(rough, cand_mids) if c]
+    s1.sort(reverse=True)
+    top15 = [c[2] for c in s1[:15]]
+
+    def refine(mid: str):
+        cg = cv2.imread(str(CLS_MMIDX / f"{mid}.png"), cv2.IMREAD_GRAYSCALE)
+        if cg is None:
+            return None
+        r = _cls_score_aniso(qg, cg)
+        if not r:
+            return None
+        for c in s1:                           # 粗排分数保底（aniso 缺网的尺度不至于丢分）
+            if c[2] == mid and c[0] > r[0]:
+                return [c[0], c[1], mid]
+        return [r[0], r[1], mid]
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        s2 = [c for c in ex.map(refine, top15) if c]
+    for c in s1:                              # 没进前 15 的保持粗排分数垫底
+        if c[2] not in top15:
+            s2.append(c)
+    s2.sort(reverse=True)
+
+    index = json.loads((CLS_MMIDX / "index.json").read_text(encoding="utf-8"))
+    out = []
+    for score, f, mid in s2[:9]:
+        meta = index.get(mid, {})
+        out.append({"id": mid, "score": round(score, 3), "scale": round(f, 2),
+                    "name": "", "street": "怀旧服（名字由服务器下发，本地没有）",
+                    "w": meta.get("cw"), "h": meta.get("ch"),
+                    "thumb": f"/preview/minimap-cls/{mid}.png"})
+    return {"building": False, "results": out}
+
+
+def _web_clsbuild() -> dict:
+    """WebUI「怀旧服小地图库」按钮：强制重建（旧库进 trash，后台线程跑）。"""
+    if _clsjob["running"]:
+        raise CliError("怀旧服小地图库正在构建中", 1)
+    if _cls_w_dir() is None:
+        raise CliError("当前工作区找不到怀旧服客户端（mxdclassic 的 Unity 数据包）", 1)
+    for name in ("index.meta.json", "thumbs.npz"):
+        f = CLS_MMIDX / name
+        if f.exists():
+            f.unlink()
+    threading.Thread(target=_cls_build, daemon=True).start()
+    return {"started": True}
+
+
+def c_cls_imgindex() -> dict:
+    """怀旧服小地图库状态（找图弹窗轮询用，含构建进度）。"""
+    return {**_cls_state(), "done": _clsjob["done"], "total": _clsjob["total"],
+            "stage": _clsjob.get("stage", ""), "error": _clsjob["error"]}
+
+
+
 
 
 # 导出 ----------------------------------------------------------------------
@@ -2436,9 +2865,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     # ---- 路由 ----
     # POST-only 路由集合：GET 打过来回 405（与旧 FastAPI 行为一致），别的才 404
     _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert", "/api/reconvert",
-                   "/api/mob/export",
-                   "/api/char/render", "/api/char/export",
-                   "/api/map/export", "/api/map/imgsearch", "/api/export/clear-cache"}
+                  "/api/clsbuild", "/api/clsimgsearch",
+                  "/api/mob/export",
+                  "/api/char/render", "/api/char/export",
+                  "/api/map/export", "/api/map/imgsearch", "/api/export/clear-cache"}
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
@@ -2484,6 +2914,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(404, {"detail": "no icon"})
         elif path == "/api/map/imgindex":
             self._api(c_map_imgindex)
+        elif path == "/api/clsimgindex":
+            self._api(c_cls_imgindex)
         elif path.startswith("/preview/"):
             self._send_file(CACHE / urllib.parse.unquote(path[len("/preview/"):]),
                             "image/png")
@@ -2513,6 +2945,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(_web_convert, b.get("files") or [], bool(b.get("force")))
         elif path == "/api/reconvert":
             self._api(_web_reconvert)
+        elif path == "/api/clsbuild":
+            self._api(_web_clsbuild)
+        elif path == "/api/clsimgsearch":
+            img = b.get("image")
+            if not img:
+                self._send_json(400, {"detail": "image 必填（base64 截图）"})
+                return
+            self._api(c_cls_imgsearch, str(img))
         elif path == "/api/mob/export":
             self._api(c_mob_export, str(b.get("raw") or ""), bool(b.get("preview")))
         elif path == "/api/char/render":
@@ -2606,7 +3046,7 @@ def _web_convert(names: list[str], force: bool) -> dict:
 
 
 def c_progress() -> dict:
-    """WebUI 进度条数据源：转换 / 小地图索引 / 兜底生成 三段进度。"""
+    """WebUI 进度条数据源：转换 / 小地图索引 / 兜底生成 / 怀旧服小地图库 四段进度。"""
     try:
         ready = _minimap_ready()
     except Exception:                          # noqa: BLE001
@@ -2624,6 +3064,9 @@ def c_progress() -> dict:
                     "error": _mmjob["error"]},
         "auto": {"running": _mmauto["running"], "done": _mmauto["done"],
                  "total": _mmauto["total"], "stage": "兜底小地图（1×1 退化图）"},
+        "cls": {"running": _clsjob["running"], "done": _clsjob.get("done", 0),
+                "total": _clsjob.get("total", 0), "stage": _clsjob.get("stage", ""),
+                "error": _clsjob["error"], "ready": _cls_ready()},
         "ready": ready,
     }
 
