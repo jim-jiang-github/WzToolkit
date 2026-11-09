@@ -33,6 +33,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <functional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -232,22 +233,55 @@ static std::string skill_name(const std::string & id) {
     return n.get_string();
 }
 
-static int cmd_jobs() {
-    std::vector<std::pair<std::string, int>> jobs;   // id, skill count
+// Job volume lookup: "<job>.img" at the root, or one level down inside a
+// named mount subtree (MobSkill/, Dragon/, ... from named --mount volumes).
+static nl::node find_job(const std::string & job) {
+    nl::node n = nl::nx::Skill[(job + ".img").c_str()];
+    if (n) return n;
+    for (nl::node dir : nl::nx::Skill) {
+        std::string dn = dir.name();
+        if (dn.size() > 4 && dn.compare(dn.size() - 4, 4, ".img") == 0) continue;
+        nl::node v = dir[(job + ".img").c_str()];
+        if (v) return v;
+    }
+    return nl::node();
+}
+
+// Every job volume: root-level "<X>.img" plus "<dir>/<X>.img" (named mounts).
+static void each_job(const std::function<void(const std::string &, nl::node)> & fn) {
+    std::vector<std::pair<std::string, nl::node>> out;
+    auto add = [&](const std::string & id, nl::node n) {
+        for (auto & p : out) if (p.first == id) return;
+        out.push_back({ id, n });
+    };
     for (nl::node c : nl::nx::Skill) {
         std::string n = c.name();
-        if (n.size() <= 4 || n.compare(n.size() - 4, 4, ".img") != 0) continue;
+        if (n.size() > 4 && n.compare(n.size() - 4, 4, ".img") == 0)
+            add(n.substr(0, n.size() - 4), c);
+        else
+            for (nl::node v : c) {
+                std::string vn = v.name();
+                if (vn.size() > 4 && vn.compare(vn.size() - 4, 4, ".img") == 0)
+                    add(vn.substr(0, vn.size() - 4), v);
+            }
+    }
+    std::sort(out.begin(), out.end(), [](const auto & a, const auto & b) {
+        if (a.first.size() != b.first.size()) return a.first.size() < b.first.size();
+        return a.first < b.first;
+    });
+    for (auto & p : out) fn(p.first, p.second);
+}
+
+static int cmd_jobs() {
+    std::vector<std::pair<std::string, int>> jobs;   // id, skill count
+    each_job([&](const std::string & id, nl::node c) {
         int count = 0;
         nl::node sk = c["skill"];
         if (sk) for (nl::node s : sk) {
             std::string sn = s.name();
             if (is_uint(sn)) ++count;
         }
-        jobs.push_back({ n.substr(0, n.size() - 4), count });
-    }
-    std::sort(jobs.begin(), jobs.end(), [](const auto & a, const auto & b) {
-        if (a.first.size() != b.first.size()) return a.first.size() < b.first.size();
-        return a.first < b.first;
+        jobs.push_back({ id, count });
     });
     std::cout << "{\"jobs\":[";
     bool first = true;
@@ -261,7 +295,7 @@ static int cmd_jobs() {
 }
 
 static int cmd_list(const std::string & job) {
-    nl::node vol = nl::nx::Skill[(job + ".img").c_str()];
+    nl::node vol = find_job(job);
     nl::node sk = vol ? vol["skill"] : nl::node();
     if (!sk) { std::cout << "{\"items\":[]}\n"; return 0; }
     std::cout << "{\"job\":\"" << job << "\",\"items\":[";
@@ -301,7 +335,7 @@ static int cmd_list(const std::string & job) {
 
 static int cmd_export(const std::string & job, const std::string & skill,
                       const std::string & outdir) {
-    nl::node vol = nl::nx::Skill[(job + ".img").c_str()];
+    nl::node vol = find_job(job);
     nl::node s = vol ? vol["skill"][skill.c_str()] : nl::node();
     if (!s) { std::cerr << "skill not found: " << job << "/" << skill << "\n"; return 1; }
     fs::create_directories(outdir);
