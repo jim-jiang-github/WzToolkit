@@ -2512,7 +2512,14 @@ def _png_noise_flag(path: Path) -> bool | None:
     的真图案（描边/反锯齿小部件）uniq 都 <0.39。双条件同时满足才判噪点：
     flat >= 0.15 → 真图案；flat < 0.15 且 uniq > 0.40 → 噪点。
     注意 alpha 通道不被加密，噪点帧的轮廓/射线都还在（缩小看像灰雾、
-    1:1 看才是彩色雪花），别被缩略图骗了。"""
+    1:1 看才是彩色雪花），别被缩略图骗了。
+    两类已证实误杀场景（v3 修正，2026-11-10）：
+    1. 小物件（红伞蘑菇 15×24，op 229px）：跨过小图守卫后，抗锯齿边缘
+       拉低 flat、渐变色拉高 uniq，被判噪。守卫提到 300px。
+    2. 死亡残影帧（alpha 大多 40~85 的渐隐轮廓+尘土粒子，r128=0.18~0.22）：
+       灰白渐变+粒子同样触发双条件。加渐隐守卫：实像素（alpha>128）占比
+       <0.30 时不表态——密文帧的 alpha 来自原画，主体都是实心的
+       （实测密文 0.63~0.68、真怪 0.83）。"""
     import numpy as np
     from PIL import Image
 
@@ -2522,8 +2529,11 @@ def _png_noise_flag(path: Path) -> bool | None:
     except Exception:                     # noqa: BLE001
         return None                       # 读不了图不表态
     op = a[:, :, 3] > 40
-    if int(op.sum()) < 150:
+    n_op = int(op.sum())
+    if n_op < 300:
         return None                       # 像素太少判断不了，保留
+    if int((a[:, :, 3] > 128).sum()) / n_op < 0.30:
+        return None                       # 渐隐残影帧（死亡淡出/尘土），保留
     rgb = a[:, :, :3]
     m1 = op[:, 1:] & op[:, :-1]
     m2 = op[1:, :] & op[:-1, :]
@@ -2628,13 +2638,13 @@ def c_skill_export(job: str, skill: str) -> dict:
         raise CliError("这个技能没有任何特效帧", 1)
     man = json.loads(mf.read_text(encoding="utf-8"))
     # 剔除国服加密位图的噪点帧（判定结果缓存到 _noise.json，manifest 没变不重算；
-    # v2 = 判据重新标定过的版本，旧 v1 结论全部作废重算）
+    # v3 = 判据修正版（小物件/渐隐帧守卫），旧结论全部作废重算）
     bad: set[str] = set()
     verdict_p = outdir / "_noise.json"
     stamp = mf.stat().st_mtime
     try:
         saved = json.loads(verdict_p.read_text(encoding="utf-8"))
-        if saved.get("mtime") == stamp and saved.get("v") == 2:
+        if saved.get("mtime") == stamp and saved.get("v") == 3:
             bad = set(saved.get("bad") or [])
     except Exception:                     # noqa: BLE001
         saved = None
@@ -2643,7 +2653,7 @@ def c_skill_export(job: str, skill: str) -> dict:
                for seq in man.get("seqs") or []
                for fr in seq.get("frames") or []
                if (outdir / fr["img"]).exists() and _png_noise_flag(outdir / fr["img"])}
-        verdict_p.write_text(json.dumps({"v": 2, "mtime": stamp, "bad": sorted(bad)}),
+        verdict_p.write_text(json.dumps({"v": 3, "mtime": stamp, "bad": sorted(bad)}),
                              encoding="utf-8")
     seqs = []
     for seq in man.get("seqs") or []:
