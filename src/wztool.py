@@ -2162,47 +2162,53 @@ CHAR_SLOTS = ("hair", "face", "cap", "coat", "pants", "longcoat",
 CHAR_SKINS = ["Light", "Tan", "Dark", "Pale", "Ashen", "Green", "", "", "",
               "Ghostly", "Pale Pink", "Clay", "Alabaster"]
 
-#: 图层顺序：照着客户端 CharLook::draw 的绘制顺序抄的（z 名字 -> 序号）
-CHAR_ZRANK = {
-    "backHair": 2, "backHairBelowCap": 2, "backHairBelowCapNarrow": 2,
-    "backHairBelowCapWide": 2, "hairBelowBody": 3,
-    "cape": 5,
-    "shieldBelowBody": 6, "weaponBelowBody": 7, "capBelowBody": 8,
-    "body": 10, "backBody": 10,
-    "gloveOverBody": 11, "wristOverBody": 11,
-    "shoes": 12,
-    "armBelowHead": 13,
-    "pantsDefault": 14, "pants": 15, "topDefault": 16,
-    "mail": 17, "mailChest": 17, "top": 17, "longcoat": 17,
-    "armBelowHeadOverMailChest": 18,
-    "shieldOverHair": 19,
-    "head": 20,
-    "humanEar": 21, "ear": 21,
-    "hairShade": 22,
-    "hair": 23,
-    "face": 24,
-    "shield": 25,
-    "cap": 26,
-    "hairOverHead": 27,
-    "weaponBelowArm": 28,
-    "arm": 29,
-    "mailArm": 30,
-    "weapon": 31,
-    "glove": 32, "wrist": 32,
-    "weaponOverGlove": 33,
-    "handBelowWeapon": 34,
-    "armOverHair": 35,
-    "armOverHairBelowWeapon": 36,
-    "weaponOverHand": 37,
-    "weaponOverBody": 38,
-    "handOverHair": 39,
-    "handOverWeapon": 40,
-    "gloveOverHair": 41, "wristOverHair": 41,
-}
-CHAR_ZRANK["backCap"] = 8          # 客户端 CAP_BELOW_BODY：帽子背面画在身体下面
-CHAR_ZSLOT = {"body": 10, "head": 20, "hair": 23, "face": 24, "cap": 26,
-              "coat": 17, "longcoat": 17, "pants": 15, "shoes": 12,
-              "glove": 32, "cape": 5, "shield": 25, "weapon": 31}
+#: 图层顺序：客户端权威 zmap（国服 Base.wz 的 zmap_cn.img 数值序，zmap.img
+#: 并集补齐变体名，184 项，2026-11-09 提取）。zmap 数值越小越在顶层
+#: （face 40 < head 43 → 脸画在头盖骨上面；capAccessoryBelowBody 77 >
+#: body 74 → 假发帽脑后块藏在身体后面），表已按绘制序排好（底→顶）。
+#: 此前手抄的 40 项映射漏了 36 个 z 名——假发帽的 capAccessoryBelowBody
+#: 落进兜底 50 盖住脸，是「人物没有人脸」bug 的根因。
+CHAR_ZMAP_ORDER = (
+    'backSaddleFront', 'saddleMid', 'backWeaponEffectUnder', 'Bd', 'Hd', 'backWeaponEffectOver',
+    'Hr', 'Fc', 'At', 'Af', 'Am', 'Ae',
+    'As', 'Ay', 'Cp', 'Ri', 'backWeaponOverGloveEffectUnder', 'Gv',
+    'Wp', 'backWeaponOverGloveEffectOver', 'Si', 'So', 'Pn', 'Ws',
+    'Ma', 'Wg', 'Sr', 'Tm', 'Sd', 'backTamingMobMid',
+    'backMobEquipUnderSaddle', 'backSaddle', 'backAccessoryOverHead', 'backMobEquipMid', 'backTamingMobFront', 'backMobEquipFront',
+    'mobEquipRear', 'tamingMobRear', 'backWeaponOverHeadEffectUnder', 'saddleRear', 'characterEnd', 'backWeaponOverHeadEffectOver',
+    'backWeapon', 'backHairBelowHead', 'backShieldBelowBody', 'backMailChestAccessory', 'backCapAccessory', 'backWeaponOverShieldEffectUnder',
+    'backAccessoryFace', 'backAccessoryEar', 'backWeaponOverShieldEffectOver', 'backBody', 'backGlove', 'backGloveWrist',
+    'weaponBelowBodyEffectUnder', 'backWeaponOverGlove', 'backMailChestBelowPants', 'weaponBelowBodyEffectOver', 'backPantsBelowShoes', 'backShoesBelowPants',
+    'backPants', 'backShoes', 'backPantsOverShoesBelowMailChest', 'backMailChest', 'backPantsOverMailChest', 'backMailChestOverPants',
+    'backHead', 'backAccessoryFaceOverHead', 'backCape', 'backHairBelowCap', 'backHairBelowCapNarrow', 'backHairBelowCapWide',
+    'backWeaponOverHead', 'backCap', 'backHair', 'backCapOverHair', 'backShield', 'backWeaponOverShield',
+    'backWing', 'backHairOverCape', 'capeBelowWeapon', 'weaponBelowBody', 'weaponOverBodyEffectUnder', 'hairBelowBody',
+    'capeBelowBody', 'weaponOverBodyEffectOver', 'shieldBelowBody', 'capAccessoryBelowBody', 'gloveBelowBody', 'gloveWristBelowBody',
+    'body', 'gloveOverBody', 'mailChestBelowPants', 'weaponOverArmBelowHeadEffectUnder', 'pantsBelowShoes', 'shoes',
+    'weaponOverArmBelowHeadEffectOver', 'pants', 'mailChestOverPants', 'weaponEffectUnder', 'shoesOverPants', 'pantsOverShoesBelowMailChest',
+    'weaponEffectOver', 'shoesTop', 'mailChest', 'pantsOverMailChest', 'mailChestOverHighest', 'gloveWristOverBody',
+    'mailChestTop', 'weaponOverBody', 'armBelowHead', 'mailArmBelowHead', 'armBelowHeadOverMailChest', 'accessoryEyeBelowFace',
+    'gloveBelowHead', 'mailArmBelowHeadOverMailChest', 'gloveWristBelowHead', 'weaponOverArmBelowHead', 'shield', 'weapon',
+    'arm', 'hand', 'glove', 'capeOverFace', 'mailArm', 'gloveWrist',
+    'cape', 'head', 'hairShade', 'accessoryFaceBelowFace', 'accessoryOverHair', 'face',
+    'accessoryEarOverHair', 'accessoryFaceOverFaceBelowCap', 'capBelowAccessory', 'accessoryEar', 'weaponBelowArmEffectUnder', 'capAccessoryBelowAccFace',
+    'accessoryFace', 'weaponBelowArmEffectOver', 'accessoryEyeShadow', 'accessoryEye', 'hair', 'cap',
+    'capAccessory', 'accessoryEyeOverCap', 'capeOverArm', 'hairOverHead', 'capOverHair', 'weaponOverArmEffectUnder',
+    'weaponBelowArm', 'armOverHairBelowWeapon', 'weaponOverArmEffectOver', 'mailArmOverHairBelowWeapon', 'armOverHair', 'gloveBelowMailArm',
+    'mailArmOverHair', 'gloveWristBelowMailArm', 'weaponOverHandEffectUnder', 'weaponOverArm', 'handBelowWeapon', 'weaponOverHandEffectOver',
+    'gloveBelowWeapon', 'gloveWristBelowWeapon', 'shieldOverHair', 'weaponOverHand', 'weaponOverGloveEffectUnder', 'handOverHair',
+    'gloveOverHair', 'weaponOverGloveEffectOver', 'gloveWristOverHair', 'weaponOverGlove', 'weaponWristOverGloveEffectUnder', 'capeOverHead',
+    'weaponWristOverGlove', 'weaponWristOverGloveEffectOver', 'emotionOverBody', 'characterStart', 'tamingMobMid', 'mobEquipUnderSaddle',
+    'saddleFront', 'mobEquipMid', 'tamingMobFront', 'mobEquipFront',
+)
+CHAR_ZRANK = {name: i for i, name in enumerate(CHAR_ZMAP_ORDER)}
+CHAR_ZSLOT = {"body": CHAR_ZRANK["body"], "head": CHAR_ZRANK["head"],
+              "hair": CHAR_ZRANK["hair"], "face": CHAR_ZRANK["face"],
+              "cap": CHAR_ZRANK["cap"], "coat": CHAR_ZRANK["mailChest"],
+              "longcoat": CHAR_ZRANK["mailChest"], "pants": CHAR_ZRANK["pants"],
+              "shoes": CHAR_ZRANK["shoes"], "glove": CHAR_ZRANK["glove"],
+              "cape": CHAR_ZRANK["cape"], "shield": CHAR_ZRANK["shield"],
+              "weapon": CHAR_ZRANK["weapon"]}
 
 _char_cache: dict = {"lists": {}}
 
@@ -2343,7 +2349,8 @@ def _climb_rank(z: str, slot: str) -> int:
 def _char_rank(L: dict, action: str = "") -> int:
     if action in CHAR_CLIMB:
         return _climb_rank(L.get("z") or "", L.get("slot") or "")
-    return CHAR_ZRANK.get(L.get("z") or "", CHAR_ZSLOT.get(L.get("slot"), 50))
+    # 未知 z 名兜底到最底层（0）而不是高层——盖住脸比藏在后面糟糕得多
+    return CHAR_ZRANK.get(L.get("z") or "", CHAR_ZSLOT.get(L.get("slot"), 0))
 
 
 CHAR_DUMP_V = 3                          # dump 结构/规则有变时+1，旧缓存自动失效
