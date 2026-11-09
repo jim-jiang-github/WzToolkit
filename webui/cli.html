@@ -918,7 +918,6 @@ async function convert(names) {
     // 任务已排队：立刻禁用转换/清除按钮（进度轮询随后会持续按 busy 状态锁定）
     const cvb = $("#cn-cv-all"); if (cvb) cvb.disabled = true;
     const wpb = $("#wipe-go"); if (wpb) wpb.disabled = true;
-    $("#cv-log").hidden = false;
     $("#cv-note").textContent = "";
     TIMER = setInterval(pollJob, 1000);
     startProgress();
@@ -961,7 +960,6 @@ async function wipeData() {
 
 function startProgress() {
   $("#prog-box").hidden = false;
-  $("#cv-log").hidden = false;
   $("#prog-bar").classList.remove("indet");
   $("#prog-fill").style.width = "0";
   $("#prog-stage").textContent = "准备中…";

@@ -629,8 +629,7 @@ def _cn_wz2nx(work: Path, src: str, out: str, mounts: list[tuple[str, str]],
                 if k.encode() in buf and cn not in seen:
                     seen.add(cn)
                     state["stage"] = cn
-                    log(f"    {cn} …")
-                    sub(cn, -1)
+                    sub(cn, -1)          # 阶段细节走 sub 追加到进度条文案，不再刷日志占屏
             if len(buf) > 8192:
                 buf = buf[-4096:]
         rc = p.wait()
