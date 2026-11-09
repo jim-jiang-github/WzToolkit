@@ -2165,6 +2165,7 @@ CHAR_ZRANK = {
     "handOverWeapon": 40,
     "gloveOverHair": 41, "wristOverHair": 41,
 }
+CHAR_ZRANK["backCap"] = 8          # 客户端 CAP_BELOW_BODY：帽子背面画在身体下面
 CHAR_ZSLOT = {"body": 10, "head": 20, "hair": 23, "face": 24, "cap": 26,
               "coat": 17, "longcoat": 17, "pants": 15, "shoes": 12,
               "glove": 32, "cape": 5, "shield": 25, "weapon": 31}
@@ -2361,10 +2362,13 @@ def c_char_render(spec: dict) -> dict:
         A = fr.get("anchors") or {}
         climbing = fr.get("action") in CHAR_CLIMB
         has_back_hair = any((L.get("z") or "") == "backHair" for L in fr.get("layers") or [])
+        has_cap = any(L.get("slot") == "cap" for L in fr.get("layers") or [])
         layers = []
         for L in fr.get("layers") or []:
             if climbing and L.get("slot") == "face":
                 continue                      # 背对镜头：脸不画（客户端 climb 分支没有 face）
+            if (L.get("z") or "") == "hairOverHead" and has_cap:
+                continue                      # 有帽子不画刘海（CharLook::draw 的 captype 分支只走 CAP）
             if climbing and has_back_hair and (L.get("z") or "") == "backHairBelowCap":
                 continue                      # 无帽时只画整块后发，半盖版重叠会显双色边
             x, y = _char_layer_xy(L, A)
