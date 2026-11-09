@@ -1762,18 +1762,18 @@ def c_cls_imgindex() -> dict:
 _trash_busy = threading.Event()
 
 
-def _trash_sweep_async() -> None:
-    """后台尽力清空 .cache/trash（rd /s /q 比逐文件删快几十倍；被拦就留到下次）。"""
-    if _trash_busy.is_set():
-        return
+def _sweep_trash_now() -> None:
+    """同步清空 .cache/trash（rd /s /q 比逐文件删快几十倍；删不掉就重试）。
 
-    def run() -> None:
-        _trash_busy.set()
-        try:
-            trash = CACHE / "trash"
-            if not trash.exists():
-                return
-            for c in list(trash.iterdir()):
+    供「彻底清除」直接调用——清除不只是挪进 trash，必须把 trash 也删掉才算完。
+    """
+    trash = CACHE / "trash"
+    if not trash.exists():
+        return
+    _trash_busy.set()
+    try:
+        for c in list(trash.iterdir()):
+            for _ in range(3):          # 被占用/扫描锁拦下就再试，最多 3 轮
                 try:
                     if os.name == "nt":
                         subprocess.run(["cmd", "/c", "rd", "/s", "/q", str(c)],
@@ -1786,10 +1786,21 @@ def _trash_sweep_async() -> None:
                         c.unlink()
                 except BaseException:
                     pass
-        finally:
-            _trash_busy.clear()
+                if not c.exists():
+                    break
+        try:
+            trash.rmdir()               # 清空后把 trash 目录本身也拿掉
+        except BaseException:
+            pass
+    finally:
+        _trash_busy.clear()
 
-    threading.Thread(target=run, daemon=True).start()
+
+def _trash_sweep_async() -> None:
+    """后台尽力清空 .cache/trash（常规单目录清理用；清除走 _sweep_trash_now）。"""
+    if _trash_busy.is_set():
+        return
+    threading.Thread(target=_sweep_trash_now, daemon=True).start()
 
 
 def drop_dir(p: Path) -> None:
@@ -2911,11 +2922,13 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
 
 
 def c_clear_cache() -> dict:
-    # 逐个删子目录，删不掉的挪进 trash —— 见 drop_dir 注释
+    # 彻底清理：先把各子目录秒级改名挪进 trash，再**同步**把 trash 删干净——
+    # 不能只挪不删，否则几十 GB 残在 trash 里占着盘（之前就是这么残留的）。
     for d in list(CACHE.iterdir()) if CACHE.exists() else []:
         if d.name == "trash":
             continue
         drop_dir(d) if d.is_dir() else (d.unlink() if d.is_file() else None)
+    _sweep_trash_now()              # 真正删数据（几十 GB 要几分钟），删完才返回
     CACHE.mkdir(exist_ok=True)
     _lists.clear()
     # 顺手清掉记住的工作区：数据都清了，下次启动不该还默认进旧目录

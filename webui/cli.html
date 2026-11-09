@@ -943,10 +943,10 @@ async function pollJob() {
 let PTIMER = null;
 
 async function wipeData() {
-  if (!confirm("清除 .cache 全部数据？\n\n（转换产物 Map.nx/Mob.nx… + 小地图库 + 怀旧服小地图库；.exports 导出成品不动）\n同时会清掉记住的工作区——下次启动不再默认进旧目录。\n清除是瞬间的，不会自动重转——之后要用哪个数据，点那一行的「⬇ 转换」。")) return;
+  if (!confirm("彻底清除 .cache 全部数据？\n\n（转换产物 Map.nx/Mob.nx… + 小地图库 + 怀旧服小地图库，连同残留垃圾一起删干净；.exports 导出成品不动）\n同时会清掉记住的工作区——下次启动不再默认进旧目录。\n数据量大时要等几分钟（真删，不是挪去回收站），删完点「⬇ 转换缺失数据」重转。")) return;
   const btn = $("#wipe-go");
-  if (btn) btn.disabled = true;
-  $("#cv-note").textContent = "";
+  if (btn) { btn.disabled = true; btn.textContent = "🗑 清理中…"; }
+  $("#cv-note").textContent = "正在彻底清除数据（数据量大时需要几分钟，请勿关闭页面）…";
   try {
     await api("/api/export/clear-cache", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
@@ -957,8 +957,9 @@ async function wipeData() {
     $("#ws-state").textContent = "尚未选择";
     $("#ws-mini").textContent = "";
     $("#wz-table").innerHTML = "";
-    if (btn) btn.disabled = false;
-  } catch (e) { fail(e); if (btn) btn.disabled = false; }
+    $("#cv-note").textContent = "";
+    if (btn) { btn.disabled = false; btn.textContent = "🗑 清除"; }
+  } catch (e) { fail(e); $("#cv-note").textContent = ""; if (btn) { btn.disabled = false; btn.textContent = "🗑 清除"; } }
 }
 
 async function clsBuild() {
