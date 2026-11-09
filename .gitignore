@@ -234,6 +234,7 @@ yolov8n.pt
 
 # 孤儿库目录与临时目录（无代码引用）
 .pylibs/
+.pylibs-probe/
 .pyruntime/
 .temp/
 tmp/

@@ -33,7 +33,7 @@ TARGET = ROOT / ".pylibs"
 STAMP = TARGET / ".stamp.json"
 
 # 打包/运行真正要 import 的包（import 名），装完逐个验一遍
-MODULES = ["PyInstaller", "PIL", "numpy", "cv2"]
+MODULES = ["PyInstaller", "PIL", "numpy", "cv2", "UnityPy"]
 
 PROBE = (
     "import json\n"
