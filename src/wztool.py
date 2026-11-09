@@ -191,12 +191,16 @@ def _need_ws() -> Path:
 
 
 def _run(args: list[str], cwd: Path, timeout: int = 1200) -> str:
-    """跑一个原生工具（以工作区为 cwd，工具按 cwd 定位 .nx），返回 stdout。"""
+    """跑一个原生工具（以工作区为 cwd，工具按 cwd 定位 .nx），返回 stdout。
+    非零退出码 = 失败，把 stderr 尾巴带进异常（否则上层只会报含糊的"没有数据"）。"""
     exe = BIN / (args[0] + ".exe")
     if not exe.exists():
         raise CliError(f"缺原生工具 {exe.name}（跑一次 scripts\\build.bat 会自动编译）", 1)
     r = subprocess.run([str(exe)] + args[1:], cwd=str(cwd), capture_output=True,
                        text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    if r.returncode != 0:
+        tail = "\n".join((r.stderr or r.stdout or "").strip().splitlines()[-5:])
+        raise CliError(f"{exe.name} {' '.join(args[1:3])} 失败（exit {r.returncode}）\n{tail}", 1)
     return r.stdout or ""
 
 
@@ -2467,8 +2471,8 @@ def c_skill_export(job: str, skill: str) -> dict:
         if outdir.exists():
             drop_dir(outdir)
         outdir.parent.mkdir(parents=True, exist_ok=True)
-        _run(["nxskill", "export", "--job", job, "--skill", skill, str(outdir)],
-             sk.parent, timeout=600)
+        _run(["nxskill", "export", "--job", job, "--skill", skill,
+              "--out", str(outdir)], sk.parent, timeout=600)
     mf = outdir / "manifest.json"
     if not mf.exists():
         raise CliError("这个技能没有任何特效帧", 1)
