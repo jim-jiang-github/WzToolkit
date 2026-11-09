@@ -192,6 +192,10 @@
   /* 怪物素材查看器：左列表 + 右帧播放/逐帧表 */
   #mobdex[hidden] { display: none; }
   #skdex[hidden] { display: none; }
+  #dmgdex[hidden] { display: none; }
+  .dmgscale { position: relative; display: inline-block;
+              transform: scale(2); transform-origin: 0 0;
+              image-rendering: pixelated; }
   .md-bar { padding: 8px 14px; display: flex; gap: 10px; align-items: center;
                     flex-wrap: wrap; background: var(--panel);
                     border-bottom: 1px solid var(--line); }
@@ -414,6 +418,7 @@
         <button data-m="mob" title="怪物素材：按 id/名字浏览全部怪物，看每个动作的逐帧动画，导出逐帧 PNG（带锚点 manifest）">👾 怪物素材</button>
         <button data-m="char" title="人物素材：肤色/发型/脸/帽子/衣服/武器随便配，实时合成动画并导出逐帧 PNG">🧑 人物素材</button>
         <button data-m="skill" title="技能特效：按职业浏览全部技能，播放每个技能的施放/弹道/命中/全屏特效，导出逐帧 PNG">✨ 技能特效</button>
+        <button data-m="dmg" title="伤害数字：Effect/BasicEff 里的全部伤害数字样式（红/蓝/暴击…），输入数字实时预览，导出逐帧 PNG">🔢 伤害数字</button>
       </div>
       <span style="flex:1"></span>
       <span class="muted" id="mode-hint"></span>
@@ -517,6 +522,21 @@
         <div class="md-detail" id="sk-detail"><span class="muted">左侧选一个技能：播放全部特效序列（施放 / 弹道 / 命中 / 全屏），导出逐帧 PNG 素材。</span></div>
       </div>
     </div>
+
+    <!-- 伤害数字：数字集列表 → 输入数字实时预览 + 特殊帧 + 导出 -->
+    <div class="pane" id="dmgdex" hidden>
+      <div class="md-bar">
+        <input type="text" id="dmg-q" placeholder="搜索数字集 …" />
+        <span class="muted" id="dmg-count"></span>
+        <span style="flex:1"></span>
+        <button class="primary mini" id="dmg-export" disabled
+                title="把当前数字集的全部 PNG + manifest.json（含每帧 origin 锚点）导出 → .exports/dmg/&lt;集&gt;/">⬇ 导出到 .exports</button>
+      </div>
+      <div class="md-body">
+        <div class="md-list" id="dmg-list"></div>
+        <div class="md-detail" id="dmg-detail"><span class="muted">左侧选一套数字样式：输入任意数字实时预览效果，Miss / 防御等特殊帧单独列出。</span></div>
+      </div>
+    </div>
   </div>
 
   <div class="muted">工具链：NoLifeWzToNx（wz→nx 转换）· nxmap / nxscan（地图导出）· render_map（地图渲染）。</div>
@@ -562,7 +582,7 @@ function api(path, opts) {
 }
 function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + e.message; }
 
-let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [], CN_NEED_CLS = false;
+let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [], CN_NEED_CLS = false, CN_NEED_DMG = false;
 let MAPREADY = false, BUSY = false;   // 浏览区锁定状态：数据就绪 && 没有任务在跑
 
 // 导入完成前把下面整块浏览区置灰不可点（数据未就绪或转换/建库正在跑）
@@ -873,7 +893,8 @@ async function scan() {
       // 不再扫描后自动全量重转（全量要 1 小时上下，只测怀旧服找图时不需要等）。
       const cn = d.cn;
       const cls = d.cls || null;
-      // 收集所有缺失项；怀旧服小地图库没建好也算「缺失」，一起交给后端一键备齐
+      const dmg = d.dmg || null;
+      // 收集所有缺失项；怀旧服小地图库/伤害数字库没建好也算「缺失」，一起交给后端一键备齐
       const missing = [];
       if (!cn.string_nx) missing.push("String.nx");
       if (!cn.map_nx) missing.push("Map.nx");
@@ -882,23 +903,30 @@ async function scan() {
       if (!cn.skill_nx) missing.push("Skill.nx");
       CN_MISSING = missing;
       CN_NEED_CLS = !!(cls && cls.dir && !cls.ready && !cls.building);
+      CN_NEED_DMG = !!(dmg && dmg.dir && !dmg.ready);
       const clsRow = cls && cls.dir ? `
         <tr><td>怀旧服小地图库（mxdclassic 的 canvas 素材，怀旧服找图用）</td>
             <td>${cls.ready ? `<span class="ok">已建好（${cls.count} 张）</span>`
                 : (cls.building ? '<span class="ok">构建中…</span>' : '<span class="miss">未建（点「转换缺失数据」会自动建）</span>')}</td>
             <td></td></tr>` : "";
+      const dmgRow = dmg && dmg.dir ? `
+        <tr><td>伤害数字库（Effect/BasicEff 的 No* 数字集，伤害数字页签用）</td>
+            <td>${dmg.ready ? `<span class="ok">已建好（${dmg.count} 套）</span>`
+                : '<span class="miss">未建（点「转换缺失数据」会自动建）</span>'}</td>
+            <td></td></tr>` : "";
       $("#ws-state").innerHTML =
         `工作区：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
       $("#ws-mini").textContent = `：国服官方 · ${cn.map_nx ? "已转换" : "待转换"}`;
       $("#wz-table").innerHTML = `
-        <table><tr><th>数据源</th><th>状态</th><th style="text-align:right">${(missing.length || CN_NEED_CLS)
+        <table><tr><th>数据源</th><th>状态</th><th style="text-align:right">${(missing.length || CN_NEED_CLS || CN_NEED_DMG)
             ? `<button class="mini" id="cn-cv-all"
-                title="把缺失的 nx 一次性排队转换；怀旧服小地图库没建好也会接着自动建（转完进度条自动停）">⬇ 转换缺失数据</button>`
+                title="把缺失的 nx 一次性排队转换；怀旧服小地图库/伤害数字库没建好也会接着自动建（转完进度条自动停）">⬇ 转换缺失数据</button>`
             : ""}</th></tr>
         <tr><td>Map.nx（全量 10 分片 + Back/Tile/Obj 位图，约 23 GB）</td>
             <td>${cn.map_nx ? `<span class="ok">已转换（${cn.map_nx_mb} MB）</span>` : '<span class="miss">未转换</span>'}</td>
             <td></td></tr>
         ${clsRow}
+        ${dmgRow}
         <tr><td>String.nx（地图名等中文表）</td>
             <td>${cn.string_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td>
             <td></td></tr>
@@ -916,7 +944,7 @@ async function scan() {
             <td style="text-align:right"><button class="mini" id="wipe-go"
                 title="把 .cache 彻底删干净（数据量大时要几分钟）——之后点「⬇ 转换缺失数据」重转">🗑 清除</button></td></tr>
         </table>
-        <div class="muted" style="margin-top:6px">缺数据时点右上角「⬇ 转换缺失数据」，缺的 nx 一次转上、怀旧服小地图库也自动建，进度条实时显示。地图 / 找图 / 怪物素材 / 人物素材 / 技能特效页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
+        <div class="muted" style="margin-top:6px">缺数据时点右上角「⬇ 转换缺失数据」，缺的 nx 一次转上、怀旧服小地图库和伤害数字库也自动建，进度条实时显示。地图 / 找图 / 怪物素材 / 人物素材 / 技能特效 / 伤害数字页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
       // 地图/找图至少要有 Map.nx + String.nx 才算能浏览
       MAPREADY = !!(cn.map_nx && cn.string_nx);
       refreshLock();
@@ -985,6 +1013,8 @@ async function wipeData() {
     // 数据和工作区记忆都清了：输入框/状态面板回到「尚未选择」
     $("#ws-path").value = "";
     WS = null; CN = false; MAPS = [];
+    DMG.sets = null; DMG.sel = null;   // 伤害数字库也清了，切进页签时重新拉
+    SK.jobs = null;                    // 技能列表同理
     $("#ws-state").textContent = "尚未选择";
     $("#ws-mini").textContent = "";
     $("#wz-table").innerHTML = "";
@@ -1563,6 +1593,107 @@ async function skExport(btn) {
   }
 }
 
+/* ---------------- 伤害数字：No* 数字集 → 输入数字实时预览 / 导出 ---------------- */
+const DMG = { sets: null, sel: null };
+
+async function dmgOpen() {
+  if (DMG.sets) { dmgRenderList(); return; }
+  $("#dmg-list").innerHTML = '<span class="muted" style="padding:10px;display:block">读取数字集列表…</span>';
+  try {
+    const d = await api("/api/dmg/sets");
+    DMG.sets = d.items || [];
+    dmgRenderList();
+    dmgSelect(DMG.sets.find((s) => s.id === "NoRed0") || DMG.sets[0]);
+  } catch (e) {
+    DMG.sets = null;   // 下次切进页签重试（比如刚点完转换）
+    $("#dmg-list").innerHTML = `<span class="miss" style="padding:10px;display:block">${e.message}</span>`;
+  }
+}
+
+function dmgRenderList() {
+  const q = ($("#dmg-q").value || "").trim().toLowerCase();
+  const items = DMG.sets.filter((s) =>
+    !q || s.id.toLowerCase().includes(q) || (s.cn || "").includes(q));
+  $("#dmg-count").textContent = `${DMG.sets.length} 套`;
+  $("#dmg-list").innerHTML = items.map((s) => `
+    <div class="it ${DMG.sel && DMG.sel.id === s.id ? "on" : ""}" data-id="${s.id}">
+      <span class="id">${s.id}</span><span class="nm">${s.cn || ""}</span>
+    </div>`).join("");
+  $$("#dmg-list .it").forEach((x) =>
+    x.onclick = () => dmgSelect(DMG.sets.find((s) => s.id === x.dataset.id)));
+}
+
+function dmgSelect(s) {
+  if (!s) return;
+  DMG.sel = s;
+  $$("#dmg-list .it").forEach((x) => x.classList.toggle("on", x.dataset.id === s.id));
+  $("#dmg-export").disabled = false;
+  dmgRenderDetail();
+}
+
+function dmgRenderDetail() {
+  const s = DMG.sel;
+  if (!s) return;
+  const by = {};
+  s.frames.forEach((f) => by[f.k] = f);
+  const specials = s.frames.filter((f) => f.k.length !== 1);
+  $("#dmg-detail").innerHTML = `
+    <div><b>${s.id}</b> · ${s.cn || "（未命名样式）"}
+      <span class="muted">· ${s.frames.length} 帧 · 特殊帧：${specials.map((f) => f.k).join(" / ") || "无"}</span></div>
+    <div class="muted" style="margin:8px 0 4px">预览（按每帧 origin 锚点对齐基线，2× 放大）：</div>
+    <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+      <input type="text" id="dmg-text" value="1234567890" maxlength="14"
+             style="width:140px;padding:4px 8px" title="输入任意数字，只用到这套里有的字符">
+      <span id="dmg-canvas-wrap"></span>
+    </div>
+    ${specials.length ? `
+    <div class="muted" style="margin:12px 0 4px">特殊帧：</div>
+    <div class="fgrid">${specials.map((f) => `
+      <div class="fcell"><div class="fbx" style="width:${f.w}px;height:${f.h}px">
+        <img src="${f.url}" style="left:0;top:0;width:${f.w}px;height:${f.h}px"></div>
+        <div class="fcap">${f.k} ${f.w}×${f.h}</div></div>`).join("")}</div>` : ""}
+    <div class="muted" style="margin-top:12px">数据来自 Effect/BasicEff.img（.cache\\dmg）。
+      导出得到全部 PNG + manifest.json（含每帧宽高与 origin 锚点，可按游戏内对齐规则合成）。</div>`;
+  $("#dmg-text").oninput = () => dmgRenderCanvas(s, by);
+  dmgRenderCanvas(s, by);
+}
+
+function dmgRenderCanvas(s, by) {
+  const text = ($("#dmg-text").value || "").slice(0, 14);
+  const specs = [...text].map((ch) => by[ch]).filter(Boolean);
+  const wrap = $("#dmg-canvas-wrap");
+  if (!specs.length) { wrap.innerHTML = '<span class="muted">这套里没有输入的字符</span>'; return; }
+  const base = Math.max(...specs.map((f) => f.oy));     // 基线 = 最大的 origin.y
+  let x = 0, bottom = 0;
+  const imgs = specs.map((f) => {
+    const top = base - f.oy;
+    const h = `<img src="${f.url}" style="position:absolute;left:${x}px;top:${top}px;width:${f.w}px;height:${f.h}px">`;
+    x += f.w + 2;
+    bottom = Math.max(bottom, top + f.h);
+    return h;
+  }).join("");
+  wrap.innerHTML = `<span style="display:inline-block;width:${x * 2}px;height:${bottom * 2}px">
+      <span class="dmgscale" style="width:${x}px;height:${bottom}px">${imgs}</span></span>`;
+}
+
+async function dmgExport(btn) {
+  if (!DMG.sel) return;
+  if (btn) { btn.disabled = true; btn.textContent = "导出中…"; }
+  try {
+    const d = await api("/api/dmg/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ set: DMG.sel.id }),
+    });
+    $("#dmg-detail").insertAdjacentHTML("afterbegin",
+      `<div class="ok">✅ 已导出 ${d.count} 张 → <code>${d.dir}</code></div>`);
+  } catch (e) {
+    $("#dmg-detail").insertAdjacentHTML("afterbegin",
+      `<div class="miss">导出失败：${e.message}</div>`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "⬇ 导出到 .exports"; }
+  }
+}
+
 /* ---------------- 三大类切换：地图 / 怪物素材 / 人物素材 ----------------
    三个大类平级，用卡片标题里的分段控件切换；面板互斥显示，切走时停掉动画定时器。 */
 const MODE_HINT = {
@@ -1570,15 +1701,17 @@ const MODE_HINT = {
   mob: "左侧选一只怪 → 看逐帧动画 / 导出",
   char: "左侧换装 → 实时合成 / 导出",
   skill: "左侧选职业和技能 → 看特效动画 / 导出",
+  dmg: "左侧选数字样式 → 输入数字实时预览 / 导出",
 };
 let MODE = "map";
 function setMode(m) {
-  if (m !== "mob" && m !== "char" && m !== "skill") m = "map";
+  if (m !== "mob" && m !== "char" && m !== "skill" && m !== "dmg") m = "map";
   MODE = m;
   $("#pane-map").hidden = m !== "map";
   $("#mobdex").hidden = m !== "mob";
   $("#chardex").hidden = m !== "char";
   $("#skdex").hidden = m !== "skill";
+  $("#dmgdex").hidden = m !== "dmg";
   $$("#mainseg button").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
   $("#mode-hint").textContent = MODE_HINT[m] || "";
   if (m !== "map") $("#mapzoom").hidden = true;
@@ -1588,6 +1721,7 @@ function setMode(m) {
   else clearTimeout(CH.timer);
   if (m === "skill") skOpen();
   else clearTimeout(SK.timer);
+  if (m === "dmg") dmgOpen();
 }
 
 /* ---------------- 人物素材（角色）：选装 → 实时合成 → 导出 ---------------- */
@@ -2232,6 +2366,9 @@ $("#md-q").oninput = mdRenderList;
 /* 技能特效查看器事件 */
 $("#sk-q").oninput = skRenderList;
 $("#sk-export").onclick = (e) => skExport(e.currentTarget);
+/* 伤害数字查看器事件 */
+$("#dmg-q").oninput = dmgRenderList;
+$("#dmg-export").onclick = (e) => dmgExport(e.currentTarget);
 $(".md-bar").onclick = (e) => {
   const b = e.target.closest(".md-flt");
   if (!b) return;

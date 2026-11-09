@@ -38,6 +38,7 @@ import os
 import random
 import re
 import subprocess
+import struct
 import sys
 import threading
 import time
@@ -295,6 +296,7 @@ def c_state() -> dict:
     return {"workspace": str(_ws) if _ws else None,
             "cn": {"data": str(cn), "nx_dir": str(CN_NX)} if cn else None,
             "cls": _cls_state(),
+            "dmg": _dmg_state(),
             "tools_ok": tools_ok(),
             "exports": str(EXPORTS),
             "ui": c_ui()["ui"]}
@@ -508,7 +510,9 @@ def c_workspace(path: str) -> dict:
                        "skill_nx": skill_nx.exists(),
                        "skill_nx_gb": gb(skill_nx)},
                 # 怀旧服小地图库状态（工作区= mxdclassic / 安装根时能定位 Unity 数据包）
-                "cls": _cls_state()}
+                "cls": _cls_state(),
+                # 伤害数字库状态（Effect/BasicEff.img 的 No* 数字集）
+                "dmg": _dmg_state()}
     files = []
     for f in sorted(p.glob("*.wz")):
         if f.name.endswith(".segs"):           # 下载器没下完的标记
@@ -2500,6 +2504,241 @@ def c_skill_export_to(job: str, skill: str) -> dict:
     return {"dir": str(outdir), "count": len(files), "files": files}
 
 
+# 伤害数字库（Effect/BasicEff.img 里的 No* 数字集） ----------------------------
+
+DMG_DIR = CACHE / "dmg"
+DMG_SETS = DMG_DIR / "sets.json"
+
+_DMG_CN = {
+    "NoRed0": "普通伤害（红，默认；带 Miss/防御/抵抗）", "NoRed1": "红色样式 1",
+    "NoRed2": "红色样式 2", "NoRed3": "红色样式 3",
+    "NoBlue0": "蓝色样式 0", "NoBlue1": "蓝色样式 1",
+    "NoGreen0": "绿色样式 0", "NoGreen1": "绿色样式 1",
+    "NoViolet0": "紫色样式 0（带 Miss/防御）", "NoViolet1": "紫色样式 1",
+    "NoCri0": "暴击样式 0", "NoCri1": "暴击样式 1", "NoCri2": "暴击样式 2",
+    "NoCri3": "暴击样式 3", "NoBattleH": "战斗力数字", "NoNaval0": "海战数字（带逗号）",
+    "EffNumber": "特效数字", "AquaPointNumber": "水点数",
+}
+
+
+class _Nx:
+    """只读 NoLifeNx 格式：mmap 节点表 / 字符串表 / 位图表（LZ4 → BGRA → PNG）。
+
+    伤害数字库专用的小读器（原生工具都是整 img 级导出，取几个 No* 子树用
+    Python 直接读更省事）。节点 20 字节：name(u32) children(u32) num(u16)
+    type(u16) + 8 字节值联合体。"""
+
+    def __init__(self, path: Path):
+        import mmap as _mmap
+        self._f = open(path, "rb")
+        self._mm = _mmap.mmap(self._f.fileno(), 0, access=_mmap.ACCESS_READ)
+        if self._mm[:4] != b"PKG4":
+            raise CliError(f"{path.name} 不是 NX 文件", 1)
+        self._no, = struct.unpack_from("<Q", self._mm, 8)
+        self._so, = struct.unpack_from("<Q", self._mm, 20)
+        self._bo, = struct.unpack_from("<Q", self._mm, 32)
+
+    def close(self) -> None:
+        """必须显式关：mmap 占着的文件在 Windows 上没法 rename/删（drop_dir 会静默失败）。"""
+        try:
+            self._mm.close()
+            self._f.close()
+        except BaseException:
+            pass
+
+    def _str(self, i: int) -> str:
+        pos, = struct.unpack_from("<Q", self._mm, self._so + i * 8)
+        ln, = struct.unpack_from("<H", self._mm, pos)
+        return self._mm[pos + 2:pos + 2 + ln].decode("utf-8", "replace")
+
+    def node(self, i: int):
+        """→ (name, first_child, count, type, value)；value 依类型：int/float/str/
+        (x,y) 向量 / (index,w,h) 位图。"""
+        o = self._no + i * 20
+        name, first = struct.unpack_from("<2I", self._mm, o)
+        num, ty = struct.unpack_from("<2H", self._mm, o + 8)
+        v = None
+        if ty == 1:
+            v = struct.unpack_from("<q", self._mm, o + 12)[0]
+        elif ty == 2:
+            v = struct.unpack_from("<d", self._mm, o + 12)[0]
+        elif ty == 3:
+            v = self._str(struct.unpack_from("<I", self._mm, o + 12)[0])
+        elif ty == 4:
+            v = struct.unpack_from("<2i", self._mm, o + 12)
+        elif ty == 5:
+            v = struct.unpack_from("<IHH", self._mm, o + 12)
+        return self._str(name), first, num, ty, v
+
+    def child(self, i: int, key: str) -> int | None:
+        _, first, num, _, _ = self.node(i)
+        for k in range(num):
+            ci = first + k
+            if self.node(ci)[0] == key:
+                return ci
+        return None
+
+    def find(self, path: str) -> int | None:
+        cur = 0
+        for part in path.split("/"):
+            cur = self.child(cur, part)
+            if cur is None:
+                return None
+        return cur
+
+    def png(self, bmp) -> bytes:
+        """位图 (index,w,h) → PNG bytes。NX 位图数据是 LZ4 块压缩的 BGRA。"""
+        import io
+        import lz4.block
+        from PIL import Image
+        idx, w, h = bmp
+        pos, = struct.unpack_from("<Q", self._mm, self._bo + idx * 8)
+        ln, = struct.unpack_from("<I", self._mm, pos)
+        raw = lz4.block.decompress(self._mm[pos + 4:pos + 4 + ln],
+                                   uncompressed_size=w * h * 4)
+        img = Image.frombytes("RGBA", (w, h), bytes(raw))     # 字节序实际是 BGRA
+        r, g, b, a = img.split()
+        buf = io.BytesIO()
+        Image.merge("RGBA", (b, g, r, a)).save(buf, "PNG")
+        return buf.getvalue()
+
+
+def _dmg_effect_dir() -> Path | None:
+    """国服数据的 Effect 卷（伤害数字在 Effect/BasicEff.img 里）。"""
+    data = _cn_mode()
+    if data is None:
+        return None
+    eff = data / "Effect"
+    return eff if (eff / "Effect_000.wz").is_file() else None
+
+
+def _dmg_ready() -> bool:
+    return DMG_SETS.is_file()
+
+
+def _dmg_state() -> dict:
+    eff = _dmg_effect_dir()
+    n = 0
+    if eff is not None and _dmg_ready():
+        try:
+            n = len(json.loads(DMG_SETS.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            n = 0
+    return {"dir": str(eff) if eff else None, "ready": _dmg_ready(), "count": n}
+
+
+def _dmg_build(log=None, stage=None) -> None:
+    """构建伤害数字库：wz2nx 只转 BasicEff.img → Python 读 No* 子树 → PNG 缓存。
+
+    中间产物 _src/（Effect 的 BasicEff 单 img，实测约 900 MB、十几秒）提取完
+    即删，留在 .cache\\dmg\\ 的只有几 MB 的 PNG + sets.json。数字集判定：名字
+    以 No 开头（或已知数字表）且 0-9 十个数字都能取到位图。"""
+    eff = _dmg_effect_dir()
+    if eff is None:
+        raise CliError("找不到国服 Effect 数据（工作区不是国服官方客户端？）", 1)
+    log = log or (lambda s: None)
+    stage = stage or (lambda s: None)
+    _need_tools()
+    if DMG_DIR.exists():
+        drop_dir(DMG_DIR)
+    src = DMG_DIR / "_src"
+    src.mkdir(parents=True, exist_ok=True)
+    nx = None
+    try:
+        stage("转换 Effect/BasicEff.img（只这一个 img，几分钟）")
+        _cn_wz2nx(_cn_workdir(eff.parent), "Effect/Effect_000.wz", str(src / "e.nx"),
+                  [("_Canvas", "Effect/_Canvas/_Canvas_000.wz")], "", "BasicEff.img",
+                  log)
+        stage("提取伤害数字帧")
+        nx = _Nx(src / "e.nx")
+        basic = nx.find("BasicEff.img")
+        if basic is None:
+            raise CliError("BasicEff.img 不在转换产物里", 1)
+        _, first, num, _, _ = nx.node(basic)
+        sets = []
+        for k in range(num):
+            si = first + k
+            nm, sf, sn, _, _ = nx.node(si)
+            # 伤害数字集 = 名字以 No 开头（NoRed/NoCri/NoBlue…）或已知数字表；
+            # BasicEff 里 JobChanged 之类普通特效也是 0..N 编号帧，不能只按编号认
+            if not (nm.startswith("No") or nm in ("EffNumber", "AquaPointNumber")):
+                continue
+            digits = [nx.child(si, d) for d in "0123456789"]
+
+            def frame_of(i: int):
+                """节点 → 位图：直接是位图就取自己；是只包一张位图的文件夹
+                （EffNumber/3/0 这种）就取里面那张。"""
+                _, ff, fc, ft, _ = nx.node(i)
+                if ft == 5:
+                    return i
+                bmps = [ff + j for j in range(fc) if nx.node(ff + j)[3] == 5]
+                return bmps[0] if len(bmps) == 1 else None
+
+            if any(d is None or frame_of(d) is None for d in digits):
+                continue                      # 编号不像数字（防御：No 开头的别的特效）
+            sdir = DMG_DIR / nm
+            sdir.mkdir(parents=True, exist_ok=True)
+            frames = []
+            for j in range(sn):
+                fi = sf + j
+                fn, _, _, fty, _ = nx.node(fi)
+                if not fn:
+                    continue
+                bi = fi if fty == 5 else frame_of(fi)
+                if bi is None:
+                    continue                  # 多帧文件夹等非数字内容，先不展开
+                _, _, _, _, fv = nx.node(bi)
+                org = nx.child(bi, "origin")
+                ox, oy = nx.node(org)[4] if org is not None and nx.node(org)[3] == 4 \
+                    else (0, 0)
+                safe = fn.replace("/", "_")
+                (sdir / f"{safe}.png").write_bytes(nx.png(fv))
+                frames.append({"k": fn, "w": fv[1], "h": fv[2],
+                               "ox": ox, "oy": oy,
+                               "url": f"/preview/dmg/{nm}/{safe}.png"})
+            sets.append({"id": nm, "cn": _DMG_CN.get(nm, ""), "frames": frames})
+        if not sets:
+            raise CliError("BasicEff.img 里没找到数字集（数据格式变了？）", 1)
+        DMG_SETS.write_text(json.dumps(sets, ensure_ascii=False), encoding="utf-8")
+        log(f"  伤害数字库：{len(sets)} 套，共 "
+            f"{sum(len(s['frames']) for s in sets)} 帧")
+    finally:
+        if nx is not None:
+            nx.close()          # mmap 不关，Windows 上 _src 没法 rename（drop_dir 会静默失败）
+        drop_dir(src)
+
+
+def c_dmg_sets() -> dict:
+    """伤害数字集列表（WebUI 数字面板数据源）。"""
+    if not _dmg_ready():
+        eff = _dmg_effect_dir()
+        raise CliError("伤害数字库未建" + ("（点「⬇ 转换缺失数据」会自动建）"
+                                        if eff else "（需要国服官方数据源）"), 1)
+    return {"items": json.loads(DMG_SETS.read_text(encoding="utf-8"))}
+
+
+def c_dmg_export_to(set_id: str) -> dict:
+    """把一套伤害数字的全部 PNG + sets 说明导出到 .exports/dmg/。"""
+    if not _dmg_ready():
+        raise CliError("伤害数字库未建", 1)
+    sets = json.loads(DMG_SETS.read_text(encoding="utf-8"))
+    hit = next((s for s in sets if s["id"] == set_id), None)
+    if hit is None:
+        raise CliError(f"没有这套数字：{set_id}", 1)
+    outdir = EXPORTS / "dmg" / set_id
+    if outdir.exists():
+        drop_dir(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    files = []
+    for p in sorted((DMG_DIR / set_id).iterdir()):
+        if p.is_file() and p.suffix == ".png":
+            (outdir / p.name).write_bytes(p.read_bytes())
+            files.append(p.name)
+    (outdir / "manifest.json").write_text(
+        json.dumps(hit, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"dir": str(outdir), "count": len(files)}
+
+
 def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
                    density: int = 1, no_bg: bool = False):
     """把这张图的怪随机贴到地面上，产出 preview_mobs.png（脚底落在 foothold 地面）。
@@ -3147,6 +3386,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(u.query)
             self._api(c_skill_export, (qs.get("job") or [""])[0],
                       (qs.get("skill") or [""])[0])
+        elif path == "/api/dmg/sets":
+            self._api(c_dmg_sets)
         elif path == "/api/char/parts":
             qs = urllib.parse.parse_qs(u.query)
             self._api(c_char_parts, (qs.get("cat") or ["hair"])[0])
@@ -3209,6 +3450,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/skill/export":
             self._api(c_skill_export_to, str(b.get("job") or ""),
                       str(b.get("skill") or ""))
+        elif path == "/api/dmg/sets":
+            self._api(c_dmg_sets)
+        elif path == "/api/dmg/export":
+            self._api(c_dmg_export_to, str(b.get("set") or ""))
         elif path == "/api/char/export":
             self._api(c_char_export, b)
         elif path == "/api/map/export":
@@ -3234,7 +3479,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_clear_cache)
         elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps",
                       "/api/char/parts", "/api/skill/jobs", "/api/skill/list",
-                      "/api/skill/frames") \
+                      "/api/skill/frames", "/api/dmg/sets") \
                 or path.startswith("/api/mob/icon/") \
                 or (path.startswith("/api/mob/") and path.endswith("/maps")):
             self._send_json(405, {"detail": f"Method Not Allowed: {path} 是 GET 接口"})
@@ -3251,6 +3496,7 @@ def _web_convert(names: list[str], force: bool) -> dict:
     _need_tools()
     todo: list[Path] = []
     cls_todo = False
+    dmg_todo = False
     if _cn_mode() is not None:
         paths = {"String.nx": CN_NX / "String.nx", "Map.nx": CN_NX / "Map.nx",
                  "Mob.nx": CN_NX / "Mob.nx", "Character.nx": CN_NX / "Character.nx",
@@ -3261,7 +3507,9 @@ def _web_convert(names: list[str], force: bool) -> dict:
                       if (not names or n in names) and not paths[n].exists()]
         # 怀旧服小地图库（mxdclassic）没建好 → 并进这次任务，转完自动建
         cls_todo = _cls_w_dir() is not None and not _cls_ready() and not _clsjob["running"]
-        if not todo_names and not cls_todo:
+        # 伤害数字库（Effect/BasicEff 的 No* 数字集）没建好 → 一样并进这次任务
+        dmg_todo = _dmg_effect_dir() is not None and not _dmg_ready()
+        if not todo_names and not cls_todo and not dmg_todo:
             return {"started": False, "message": "国服数据已转换完成（.cache\\cn）"}
         cn_todo = todo_names
     else:
@@ -3271,8 +3519,10 @@ def _web_convert(names: list[str], force: bool) -> dict:
             return {"started": False, "message": "选中的都已是 .nx（要重转勾「强制重转」）"}
         cn_todo = None
     total = len(cn_todo) if cn_todo is not None else len(todo)
-    if cn_todo is not None and cls_todo:
-        total += 1                      # 小地图库算最后一项，进度条能走满
+    if cls_todo:
+        total += 1                      # 小地图库算一项，进度条能走满
+    if dmg_todo:
+        total += 1                      # 伤害数字库同上
     with _lock:
         if _job["running"]:
             raise CliError("已有转换在跑，等它完成", 1)
@@ -3286,11 +3536,16 @@ def _web_convert(names: list[str], force: bool) -> dict:
                     c_convert_cn(lambda s: _job["log"].append(s), cn_todo,
                                  prog=lambda stage, done, frac=0.0:
                                  _job.update(stage=stage, done=done, frac=frac))
-                    _job.update(stage="", done=total - (1 if cls_todo else 0), frac=0.0)
+                _job.update(stage="", done=len(cn_todo), frac=0.0)
                 if cls_todo:
                     _job["log"].append("转换完成，接着构建怀旧服小地图库…")
                     _cls_build()
-                    _job["done"] = total
+                    _job["done"] += 1
+                if dmg_todo:
+                    _job["log"].append("接着提取伤害数字库（Effect/BasicEff）…")
+                    _dmg_build(lambda s: _job["log"].append(s),
+                               stage=lambda s: _job.update(stage=s, frac=0.0))
+                    _job["done"] = _job["total"]
             else:
                 for wz in todo:
                     _convert_one(wz, lambda s: _job["log"].append(s))
