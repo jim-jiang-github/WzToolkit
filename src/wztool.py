@@ -2777,6 +2777,10 @@ def c_clear_cache() -> dict:
         drop_dir(d) if d.is_dir() else (d.unlink() if d.is_file() else None)
     CACHE.mkdir(exist_ok=True)
     _lists.clear()
+    # 顺手清掉记住的工作区：数据都清了，下次启动不该还默认进旧目录
+    global _ws
+    _ws = None
+    _save_ws()
     return {"ok": True}
 
 
