@@ -27,6 +27,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <cstring>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -376,7 +377,15 @@ static int cmd_dump(int argc, char ** argv) {
         if (!o.frames.empty()) {
             for (const std::string & f : split(o.frames, ',')) want.push_back(std::atoi(f.c_str()));
         } else {
-            for (int f = 0; sn[std::to_string(f).c_str()]; ++f) want.push_back(f);
+            // 帧号不一定从 0 开始连续：枚举数字名子节点并按数值排序
+            for (nl::node ch : sn) {
+                std::string nm = ch.name();
+                bool numeric = !nm.empty();
+                for (char c : nm)
+                    if (!std::isdigit(static_cast<unsigned char>(c))) { numeric = false; break; }
+                if (numeric) want.push_back(std::atoi(nm.c_str()));
+            }
+            std::sort(want.begin(), want.end());
         }
 
         for (int f : want) {

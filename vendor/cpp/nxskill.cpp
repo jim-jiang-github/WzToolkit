@@ -211,13 +211,27 @@ static bool export_single(nl::node n, const fs::path & file) {
 
 // ------------------------------------------------------------------- commands
 
+// 帧号不一定从 0 开始连续：枚举数字名子节点并按数值排序（跳过非帧子树）。
+static std::vector<int> numeric_frame_ids(nl::node n) {
+    std::vector<int> fids;
+    if (!n) return fids;
+    for (nl::node ch : n) {
+        std::string nm = ch.name();
+        bool numeric = !nm.empty();
+        for (char c : nm)
+            if (!std::isdigit(static_cast<unsigned char>(c))) { numeric = false; break; }
+        if (numeric) fids.push_back(std::atoi(nm.c_str()));
+    }
+    std::sort(fids.begin(), fids.end());
+    return fids;
+}
+
 // True if node looks like a frame sequence: numeric children holding bitmaps.
 static bool is_sequence(nl::node n, int & frames) {
     frames = 0;
     bool any = false;
-    for (int f = 0; f < 4096; ++f) {
+    for (int f : numeric_frame_ids(n)) {
         nl::node fr = n[std::to_string(f).c_str()];
-        if (!fr) break;
         std::vector<nl::node> srcs;
         frame_sources(fr, srcs);
         if (srcs.empty()) continue;      // frame without pixels: skip but keep order
@@ -366,9 +380,8 @@ static int cmd_export(const std::string & job, const std::string & skill,
             std::vector<int> axs, ays, ws, hs;
             std::string base = e.label;
             std::replace(base.begin(), base.end(), '/', '_');
-            for (int f = 0; f < 4096; ++f) {
+            for (int f : numeric_frame_ids(e.node)) {
                 nl::node fr = e.node[std::to_string(f).c_str()];
-                if (!fr) break;
                 std::vector<nl::node> srcs;
                 frame_sources(fr, srcs);
                 if (srcs.empty()) continue;

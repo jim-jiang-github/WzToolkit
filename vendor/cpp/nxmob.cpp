@@ -277,16 +277,30 @@ static std::string info_link(nl::node info) {
 }
 
 // 该怪自身有多少动画帧（link 怪自己是 0，客户端渲染 link 目标的帧）。
+// 帧号不一定从 0 开始连续（如 9500649 的 stand 只有 "1"）：
+// 枚举数字名子节点并按数值排序，跳过 info 等非帧子树。
+static std::vector<int> numeric_frame_ids(nl::node anim) {
+    std::vector<int> fids;
+    if (!anim) return fids;
+    for (nl::node ch : anim) {
+        std::string nms = ch.name();
+        const char * nm = nms.c_str();
+        if (!nm || !*nm) continue;
+        bool numeric = true;
+        for (const char * p = nm; *p; ++p)
+            if (!std::isdigit(static_cast<unsigned char>(*p))) { numeric = false; break; }
+        if (numeric) fids.push_back(std::atoi(nm));
+    }
+    std::sort(fids.begin(), fids.end());
+    return fids;
+}
+
 static long long mob_frame_count(nl::node mob) {
     long long n = 0;
     for (nl::node anim : mob) {
         std::string an = anim.name();
         if (an == "info" || an == "link") continue;
-        if (!anim["0"]) continue;
-        for (int f = 0;; ++f) {
-            if (!anim[std::to_string(f).c_str()]) break;
-            ++n;
-        }
+        n += static_cast<long long>(numeric_frame_ids(anim).size());
     }
     return n;
 }
@@ -473,12 +487,11 @@ static int cmd_export(const std::string & outdir, const Opts & opt) {
         for (nl::node anim : mob) {
             std::string an = anim.name();
             if (an == "info" || an == "link") continue;
-            if (!anim["0"]) continue;
             if (opt.stand_only && an != "stand" && an != "stand1" && an != "stand2") continue;
             std::string asafe = safe_name(an);
-            for (int f = 0;; ++f) {
+            for (int f : numeric_frame_ids(anim)) {
                 nl::node fr = anim[std::to_string(f).c_str()];
-                if (!fr) break;
+                if (!fr) continue;
                 std::vector<nl::node> srcnodes;
                 try {
                 frame_sources(fr, srcnodes);

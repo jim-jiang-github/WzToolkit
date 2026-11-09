@@ -426,9 +426,12 @@ int main(int argc, char ** argv) {
             std::string png = bmpnode ? export_bitmap(bmpnode, key) : "";
             // Animated backgrounds keep frames under "ani"; grab frame 0 for now.
             if (png.empty() && jget_int(b, "ani", 0) != 0) {
-                std::string k0 = key + "/0";
-                nl::node a0 = nl::nx::Map["Back"][img_name(bs).c_str()]["ani"][std::to_string(no).c_str()]["0"];
-                if (a0) png = export_bitmap(a0, k0);
+                nl::node ani = nl::nx::Map["Back"][img_name(bs).c_str()]["ani"][std::to_string(no).c_str()];
+                // 帧号不一定从 0 开始：先试 "0"，不行就取第一个子节点
+                nl::node a0 = ani["0"];
+                if (!a0)
+                    for (nl::node ch : ani) { a0 = ch; break; }
+                if (a0) png = export_bitmap(a0, key + "/ani0");
             }
             if (!first) meta << ",";
             first = false;
@@ -504,8 +507,11 @@ int main(int argc, char ** argv) {
             }
             std::string png = bmpnode ? export_bitmap(bmpnode, key + "/" + std::to_string(frame)) : "";
             if (png.empty()) {
-                // Animated objs store frames under ani/0..N; use frame 0.
+                // Animated objs store frames under ani/0..N; use frame 0
+                // (帧号不一定从 0 开始：不行就取第一个子节点).
                 nl::node a0 = objNode["ani"]["0"];
+                if (!a0)
+                    for (nl::node ch : objNode["ani"]) { a0 = ch; break; }
                 if (a0) png = export_bitmap(a0, key + "/ani0");
             }
             nl::node origin = bmpnode["origin"];

@@ -1797,7 +1797,7 @@ const BT = {
   gen: 0, loaded: false,
   parts: null, jobs: null, skl: {}, mobs: null, dmgSets: null,
   char: null, charSpec: null, charAct: "stand1", ci: 0,
-  mob: null, mobName: "", mobAct: "stand", mi: 0,
+  mob: null, mobName: "", mobAct: "stand", mobIdle: "stand", mi: 0,
   skill: null, skillName: "", skillJob: "", dmgSetId: "",
   tChar: 0, tMob: 0, tAuto: 0, timers: [], busy: false,
 };
@@ -1852,8 +1852,10 @@ async function btRollMob() {
     try {
       BT.mob = await api("/api/mob/icon/" + m.id);
       BT.mobName = m.name || m.id;
-      BT.mobAct = (BT.mob.anims && BT.mob.anims.stand) ? "stand"
-        : Object.keys(BT.mob.anims || {})[0];
+      // 待机动作优先级：stand → move → fly → 第一套（别拿 attack1 当站桩，体型差太多）
+      const anims = BT.mob.anims || {};
+      BT.mobIdle = ["stand", "move", "fly"].find((a) => anims[a]) || Object.keys(anims)[0];
+      BT.mobAct = BT.mobIdle;
       BT.mi = 0;
       return;
     } catch (e) { /* 这只怪资源坏了，换一只 */ }
@@ -1977,11 +1979,13 @@ function btLoops() {
     if (gen !== BT.gen || !BT.mob || !$("#bt-mob")) return;
     const anims = BT.mob.anims || {};
     let list = anims[BT.mobAct];
-    if (!list) { BT.mobAct = "stand"; list = anims.stand; }
+    if (!list) { BT.mobAct = BT.mobIdle || "stand"; list = anims[BT.mobAct]; }
     if (!list) return;
     if (BT.mi >= list.length) {
       BT.mi = 0;
-      if (BT.mobAct !== "stand" && anims.stand) { BT.mobAct = "stand"; list = anims.stand; }
+      if (BT.mobAct !== (BT.mobIdle || "stand")) {   // 受击/攻击播完回待机
+        BT.mobAct = BT.mobIdle || "stand"; list = anims[BT.mobAct] || list;
+      }
     }
     const f = list[BT.mi++];
     const g = btGeom(), img = $("#bt-mob img");
