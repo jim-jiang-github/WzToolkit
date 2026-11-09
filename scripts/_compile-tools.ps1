@@ -41,7 +41,10 @@ if (-not $MSVC) { throw 'MSVC dir not found' }
 $VC = $MSVC.FullName
 
 $SDKROOT = "${env:ProgramFiles(x86)}\Windows Kits\10"
-$SDKVER  = Get-ChildItem (Join-Path $SDKROOT 'Include') -Directory | Sort-Object Name -Descending | Select-Object -First 1
+# 只认版本号目录（Include\ 下可能混入 WDK 的 wdf 等非版本目录，字典序更大会被误选）
+$SDKVER  = Get-ChildItem (Join-Path $SDKROOT 'Include') -Directory |
+           Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+           Sort-Object Name -Descending | Select-Object -First 1
 if (-not $SDKVER) { throw 'Windows SDK not found' }
 $SDKINC = Join-Path $SDKROOT "Include\$($SDKVER.Name)"
 $SDKLIB = Join-Path $SDKROOT "Lib\$($SDKVER.Name)"
