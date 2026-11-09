@@ -915,6 +915,9 @@ async function convert(names) {
       body: JSON.stringify({ files }),
     });
     if (!d.started) { $("#cv-note").textContent = d.message; scan(); return; }
+    // 任务已排队：立刻禁用转换/清除按钮（进度轮询随后会持续按 busy 状态锁定）
+    const cvb = $("#cn-cv-all"); if (cvb) cvb.disabled = true;
+    const wpb = $("#wipe-go"); if (wpb) wpb.disabled = true;
     $("#cv-log").hidden = false;
     $("#cv-note").textContent = "";
     TIMER = setInterval(pollJob, 1000);
@@ -980,8 +983,13 @@ async function tickProgress() {
     : p.cls && p.cls.running
     ? { name: p.cls.stage || "怀旧服小地图库", done: p.cls.done, total: p.cls.total }
     : p.convert.running
-    ? { name: p.convert.stage || "转换", done: p.convert.done, total: p.convert.total }
+    ? { name: p.convert.stage || "转换", done: p.convert.done, total: p.convert.total, frac: p.convert.frac || 0 }
     : null;
+  // 转换/建库进行中：转换与清除按钮都禁用（防止重复排队或删掉正在写的数据）
+  const busy = !!(p.convert.running || p.minimap.running || p.auto.running
+                  || (p.cls && p.cls.running));
+  const cvb = $("#cn-cv-all"); if (cvb) cvb.disabled = busy;
+  const wpb = $("#wipe-go"); if (wpb) wpb.disabled = busy;
   const box = $("#prog-box"), bar = $("#prog-bar"), fill = $("#prog-fill");
   if (!seg) {
     clearInterval(PTIMER); PTIMER = null;
@@ -1001,7 +1009,8 @@ async function tickProgress() {
   $("#prog-stage").textContent = seg.name;
   const hasTotal = seg.total > 0;
   bar.classList.toggle("indet", !hasTotal);
-  fill.style.width = hasTotal ? Math.min(100, (seg.done / seg.total) * 100) + "%" : "35%";
+  fill.style.width = hasTotal
+    ? Math.min(100, ((seg.done + (seg.frac || 0)) / seg.total) * 100) + "%" : "35%";
   $("#prog-pct").textContent = hasTotal ? `${seg.done} / ${seg.total}` : "";
   $("#prog-sub").textContent = !hasTotal
     ? (seg.done ? `已处理 ${seg.done} 张…` : "启动中…")

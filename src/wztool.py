@@ -565,11 +565,14 @@ def c_convert(names: list[str], force: bool, log) -> dict:
 # 国服官方客户端转换（.cache\cn\）-------------------------------------------
 
 def _cn_wz2nx(work: Path, src: str, out: str, mounts: list[tuple[str, str]],
-              prefix: str, only: str | None, log, timeout: int = 14400) -> None:
+              prefix: str, only: str | None, log, timeout: int = 14400,
+              sub=None) -> None:
     """调 NoLifeWzToNx 转一个国服 WZ 卷（work 是 ASCII 可见的卷根），产物写到 out。
 
     prefix 为空 = 不加 --prefix（img 直接落在 .nx 根，Mob.nx 用这种经典布局）。
-    """
+    sub(text, size) 可选：流式刷新点——wz2nx 每进入一个阶段（解析输入/写入位图…）
+    报一次，另有线程每 2 秒轮询产物大小报"已写 X MB"，让单项转换几十分钟里
+    进度条也能动（wz2nx 本身不打百分比）。"""
     exe = BIN / "NoLifeWzToNx.exe"
     cmd = [str(exe), "-c", src]
     if prefix:
@@ -581,12 +584,61 @@ def _cn_wz2nx(work: Path, src: str, out: str, mounts: list[tuple[str, str]],
     cmd += ["--out", out]
     log(f"  转换 {src}（挂载 {len(mounts)} 个卷）…")
     t0 = time.time()
-    r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=timeout)
     outp = Path(out)
-    if r.returncode != 0 or not outp.exists():
-        tail = "\n".join((r.stdout or "").strip().splitlines()[-5:])
-        raise RuntimeError(f"{src} 转换失败（exit {r.returncode}）\n{tail}")
+    if sub is None:
+        sub = lambda text, size: None        # noqa: E731
+    stop = threading.Event()
+    state = {"stage": ""}
+
+    def poll_size() -> None:
+        # 产物 .nx 边写边长（先节点/字符串，位图持续 append）——大小就是最诚实的活动信号
+        while not stop.wait(2.0):
+            if time.time() - t0 > timeout:       # 原 subprocess.run 的超时语义
+                try:
+                    p.kill()
+                except BaseException:
+                    pass
+                return
+            try:
+                sz = outp.stat().st_size if outp.exists() else 0
+            except OSError:
+                sz = 0
+            txt = f"已写 {sz / 1048576:.0f} MB"
+            if state["stage"]:
+                txt = f"{state['stage']} · {txt}"
+            sub(txt, sz)
+
+    threading.Thread(target=poll_size, daemon=True).start()
+    p = None
+    STAGES = {"Parsing input": "解析输入", "Parsing uol": "解析 UOL",
+              "Parsing source": "解析源卷", "Parsing _outlink": "解析 outlink",
+              "Parsing _inlink": "解析 inlink", "Opening output": "打开输出",
+              "Writing nodes": "写入节点", "Writing strings": "写入字符串",
+              "Writing audio": "写入音频", "Writing bitmaps": "写入位图"}
+    try:
+        p = subprocess.Popen(cmd, cwd=str(work), stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, bufsize=0)
+        seen: set[str] = set()
+        buf = b""
+        while True:
+            chunk = p.stdout.read(256) if p.stdout else b""
+            if not chunk:
+                break
+            buf += chunk
+            for k, cn in STAGES.items():
+                if k.encode() in buf and cn not in seen:
+                    seen.add(cn)
+                    state["stage"] = cn
+                    log(f"    {cn} …")
+                    sub(cn, -1)
+            if len(buf) > 8192:
+                buf = buf[-4096:]
+        rc = p.wait()
+    finally:
+        stop.set()
+    if rc != 0 or not outp.exists():
+        tail = "\n".join(buf.decode("utf-8", "replace").strip().splitlines()[-5:])
+        raise RuntimeError(f"{src} 转换失败（exit {rc}）\n{tail}")
     log(f"  OK {outp.name} {outp.stat().st_size / 1048576:.0f} MB，"
         f"用时 {time.time() - t0:.0f}s")
 
@@ -641,13 +693,30 @@ def c_convert_cn(log, only: list[str] | None = None, prog=None) -> dict:
         return {"started": False, "total": 0,
                 "message": "国服数据已转换完成（.cache\\cn）"}
 
+    # 单项内部进度：wz2nx 不打百分比，用"产物已写大小 / 该项预估大小"估一个，
+    # 估算不必精确（目的只是让进度条在几十分钟里持续动起来）
+    EST_MB = {"String.nx": 35, "Map.nx": 21267, "Mob.nx": 8100,
+              "Character.nx": 1900, "Skill.nx": 15000}
+    cur = {"name": ""}
+
     def _start(name: str) -> None:
+        cur["name"] = name
         if prog:
-            prog(f"转换 {name}（第 {todo.index(name) + 1}/{len(todo)} 项）", todo.index(name))
+            prog(f"转换 {name}（第 {todo.index(name) + 1}/{len(todo)} 项）",
+                 todo.index(name), 0.0)
+
+    def _sub(text: str, size: int) -> None:
+        if not prog or not cur["name"]:
+            return
+        est = EST_MB.get(cur["name"], 1000) * 1048576
+        frac = min(0.98, size / est) if size > 0 else 0.0
+        prog(f"转换 {cur['name']}（第 {todo.index(cur['name']) + 1}/{len(todo)} 项）· {text}",
+             todo.index(cur["name"]), frac)
 
     if "String.nx" in todo:
         _start("String.nx")
-        _cn_wz2nx(work, "String/String_000.wz", str(str_nx), [], "String", None, log)
+        _cn_wz2nx(work, "String/String_000.wz", str(str_nx), [], "String", None, log,
+                  sub=_sub)
     if "Map.nx" in todo:
         _start("Map.nx")
         m = [("Map/Map/Map0/_Canvas", "Map/Map/Map0/_Canvas")]
@@ -658,7 +727,8 @@ def c_convert_cn(log, only: list[str] | None = None, prog=None) -> dict:
               ("Map/Tile", "Map/Tile/Tile_000.wz"), ("Map/Tile/_Canvas", "Map/Tile/_Canvas"),
               ("Map/Obj", "Map/Obj/Obj_000.wz"), ("Map/Obj/_Canvas", "Map/Obj/_Canvas")]
         log("  Map.nx 是全量转换（含全部物件/背景位图），大约 10~40 分钟，请耐心等 …")
-        _cn_wz2nx(data, "Map/Map/Map0/Map0_000.wz", str(map_nx), m, "Map", None, log)
+        _cn_wz2nx(data, "Map/Map/Map0/Map0_000.wz", str(map_nx), m, "Map", None, log,
+                  sub=_sub)
     if "Mob.nx" in todo:
         _start("Mob.nx")
         # 普通怪的 WZ 卷是空的（Mob.wz 只索引事件系统），全部怪物都在 6 个
@@ -666,7 +736,8 @@ def c_convert_cn(log, only: list[str] | None = None, prog=None) -> dict:
         # 挂载（= 并进 .nx 根），合成经典布局 Mob/<id>.img，nxmob 直接可用。
         m = [("", f"Mob/_Canvas/_Canvas_00{n}.wz") for n in range(1, 6)]
         log("  Mob.nx 全量转换（约 10 GB 位图，15 分钟上下）…")
-        _cn_wz2nx(work, "Mob/_Canvas/_Canvas_000.wz", str(mob_nx), m, "", None, log)
+        _cn_wz2nx(work, "Mob/_Canvas/_Canvas_000.wz", str(mob_nx), m, "", None, log,
+                  sub=_sub)
     if "Character.nx" in todo:
         _start("Character.nx")
         # 人物：基卷 Character_000.wz 是光板身体/头（000020XX / 000120XX）的结构，
@@ -679,7 +750,8 @@ def c_convert_cn(log, only: list[str] | None = None, prog=None) -> dict:
             m += [(p, f"Character/{p}/{p}_000.wz"),
                   (f"{p}/_Canvas", f"Character/{p}/_Canvas/_Canvas_000.wz")]
         log("  Character.nx 全量转换（约 1.8 GB 位图，10 分钟上下）…")
-        _cn_wz2nx(work, "Character/Character_000.wz", str(char_nx), m, "", None, log)
+        _cn_wz2nx(work, "Character/Character_000.wz", str(char_nx), m, "", None, log,
+                  sub=_sub)
     if "Skill.nx" in todo:
         _start("Skill.nx")
         # 技能：结构与位图都在 8 个 canvas 分片里（Skill.wz 本体是空壳）。基卷选
@@ -698,7 +770,7 @@ def c_convert_cn(log, only: list[str] | None = None, prog=None) -> dict:
               ("RoguelikeBuffRed", "Skill/Roguelike/Buff/Redmoon/_Canvas/_Canvas_000.wz")]
         log("  Skill.nx 全量转换（约 15 GB 位图，30 分钟上下）…")
         _cn_wz2nx(work, "Skill/_Canvas/_Canvas_000.wz", str(skill_nx), m, "", None, log,
-                  timeout=7200)
+                  sub=_sub, timeout=7200)
     return {"started": True, "total": len(todo), "done": len(todo)}
 
 
@@ -2934,6 +3006,8 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
 
 
 def c_clear_cache() -> dict:
+    if _job["running"] or _clsjob["running"]:
+        raise CliError("转换/建库正在进行中，等它完成再清除", 1)
     # 彻底清理：先把各子目录秒级改名挪进 trash，再**同步**把 trash 删干净——
     # 不能只挪不删，否则几十 GB 残在 trash 里占着盘（之前就是这么残留的）。
     for d in list(CACHE.iterdir()) if CACHE.exists() else []:
@@ -3200,15 +3274,16 @@ def _web_convert(names: list[str], force: bool) -> dict:
         if _job["running"]:
             raise CliError("已有转换在跑，等它完成", 1)
         _job.update(id=_job["id"] + 1, running=True, log=[], done=0,
-                    total=total, stage="", error="")
+                    total=total, stage="", frac=0.0, error="")
 
     def work():
         try:
             if cn_todo is not None:
                 if cn_todo:
                     c_convert_cn(lambda s: _job["log"].append(s), cn_todo,
-                                 prog=lambda stage, done: _job.update(stage=stage, done=done))
-                    _job.update(stage="", done=total - (1 if cls_todo else 0))
+                                 prog=lambda stage, done, frac=0.0:
+                                 _job.update(stage=stage, done=done, frac=frac))
+                    _job.update(stage="", done=total - (1 if cls_todo else 0), frac=0.0)
                 if cls_todo:
                     _job["log"].append("转换完成，接着构建怀旧服小地图库…")
                     _cls_build()
@@ -3245,6 +3320,7 @@ def c_progress() -> dict:
                     and not (_mmjob["running"] or _mmauto["running"]),
                     "done": _job["done"],
                     "total": _job["total"], "stage": _job.get("stage", ""),
+                    "frac": _job.get("frac", 0.0),
                     "error": _job["error"]},
         "minimap": {"running": _mmjob["running"], "done": _mmjob.get("done", 0),
                     "total": _mmjob.get("total", 0), "stage": _mmjob.get("stage", ""),
