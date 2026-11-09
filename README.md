@@ -38,6 +38,10 @@ build.cmd                        # 平时只需要这一条（双击也行）
 #    全新机器 clone 下来直接双击就能编：连 Python 都不用预装，脚本自己下载
 #    解释器（约 15MB）+ 依赖（约 200MB），全部落在项目目录，可随时删掉重来。
 #    想从零重来：删 .pyruntime\ 和 .pylibs\ 再跑一次。
+
+# 本地调试免打包：双击根目录 dev.cmd —— 直接用源码起 WebUI（端口同 8000）。
+#    前端 webui\cli.html 改完自动刷新；后端 src\wztool.py 改完重开一次 dev.cmd 即可，
+#    不用再等几分钟的 PyInstaller 打包。前提：先跑过一次 build.cmd（拉好 .pyruntime\.pylibs）。
 .pyruntime\python.exe scripts\deps.py          # 只同步依赖、不打包（--check 只检查，--force 重装）
 
 # 只想单独重编原生工具（改了 vendor\cpp 时）：
@@ -153,6 +157,7 @@ CLI 与 Web 共用同一套导出逻辑；所有子命令支持 `--json`，
 
 ```
 build.cmd               双击即构建（根目录入口，转调 scripts\build.bat）
+dev.cmd                 本地调试入口（源码直跑 WebUI，免打包；改完重开即可）
 scripts\build.bat       构建主脚本：下解释器 → 装依赖 → 缺原生工具就编 → 打包 wztool.exe
 scripts\_fetch-python.ps1   下载便携版 CPython 到 .pyruntime\（build.bat 自动调用）
 scripts\_compile-tools.ps1  原生工具编译逻辑（内部脚本，build.bat 缺 exe 时自动调用）
