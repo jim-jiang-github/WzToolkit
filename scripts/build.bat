@@ -108,6 +108,10 @@ set "PYTHONPATH=%PYLIBS%"
     --add-data "%ROOT%\vendor;vendor" ^
     --add-data "%ROOT%\webui;webui" ^
     --add-data "%ROOT%\src\mob_boss_ref.json;." ^
+    --collect-all "UnityPy" ^
+    --collect-all "fmod_toolkit" ^
+    --collect-all "astc_encoder" ^
+    --collect-all "archspec" ^
     --distpath "%ROOT%\bin" ^
     --workpath "%ROOT%\.build\wztool" ^
     --specpath "%ROOT%\.build\wztool" ^
