@@ -357,8 +357,8 @@ def c_pickdir() -> dict:
         bi = BROWSEINFO()
         bi.hwndOwner = user32.GetForegroundWindow()   # 挂到前台窗口上，保证弹在最前
         bi.lpszTitle = "选择工作区：游戏客户端目录（mxdclassic / 冒险岛online）或放 .wz 的目录"
-        bi.pszDisplayName = ctypes.cast(
-            ctypes.create_unicode_buffer(wintypes.MAX_PATH), ctypes.c_wchar_p)
+        disp = ctypes.create_unicode_buffer(wintypes.MAX_PATH)  # 必须留引用，否则被 GC
+        bi.pszDisplayName = ctypes.cast(disp, ctypes.c_wchar_p)
         bi.ulFlags = 0x1 | 0x40              # BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE
         pidl = shell32.SHBrowseForFolderW(ctypes.byref(bi))
         if not pidl:
