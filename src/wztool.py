@@ -116,8 +116,10 @@ def _load_ws() -> None:
     global _ws
     try:
         d = json.loads(STATE.read_text(encoding="utf-8"))
-        p = Path(d.get("workspace") or "")
-        _ws = p if p.is_dir() else None
+        raw = (d.get("workspace") or "").strip()
+        # 注意：Path("") 会变成 Path(".")（当前目录）——空值必须在这里挡掉
+        p = Path(raw) if raw and raw != "." else None
+        _ws = p if (p and p.is_dir()) else None
     except (OSError, ValueError):
         _ws = None
 
@@ -330,9 +332,11 @@ def c_browse(path: str = "") -> dict:
 def c_pickdir() -> dict:
     """弹 Windows 原生「选择文件夹」对话框。WebUI 跑在本机，弹窗直接出现在
     用户桌面；取消返回 {"path": ""}。用的是 shell 的 SHBrowseForFolder
-    （ctypes 直调，零第三方依赖，PyInstaller 打包不用带 tkinter）。"""
+    （ctypes 直调，零第三方依赖，PyInstaller 打包不用带 tkinter）。
+    注意 64 位下返回的 pidl 是指针——必须显式声明 restype，不然被截成 32 位。"""
     import ctypes
     from ctypes import wintypes
+    user32 = ctypes.windll.user32
     ole32 = ctypes.windll.ole32
     shell32 = ctypes.windll.shell32
     ole32.CoInitializeEx(None, 0x2)          # COINIT_APARTMENTTHREADED
@@ -346,16 +350,25 @@ def c_pickdir() -> dict:
                         ("lpfn", ctypes.c_void_p),
                         ("lParam", ctypes.c_void_p),
                         ("iImage", ctypes.c_int)]
+        shell32.SHBrowseForFolderW.restype = ctypes.c_void_p
+        shell32.SHBrowseForFolderW.argtypes = [ctypes.POINTER(BROWSEINFO)]
+        shell32.SHGetPathFromIDListW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+        ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
         bi = BROWSEINFO()
+        bi.hwndOwner = user32.GetForegroundWindow()   # 挂到前台窗口上，保证弹在最前
         bi.lpszTitle = "选择工作区：游戏客户端目录（mxdclassic / 冒险岛online）或放 .wz 的目录"
+        bi.pszDisplayName = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
         bi.ulFlags = 0x1 | 0x40              # BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE
         pidl = shell32.SHBrowseForFolderW(ctypes.byref(bi))
         if not pidl:
             return {"path": ""}
         out = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
-        shell32.SHGetPathFromIDListW(pidl, out)
+        ok = shell32.SHGetPathFromIDListW(pidl, out)
         ole32.CoTaskMemFree(pidl)
-        return {"path": out.value}
+        p = Path(out.value) if ok else None
+        if not (p and p.is_absolute() and p.is_dir()):
+            return {"path": ""}
+        return {"path": str(p)}
     finally:
         ole32.CoUninitialize()
 
