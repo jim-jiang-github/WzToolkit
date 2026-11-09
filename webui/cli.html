@@ -375,12 +375,8 @@
       </div>
       <div class="muted" id="ws-state" style="margin-top:8px">尚未选择</div>
       <div id="wz-table" style="margin-top:12px"></div>
-      <!-- 老式 .wz 目录工作流专用：默认藏起来，只有扫描到非国服目录才显示（国服用表格里的批量转换） -->
-      <div class="row" id="cv-row" style="margin-top:10px;display:none">
-        <label class="muted"><input type="checkbox" id="cv-force" /> 强制重转（忽略已存在的 .nx）</label>
-        <button id="cv-go" disabled>转换为 NX</button>
-        <span class="muted" id="cv-note"></span>
-      </div>
+      <!-- 老 .wz 目录（国际服）工作流已不提供转换入口：dev 分支只做国服地图导出 -->
+      <div class="muted" id="cv-note" style="margin-top:10px"></div>
       <div class="progbox" id="prog-box" hidden>
         <div class="prog-head"><b id="prog-stage">准备中…</b><span class="muted" id="prog-pct"></span></div>
         <div class="prog-bar" id="prog-bar"><i id="prog-fill"></i></div>
@@ -890,47 +886,39 @@ async function scan() {
                 title="把 .cache 彻底删干净（数据量大时要几分钟）——之后点「⬇ 转换缺失数据」重转">🗑 清除</button></td></tr>
         </table>
         <div class="muted" style="margin-top:6px">缺数据时点右上角「⬇ 转换缺失数据」，一次把缺的全部转上，进度条实时显示。地图 / 找图 / 怪物素材 / 人物素材 / 技能特效页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
-      $("#cv-row").style.display = "none";
       loadLists();
       return;
     }
-    $("#cv-row").style.display = "";
-    $("#cv-force").disabled = false;
-    $("#cv-go").textContent = "转换为 NX";
     $("#ws-state").innerHTML = `工作区：<b>${WS}</b> · ${d.wz.length} 个 .wz`;
     $("#ws-mini").textContent = `：${WS.split(/[\\/]/).pop()} · ${d.wz.length} 个 .wz`;
     const rows = d.wz.map((f) => `
       <tr>
-        <td><input type="checkbox" data-f="${f.name}" ${f.name === "Map.wz" || f.name === "Mob.wz" ? "checked" : ""} /></td>
         <td>${f.name}</td>
         <td>${f.size_mb} MB</td>
         <td>${f.nx ? `<span class="ok">${f.nx}（${f.nx_mb} MB）</span>` : '<span class="miss">未转换</span>'}</td>
       </tr>`).join("");
     $("#wz-table").innerHTML = d.wz.length
-      ? `<table><tr><th></th><th>文件</th><th>大小</th><th>.nx</th></tr>${rows}</table>`
+      ? `<table><tr><th>文件</th><th>大小</th><th>.nx</th></tr>${rows}</table>`
       : '<div class="muted">这个目录里没有 .wz 文件</div>';
-    $("#cv-go").disabled = !d.wz.length;
     loadLists();
   } catch (e) { fail(e); }
 }
 
 async function convert(names) {
-  // names 为空 = 老流程（按勾选的 .wz 转）；传数组 = 只转点名的那几个 .nx
-  const pick = Array.isArray(names) && names.length ? names : null;
-  const files = pick || [...$$("#wz-table input:checked")].map((i) => i.dataset.f);
-  if (!files.length && !CN) return;
-  $("#cv-go").disabled = true;
+  // 只转点名的 .nx（国服表格右上角「⬇ 转换缺失数据」传缺的那几项）
+  const files = Array.isArray(names) ? names : [];
+  if (!files.length) return;
   try {
     const d = await api("/api/convert", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files, force: $("#cv-force").checked }),
+      body: JSON.stringify({ files }),
     });
-    if (!d.started) { $("#cv-note").textContent = d.message; $("#cv-go").disabled = false; scan(); return; }
+    if (!d.started) { $("#cv-note").textContent = d.message; scan(); return; }
     $("#cv-log").hidden = false;
     $("#cv-note").textContent = "";
     TIMER = setInterval(pollJob, 1000);
     startProgress();
-  } catch (e) { fail(e); $("#cv-go").disabled = false; scan(); }
+  } catch (e) { fail(e); scan(); }
 }
 
 async function pollJob() {
@@ -940,7 +928,6 @@ async function pollJob() {
     $("#cv-log").scrollTop = 1e6;
     if (!j.running) {
       clearInterval(TIMER); TIMER = null;
-      $("#cv-go").disabled = false;
       scan();            // 刷新 nx 状态 & 列表
     }
   } catch (e) { fail(e); }
@@ -2157,7 +2144,6 @@ async function exportWindow() {
   } catch (e) { out.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
 }
 
-$("#cv-go").onclick = convert;
 $("#wz-table").addEventListener("click", (e) => {
   const t = e.target;
   if (t && t.id === "cn-cv-all" && CN_MISSING.length) convert(CN_MISSING);
