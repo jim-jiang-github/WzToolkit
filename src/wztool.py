@@ -361,7 +361,9 @@ def c_workspace(path: str) -> dict:
                        "char_nx": char_nx.exists(),
                        "char_nx_gb": gb(char_nx),
                        "skill_nx": skill_nx.exists(),
-                       "skill_nx_gb": gb(skill_nx)}}
+                       "skill_nx_gb": gb(skill_nx)},
+                # 怀旧服小地图库状态（工作区= mxdclassic / 安装根时能定位 Unity 数据包）
+                "cls": _cls_state()}
     files = []
     for f in sorted(p.glob("*.wz")):
         if f.name.endswith(".segs"):           # 下载器没下完的标记
