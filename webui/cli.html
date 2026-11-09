@@ -61,7 +61,10 @@
          padding: 8px 10px; font: 12px/1.5 Consolas, monospace; max-height: 170px;
          overflow: auto; white-space: pre-wrap; margin-top: 10px; }
   .progbox { margin-top: 10px; }
-  .prog-head { display: flex; justify-content: space-between; align-items: baseline;
+  /* 数据未就绪 / 正在导入：下面的浏览区整体置灰、不可点击 */
+  .card.locked .seg, .card.locked .cols, .card.locked .pane {
+    opacity: .38; pointer-events: none; filter: grayscale(.7); }
+  #lock-hint { margin: 2px 0 10px; font-size: 12.5px; color: #e0b44a; }  .prog-head { display: flex; justify-content: space-between; align-items: baseline;
                gap: 10px; font-size: 12.5px; }
   .prog-head b { font-weight: 600; color: #cfe0ff; }
   .prog-bar { position: relative; height: 8px; margin-top: 6px; border-radius: 5px;
@@ -387,7 +390,7 @@
   </div>
 
   <!-- ② 浏览 / 导出：地图 / 怪物素材 / 人物素材 三个大类在同一张卡片里切换 -->
-  <div class="card grow" id="maincard">
+  <div class="card grow locked" id="maincard">
     <h2>
       <span class="step">2</span>
       <div class="seg" id="mainseg">
@@ -399,6 +402,7 @@
       <span style="flex:1"></span>
       <span class="muted" id="mode-hint"></span>
     </h2>
+    <div id="lock-hint">⚠ 数据还没准备好：先在上方选好工作区，点「⬇ 转换缺失数据」——导入完成前这块不能操作，完成后自动解锁。</div>
     <div class="cols" id="pane-map">
       <div class="col-left">
         <div style="position:relative;display:flex;gap:6px;margin-bottom:8px">
@@ -543,6 +547,14 @@ function api(path, opts) {
 function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + e.message; }
 
 let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [], CN_NEED_CLS = false;
+let MAPREADY = false, BUSY = false;   // 浏览区锁定状态：数据就绪 && 没有任务在跑
+
+// 导入完成前把下面整块浏览区置灰不可点（数据未就绪或转换/建库正在跑）
+function refreshLock() {
+  const locked = !MAPREADY || BUSY;
+  $("#maincard").classList.toggle("locked", locked);
+  $("#lock-hint").hidden = !locked;
+}
 let mapSel = null;
 let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // =「显示怪物」开关：勾选后页面与导出图都把怪物合成进去
@@ -887,6 +899,9 @@ async function scan() {
                 title="把 .cache 彻底删干净（数据量大时要几分钟）——之后点「⬇ 转换缺失数据」重转">🗑 清除</button></td></tr>
         </table>
         <div class="muted" style="margin-top:6px">缺数据时点右上角「⬇ 转换缺失数据」，缺的 nx 一次转上、怀旧服小地图库也自动建，进度条实时显示。地图 / 找图 / 怪物素材 / 人物素材 / 技能特效页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
+      // 地图/找图至少要有 Map.nx + String.nx 才算能浏览
+      MAPREADY = !!(cn.map_nx && cn.string_nx);
+      refreshLock();
       loadLists();
       return;
     }
@@ -901,6 +916,8 @@ async function scan() {
     $("#wz-table").innerHTML = d.wz.length
       ? `<table><tr><th>文件</th><th>大小</th><th>.nx</th></tr>${rows}</table>`
       : '<div class="muted">这个目录里没有 .wz 文件</div>';
+    MAPREADY = d.wz.some((f) => f.nx && f.name === "Map.wz");
+    refreshLock();
     loadLists();
   } catch (e) { fail(e); }
 }
@@ -953,6 +970,7 @@ async function wipeData() {
     $("#ws-state").textContent = "尚未选择";
     $("#ws-mini").textContent = "";
     $("#wz-table").innerHTML = "";
+    MAPREADY = false; refreshLock();          // 数据清空了：浏览区重新锁上
     $("#cv-note").textContent = "";
     if (btn) { btn.disabled = false; btn.textContent = "🗑 清除"; }
   } catch (e) { fail(e); $("#cv-note").textContent = ""; if (btn) { btn.disabled = false; btn.textContent = "🗑 清除"; } }
@@ -986,6 +1004,7 @@ async function tickProgress() {
   // 转换/建库进行中：转换与清除按钮都禁用（防止重复排队或删掉正在写的数据）
   const busy = !!(p.convert.running || p.minimap.running || p.auto.running
                   || (p.cls && p.cls.running));
+  if (busy !== BUSY) { BUSY = busy; refreshLock(); }   // 导入中锁住下方浏览区
   const cvb = $("#cn-cv-all"); if (cvb) cvb.disabled = busy;
   const wpb = $("#wipe-go"); if (wpb) wpb.disabled = busy;
   const box = $("#prog-box"), bar = $("#prog-bar"), fill = $("#prog-fill");
