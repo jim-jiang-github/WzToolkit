@@ -347,10 +347,9 @@
     </div>
     <div class="optpop wspop" id="ws-pop" hidden>
       <div class="row" style="position:relative">
-        <input type="text" id="ws-path" placeholder="例如 C:\msdata83" style="flex:1;min-width:420px" />
-        <button id="ws-browse">浏览</button>
+        <input type="text" id="ws-path" placeholder="例如 C:\msdata83，或点「浏览」直接选文件夹" style="flex:1;min-width:420px" />
+        <button id="ws-browse" title="弹 Windows 文件夹选择对话框">浏览</button>
         <button class="primary" id="ws-scan">扫描</button>
-        <div class="browse" id="ws-menu" hidden></div>
       </div>
       <div class="muted" id="ws-state" style="margin-top:8px">尚未选择</div>
       <div id="wz-table" style="margin-top:12px"></div>
@@ -764,12 +763,17 @@ function bindImgPop() {
   }).observe(pop, { attributes: true, attributeFilter: ["hidden"] });
 }
 bindImgPop();
-/* 「选择工作区」按钮：展开/收起工作区弹窗 */
-$("#ws-toggle").onclick = (e) => {
-  e.stopPropagation();
-  const p = $("#ws-pop");
-  p.hidden = !p.hidden;
-};
+/* 「选择工作区」/「浏览」：弹 Windows 原生选文件夹对话框，选完自动填入并扫描 */
+async function pickDir() {
+  $("#ws-pop").hidden = false;          // 让用户能看到输入框和扫描结果
+  try {
+    const d = await api("/api/pickdir", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (d.path) { $("#ws-path").value = d.path; scan(); }
+  } catch (e) { fail(e); }
+}
+$("#ws-toggle").onclick = (e) => { e.stopPropagation(); pickDir(); };
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
 async function boot() {
@@ -2114,41 +2118,8 @@ async function exportWindow() {
   } catch (e) { out.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
 }
 
-/* 目录浏览 */
-let browsePath = "";
-async function browseOpen() {
-  const menu = $("#ws-menu");
-  menu.hidden = false;
-  menu.innerHTML = '<div class="muted">载入中…</div>';
-  try {
-    const d = await api("/api/browse", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: browsePath || $("#ws-path").value.trim() }),
-    });
-    browsePath = d.path;
-    menu.innerHTML = `<div data-p="..">↩ 上级</div>` + d.dirs.map((n) =>
-      `<div data-p="${n}">📁 ${n}</div>`).join("");
-    menu.querySelectorAll("div").forEach((el) => {
-      el.onclick = () => {
-        const v = el.dataset.p;
-        const cur = browsePath || $("#ws-path").value.trim();
-        let next;
-        if (v === "..") {
-          const parent = cur.replace(/[\\/][^\\/]*[\\/]?$/, "");
-          next = parent || "";
-        } else {
-          next = cur ? (cur.replace(/[\\/]$/, "") + "\\" + v) : v;
-        }
-        browsePath = next;
-        $("#ws-path").value = next || "";
-        browseOpen();
-      };
-    });
-  } catch (e) { menu.innerHTML = `<span class="miss">${e.message}</span>`; }
-}
-
 $("#ws-scan").onclick = scan;
-$("#ws-browse").onclick = browseOpen;
+$("#ws-browse").onclick = (e) => { e.stopPropagation(); pickDir(); };
 $("#cv-go").onclick = convert;
 $("#wz-table").addEventListener("click", (e) => {
   const t = e.target;
@@ -2199,9 +2170,6 @@ $("#mobdex .md-bar").onclick = (e) => {
   mdRenderList();
 };
 window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); });
-document.addEventListener("click", (e) => {
-  if (!e.target.closest("#ws-browse") && !e.target.closest("#ws-menu")) $("#ws-menu").hidden = true;
-});
 setMode("map");   // 初始态：地图（顺便填上标题右侧的提示）
 boot();
 </script>

@@ -327,6 +327,39 @@ def c_browse(path: str = "") -> dict:
     return {"path": str(p), "dirs": dirs[:500]}
 
 
+def c_pickdir() -> dict:
+    """弹 Windows 原生「选择文件夹」对话框。WebUI 跑在本机，弹窗直接出现在
+    用户桌面；取消返回 {"path": ""}。用的是 shell 的 SHBrowseForFolder
+    （ctypes 直调，零第三方依赖，PyInstaller 打包不用带 tkinter）。"""
+    import ctypes
+    from ctypes import wintypes
+    ole32 = ctypes.windll.ole32
+    shell32 = ctypes.windll.shell32
+    ole32.CoInitializeEx(None, 0x2)          # COINIT_APARTMENTTHREADED
+    try:
+        class BROWSEINFO(ctypes.Structure):
+            _fields_ = [("hwndOwner", wintypes.HWND),
+                        ("pidlRoot", ctypes.c_void_p),
+                        ("pszDisplayName", ctypes.c_wchar_p),
+                        ("lpszTitle", ctypes.c_wchar_p),
+                        ("ulFlags", ctypes.c_uint),
+                        ("lpfn", ctypes.c_void_p),
+                        ("lParam", ctypes.c_void_p),
+                        ("iImage", ctypes.c_int)]
+        bi = BROWSEINFO()
+        bi.lpszTitle = "选择工作区：游戏客户端目录（mxdclassic / 冒险岛online）或放 .wz 的目录"
+        bi.ulFlags = 0x1 | 0x40              # BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE
+        pidl = shell32.SHBrowseForFolderW(ctypes.byref(bi))
+        if not pidl:
+            return {"path": ""}
+        out = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+        shell32.SHGetPathFromIDListW(pidl, out)
+        ole32.CoTaskMemFree(pidl)
+        return {"path": out.value}
+    finally:
+        ole32.CoUninitialize()
+
+
 def c_workspace(path: str) -> dict:
     """设为工作区。classic 模式列里面的 .wz（含是否已转 .nx）；
     选的是国服官方客户端目录时自动切国服模式（数据源 = 自动定位的 Data 目录）。"""
@@ -2868,7 +2901,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     # ---- 路由 ----
     # POST-only 路由集合：GET 打过来回 405（与旧 FastAPI 行为一致），别的才 404
-    _POST_ONLY = {"/api/browse", "/api/scan", "/api/convert", "/api/reconvert",
+    _POST_ONLY = {"/api/browse", "/api/pickdir", "/api/scan", "/api/convert", "/api/reconvert",
                   "/api/clsbuild", "/api/clsimgsearch",
                   "/api/mob/export",
                   "/api/char/render", "/api/char/export",
@@ -2940,6 +2973,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         b = self._body()
         if path == "/api/browse":
             self._api(c_browse, b.get("path") or "")
+        elif path == "/api/pickdir":
+            self._api(c_pickdir)
         elif path == "/api/scan":
             if not b.get("path"):
                 self._send_json(400, {"detail": "path 必填"})
