@@ -468,12 +468,14 @@ def _cn_workdir(data: Path) -> Path:
         return link
 
 
-def c_convert_cn(log) -> dict:
+def c_convert_cn(log, only: list[str] | None = None) -> dict:
     """国服官方客户端 → .cache\\cn\\：Map.nx（10 个地图分片 + Back/Tile/Obj 全量位图）
     + String.nx（地图名等中文表）+ Mob.nx（全部怪物素材——怪物的 canvas 分片本身
     就带完整帧结构）+ Character.nx（人物光板/头发/脸/装备部位，供 nxchar 用）。
     产物是经典布局，nxmap/nxmob/nxscan/nxchar 直接可用。
-    Map.nx 要解压并重压约 9 GB 位图，一次大约 10~40 分钟（做完永久缓存）。"""
+    Map.nx 要解压并重压约 9 GB 位图，一次大约 10~40 分钟（做完永久缓存）。
+
+    only 非空 = 只转这几项（按需转换，用户点哪行的「转换」就转哪个）。"""
     data = _cn_mode()
     if data is None:
         raise CliError("不是国服官方数据源", 1)
@@ -486,16 +488,12 @@ def c_convert_cn(log) -> dict:
     char_nx = CN_NX / "Character.nx"
     skill_nx = CN_NX / "Skill.nx"
     todo = []
-    if not str_nx.exists():
-        todo.append("String.nx")
-    if not map_nx.exists():
-        todo.append("Map.nx")
-    if not mob_nx.exists():
-        todo.append("Mob.nx")
-    if not char_nx.exists():
-        todo.append("Character.nx")
-    if not skill_nx.exists():
-        todo.append("Skill.nx")
+    for name, path in (("String.nx", str_nx), ("Map.nx", map_nx), ("Mob.nx", mob_nx),
+                       ("Character.nx", char_nx), ("Skill.nx", skill_nx)):
+        if only and name not in only:
+            continue
+        if not path.exists():
+            todo.append(name)
     if not todo:
         return {"started": False, "total": 0,
                 "message": "国服数据已转换完成（.cache\\cn）"}
@@ -3000,13 +2998,13 @@ def _web_convert(names: list[str], force: bool) -> dict:
     _need_tools()
     todo: list[Path] = []
     if _cn_mode() is not None:
-        data = _cn_mode()
-        todo_names = [n for n, p in
-                      (("String.nx", CN_NX / "String.nx"),
-                       ("Map.nx", CN_NX / "Map.nx"),
-                       ("Mob.nx", CN_NX / "Mob.nx"),
-                       ("Character.nx", CN_NX / "Character.nx"),
-                       ("Skill.nx", CN_NX / "Skill.nx")) if not p.exists()]
+        paths = {"String.nx": CN_NX / "String.nx", "Map.nx": CN_NX / "Map.nx",
+                 "Mob.nx": CN_NX / "Mob.nx", "Character.nx": CN_NX / "Character.nx",
+                 "Skill.nx": CN_NX / "Skill.nx"}
+        # 只转用户点名的那几项（names 为空才退回「缺什么转什么」）
+        todo_names = [n for n in ("String.nx", "Map.nx", "Mob.nx",
+                                  "Character.nx", "Skill.nx")
+                      if (not names or n in names) and not paths[n].exists()]
         if not todo_names:
             return {"started": False, "message": "国服数据已转换完成（.cache\\cn）"}
         cn_todo = todo_names
@@ -3026,7 +3024,7 @@ def _web_convert(names: list[str], force: bool) -> dict:
     def work():
         try:
             if cn_todo is not None:
-                c_convert_cn(lambda s: _job["log"].append(s))
+                c_convert_cn(lambda s: _job["log"].append(s), cn_todo)
                 _job["done"] = total
             else:
                 for wz in todo:
