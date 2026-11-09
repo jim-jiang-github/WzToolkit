@@ -545,7 +545,7 @@ function api(path, opts) {
 }
 function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + e.message; }
 
-let WS = null, CN = false, MAPS = [], TIMER = null;
+let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [];
 let mapSel = null;
 let MAPFILT = "all";   // all | mob | empty
 let EXPORTMOBS = false; // =「显示怪物」开关：勾选后页面与导出图都把怪物合成进去
@@ -845,13 +845,18 @@ async function scan() {
     CN = !!d.cn;
     if (d.cn) {
       // 国服官方数据源：没有 .wz 列表，显示数据源状态。
-      // 转换按需进行——缺哪个点哪行的「⬇ 转换」，不再扫描后自动全量重转
-      // （全量要 1 小时上下，只测怀旧服找图时根本不需要等）。
+      // 转换按需进行——一个「转换缺失数据」按钮把缺的 nx 一次性批量排队，
+      // 不再扫描后自动全量重转（全量要 1 小时上下，只测怀旧服找图时不需要等）。
       const cn = d.cn;
       const cls = d.cls || null;
-      // 缺数据的那一行给一个单行转换按钮
-      const cvBtn = (name) => `<button class="mini" data-cv="${name}"
-          title="只转这一个（缺什么转什么，不用等全部）">⬇ 转换</button>`;
+      // 收集所有缺失项，给一个批量转换按钮（不再一行一个按钮）
+      const missing = [];
+      if (!cn.string_nx) missing.push("String.nx");
+      if (!cn.map_nx) missing.push("Map.nx");
+      if (!cn.mob_nx) missing.push("Mob.nx");
+      if (!cn.char_nx) missing.push("Character.nx");
+      if (!cn.skill_nx) missing.push("Skill.nx");
+      CN_MISSING = missing;
       const clsRow = cls && cls.dir ? `
         <tr><td>怀旧服小地图库（mxdclassic 的 canvas 素材，怀旧服找图用）</td>
             <td>${cls.ready ? `<span class="ok">已建好（${cls.count} 张）</span>` : '<span class="miss">未建</span>'}</td>
@@ -861,29 +866,32 @@ async function scan() {
         `工作区：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
       $("#ws-mini").textContent = `：国服官方 · ${cn.map_nx ? "已转换" : "待转换"}`;
       $("#wz-table").innerHTML = `
-        <table><tr><th>数据源</th><th>状态</th><th></th></tr>
+        <table><tr><th>数据源</th><th>状态</th><th style="text-align:right">${missing.length
+            ? `<button class="mini" id="cn-cv-all"
+                title="把缺失的 ${missing.length} 项一次性排队转换（转完进度条自动停）">⬇ 转换缺失数据</button>`
+            : ""}</th></tr>
         <tr><td>Map.nx（全量 10 分片 + Back/Tile/Obj 位图，约 23 GB）</td>
             <td>${cn.map_nx ? `<span class="ok">已转换（${cn.map_nx_mb} MB）</span>` : '<span class="miss">未转换</span>'}</td>
-            <td style="text-align:right">${cn.map_nx ? "" : cvBtn("Map.nx")}</td></tr>
+            <td></td></tr>
         ${clsRow}
         <tr><td>String.nx（地图名等中文表）</td>
             <td>${cn.string_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td>
-            <td style="text-align:right">${cn.string_nx ? "" : cvBtn("String.nx")}</td></tr>
+            <td></td></tr>
         <tr><td>Mob.nx（怪物素材，${cn.mob_nx ? cn.mob_nx_gb + " GB" : "约 30 GB"}）</td>
             <td>${cn.mob_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td>
-            <td style="text-align:right">${cn.mob_nx ? "" : cvBtn("Mob.nx")}</td></tr>
+            <td></td></tr>
         <tr><td>Character.nx（人物素材，${cn.char_nx ? cn.char_nx_gb + " GB" : "约 3 GB"}）</td>
             <td>${cn.char_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td>
-            <td style="text-align:right">${cn.char_nx ? "" : cvBtn("Character.nx")}</td></tr>
+            <td></td></tr>
         <tr><td>Skill.nx（技能特效，${cn.skill_nx ? cn.skill_nx_gb + " GB" : "约 15 GB"}）</td>
             <td>${cn.skill_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td>
-            <td style="text-align:right">${cn.skill_nx ? "" : cvBtn("Skill.nx")}</td></tr>
+            <td></td></tr>
         <tr><td>清除全部数据（转换产物 + 小地图库 + 怀旧服库；.exports 导出成品不动）</td>
             <td></td>
             <td style="text-align:right"><button class="mini" id="wipe-go"
-                title="清空 .cache（瞬间完成）——之后要哪个数据点对应行的「⬇ 转换」，不会自动重转">🗑 清除</button></td></tr>
+                title="把 .cache 彻底删干净（数据量大时要几分钟）——之后点「⬇ 转换缺失数据」重转">🗑 清除</button></td></tr>
         </table>
-        <div class="muted" style="margin-top:6px">缺数据时点对应行的「⬇ 转换」，只转你需要的那一个，不用等全部。地图 / 找图 / 怪物素材 / 人物素材 / 技能特效页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
+        <div class="muted" style="margin-top:6px">缺数据时点右上角「⬇ 转换缺失数据」，一次把缺的全部转上，进度条实时显示。地图 / 找图 / 怪物素材 / 人物素材 / 技能特效页签均已支持（官方把怪物数值打包在加密包里，等级/血量显示为 0）。</div>`;
       $("#cv-row").style.display = "none";
       loadLists();
       return;
@@ -2154,7 +2162,7 @@ async function exportWindow() {
 $("#cv-go").onclick = convert;
 $("#wz-table").addEventListener("click", (e) => {
   const t = e.target;
-  if (t && t.dataset && t.dataset.cv) { convert([t.dataset.cv]); return; }
+  if (t && t.id === "cn-cv-all" && CN_MISSING.length) convert(CN_MISSING);
   if (t && t.id === "wipe-go") wipeData();
   if (t && t.id === "cls-go") clsBuild();
 });
