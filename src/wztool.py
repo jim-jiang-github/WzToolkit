@@ -3146,14 +3146,11 @@ def _is_wztool(port: int) -> bool:
 
 def cmd_web(args) -> int:
     port = args.port
-    url = f"http://127.0.0.1:{port}/"
 
-    # 已经有服务在跑：直接复用（双击第二次不会出现两个服务抢一个端口）
-    if _port_busy(port):
-        if _is_wztool(port):
-            print(f"已有 wztool 服务在跑：{url} —— 直接打开页面，不再起第二个进程。")
-        else:
-            raise CliError(f"端口 {port} 被别的程序占用了，换一个：wztool web --port 8001", 1)
+    # 已经有 wztool 在跑：直接复用（双击第二次不会出现两个服务抢一个端口）
+    if _port_busy(port) and _is_wztool(port):
+        url = f"http://127.0.0.1:{port}/"
+        print(f"已有 wztool 服务在跑：{url} —— 直接打开页面，不再起第二个进程。")
         if not args.no_open:
             try:
                 import webbrowser
@@ -3161,11 +3158,22 @@ def cmd_web(args) -> int:
             except Exception:
                 pass
         return 0
-
+    # 端口被别的程序占了（比如 sunshine 串流服务常驻 8000）：自动顺延找空位，
+    # 不再直接报错退出——双击 exe 闪退十有八九是这个。
+    if _port_busy(port):
+        for _ in range(50):
+            port += 1
+            if not _port_busy(port):
+                break
+        else:
+            raise CliError(f"端口 {args.port} 起连续 50 个都被占用了，"
+                           f"手动指定：wztool web --port 9000", 1)
+        print(f"端口 {args.port} 被别的程序占用，自动改用 {port}")
+    url = f"http://127.0.0.1:{port}/"
     try:
         srv = _Server(("127.0.0.1", port), _Handler)
     except OSError as e:
-        raise CliError(f"端口 {port} 起不来（{e}）；试试 wztool web --port 8001", 1)
+        raise CliError(f"端口 {port} 起不来（{e}）；试试 wztool web --port 9000", 1)
     print(f"wztool web 已启动: {url}  （CLI 版页面；Ctrl+C 退出）")
     # 启动即预热小地图库（找图用）：用户点「找图」时一般已经建好，
     # 不用干等一分钟；延迟几秒让地图列表/接口先响应。

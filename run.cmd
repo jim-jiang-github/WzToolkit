@@ -19,3 +19,8 @@ if not exist ".pyruntime\python.exe" (
 set "PYTHONPATH=%~dp0.pylibs"
 set "PYTHONNOUSERSITE=1"
 ".pyruntime\python.exe" "src\wztool.py" web %*
+if errorlevel 1 (
+  echo.
+  echo [run] wztool exited with an error. Press any key to close this window...
+  pause >nul
+)
