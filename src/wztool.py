@@ -2019,7 +2019,7 @@ def _mob_anim_frames(ws: Path, kind_id: str) -> dict:
             with Image.open(p) as im:
                 w, h = im.size
             anims.setdefault(name.split("_")[0], []).append((p, w, h, w // 2, _png_feet_oy(p, h)))
-    return anims
+    return _strip_noise_anims(anims)
 
 
 # 各动作的抽取权重：站/走/飞最常见，攻击次之，受击/死亡/跳跃偏少
@@ -2102,7 +2102,8 @@ def _read_manifest(outdir: Path, root: Path, url_prefix: str, pngs: list[Path]) 
                     "url": url_prefix + p.relative_to(root).as_posix(),
                     "anim": f[2], "frame": int(f[3]),
                     "w": w, "h": h, "ox": ox, "oy": oy, "delay": delay})
-    return out
+    # 素材页展示列表同样剔除加密噪点帧（源文件保留，只是不上台面）
+    return [r for r in out if not _is_noise(Path(r["path"]))]
 
 
 def c_mob_export(raw: str, preview: bool = False) -> dict:
@@ -2136,9 +2137,12 @@ def c_mob_export(raw: str, preview: bool = False) -> dict:
         raise CliError("没导出任何帧（这只怪可能没有图片资源）", 1)
     root = CACHE if preview else EXPORTS
     prefix = "/preview/" if preview else "/exports/"
-    return {"dir": str(outdir), "count": len(pngs),
-            "pngs": [prefix + p.relative_to(root).as_posix() for p in pngs[:400]],
-            "png_paths": [str(p) for p in pngs],
+    good = [p for p in pngs if not _is_noise(p)]
+    if not good:
+        raise CliError("这只怪的帧全是加密噪点（国服运行时解密，无法还原）", 1)
+    return {"dir": str(outdir), "count": len(good),
+            "pngs": [prefix + p.relative_to(root).as_posix() for p in good[:400]],
+            "png_paths": [str(p) for p in good],
             "frames": _read_manifest(outdir, root, prefix, pngs),
             "preview": preview, "link": link_info}
 
@@ -2396,6 +2400,8 @@ def c_char_render(spec: dict) -> dict:
         has_cap = any(L.get("slot") == "cap" for L in fr.get("layers") or [])
         layers = []
         for L in fr.get("layers") or []:
+            if _is_noise(outdir / L["img"]):
+                continue          # 国服加密噪点部件（无法还原）：整层不画，别把雪花贴到人身上
             if climbing and L.get("slot") == "face":
                 continue                      # 背对镜头：脸不画（客户端 climb 分支没有 face）
             if (L.get("z") or "") == "hairOverHead" and has_cap:
@@ -2493,9 +2499,13 @@ def _png_noise_flag(path: Path) -> bool | None:
     国服客户端对部分位图做了运行时解密：WZ 里的像素就是被打散的密文
     （alpha 完好、RGB 逐像素随机），wz2nx/nxskill 拿到什么就导什么，
     没有客户端密钥还原不了——只能识别出来剔除，别把雪花图摆上台面。
-    判据（双条件同时满足才判噪点，避免误杀细密的真实图案）：
-    真图案有大量「相邻像素几乎相同」的平坦区域，随机密文几乎没有；
-    且密文的颜色几乎不重复（真图案受调色板约束，重复率很高）。"""
+    判据（用 6659 张真图案 + 已知密文标定，2026-11-09）：
+    真图案有大量「相邻像素几乎相同」的平坦区（p5=0.243），密文几乎没有
+    （max≈0.11）；密文的颜色重复率显著更低（uniq 0.42~0.56），而 flat 低
+    的真图案（描边/反锯齿小部件）uniq 都 <0.39。双条件同时满足才判噪点：
+    flat >= 0.15 → 真图案；flat < 0.15 且 uniq > 0.40 → 噪点。
+    注意 alpha 通道不被加密，噪点帧的轮廓/射线都还在（缩小看像灰雾、
+    1:1 看才是彩色雪花），别被缩略图骗了。"""
     import numpy as np
     from PIL import Image
 
@@ -2516,12 +2526,47 @@ def _png_noise_flag(path: Path) -> bool | None:
     d1 = np.abs(rgb[:, 1:, :] - rgb[:, :-1, :]).max(axis=2)
     d2 = np.abs(rgb[1:, :, :] - rgb[:-1, :, :]).max(axis=2)
     flat = (int(((d1 < 8) & m1).sum()) + int(((d2 < 8) & m2).sum())) / n
-    if flat >= 0.13:                      # 平坦区够多 = 真图案
+    if flat >= 0.15:                      # 平坦区够多 = 真图案
         return False
     key = rgb[op][:, 0] * 65536 + rgb[op][:, 1] * 256 + rgb[op][:, 2]
-    if len(np.unique(key)) / int(op.sum()) <= 0.5:   # 颜色大量重复 = 真图案
+    if len(np.unique(key)) / int(op.sum()) <= 0.40:  # 颜色大量重复 = 真图案
         return False
     return True
+
+
+_NOISE_MEMO: dict[str, bool] = {}
+
+
+def _is_noise(path: Path) -> bool:
+    """_png_noise_flag 的记忆化版（None/读不了都按「不噪」处理）。
+
+    同一张图在怪物/人物/技能多条链路反复遇到，按 路径+mtime 记结论，
+    换缓存重导后自动失效。"""
+    try:
+        key = f"{path}|{path.stat().st_mtime_ns}"
+    except OSError:
+        return False
+    v = _NOISE_MEMO.get(key)
+    if v is None:
+        v = _png_noise_flag(path) is True
+        if len(_NOISE_MEMO) > 4096:
+            _NOISE_MEMO.clear()
+        _NOISE_MEMO[key] = v
+    return v
+
+
+def _strip_noise_anims(anims: dict) -> dict:
+    """剔除动画帧表里的加密噪点帧；整条动作全噪就把这个动作去掉。
+
+    国服对部分位图做运行时解密，WZ 里的像素就是密文（alpha 完好、RGB
+    逐像素随机），没有密钥还原不了——识别出来不上台面。怪物链接路
+    （图标/战斗页/地图合成/素材预览）统一走这里。"""
+    out = {}
+    for act, frs in anims.items():
+        good = [fr for fr in frs if not _is_noise(fr[0])]
+        if good:
+            out[act] = good
+    return out
 
 
 def c_skill_jobs() -> dict:
@@ -2575,13 +2620,14 @@ def c_skill_export(job: str, skill: str) -> dict:
     if not mf.exists():
         raise CliError("这个技能没有任何特效帧", 1)
     man = json.loads(mf.read_text(encoding="utf-8"))
-    # 剔除国服加密位图的噪点帧（判定结果缓存到 _noise.json，manifest 没变不重算）
+    # 剔除国服加密位图的噪点帧（判定结果缓存到 _noise.json，manifest 没变不重算；
+    # v2 = 判据重新标定过的版本，旧 v1 结论全部作废重算）
     bad: set[str] = set()
     verdict_p = outdir / "_noise.json"
     stamp = mf.stat().st_mtime
     try:
         saved = json.loads(verdict_p.read_text(encoding="utf-8"))
-        if saved.get("mtime") == stamp:
+        if saved.get("mtime") == stamp and saved.get("v") == 2:
             bad = set(saved.get("bad") or [])
     except Exception:                     # noqa: BLE001
         saved = None
@@ -2590,7 +2636,7 @@ def c_skill_export(job: str, skill: str) -> dict:
                for seq in man.get("seqs") or []
                for fr in seq.get("frames") or []
                if (outdir / fr["img"]).exists() and _png_noise_flag(outdir / fr["img"])}
-        verdict_p.write_text(json.dumps({"mtime": stamp, "bad": sorted(bad)}),
+        verdict_p.write_text(json.dumps({"v": 2, "mtime": stamp, "bad": sorted(bad)}),
                              encoding="utf-8")
     seqs = []
     for seq in man.get("seqs") or []:
@@ -2624,6 +2670,8 @@ def c_skill_export_to(job: str, skill: str) -> dict:
     files = []
     for p in sorted(Path(res["dir"]).iterdir()):
         if p.is_file():
+            if p.suffix == ".png" and _is_noise(p):
+                continue          # 加密噪点帧不进导出包（判定复用 _noise.json 结论）
             (outdir / p.name).write_bytes(p.read_bytes())
             files.append(p.name)
     return {"dir": str(outdir), "count": len(files), "files": files}
