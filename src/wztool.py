@@ -2452,6 +2452,43 @@ def _skill_nx() -> Path:
     return sk
 
 
+def _png_noise_flag(path: Path) -> bool | None:
+    """判断一张特效帧 PNG 是不是国服加密位图解不出来的噪点。
+
+    国服客户端对部分位图做了运行时解密：WZ 里的像素就是被打散的密文
+    （alpha 完好、RGB 逐像素随机），wz2nx/nxskill 拿到什么就导什么，
+    没有客户端密钥还原不了——只能识别出来剔除，别把雪花图摆上台面。
+    判据（双条件同时满足才判噪点，避免误杀细密的真实图案）：
+    真图案有大量「相邻像素几乎相同」的平坦区域，随机密文几乎没有；
+    且密文的颜色几乎不重复（真图案受调色板约束，重复率很高）。"""
+    import numpy as np
+    from PIL import Image
+
+    try:
+        with Image.open(path) as im:
+            a = np.asarray(im.convert("RGBA"), dtype=np.int32)
+    except Exception:                     # noqa: BLE001
+        return None                       # 读不了图不表态
+    op = a[:, :, 3] > 40
+    if int(op.sum()) < 150:
+        return None                       # 像素太少判断不了，保留
+    rgb = a[:, :, :3]
+    m1 = op[:, 1:] & op[:, :-1]
+    m2 = op[1:, :] & op[:-1, :]
+    n = int(m1.sum() + m2.sum())
+    if n < 100:
+        return None
+    d1 = np.abs(rgb[:, 1:, :] - rgb[:, :-1, :]).max(axis=2)
+    d2 = np.abs(rgb[1:, :, :] - rgb[:-1, :, :]).max(axis=2)
+    flat = (int(((d1 < 8) & m1).sum()) + int(((d2 < 8) & m2).sum())) / n
+    if flat >= 0.13:                      # 平坦区够多 = 真图案
+        return False
+    key = rgb[op][:, 0] * 65536 + rgb[op][:, 1] * 256 + rgb[op][:, 2]
+    if len(np.unique(key)) / int(op.sum()) <= 0.5:   # 颜色大量重复 = 真图案
+        return False
+    return True
+
+
 def c_skill_jobs() -> dict:
     """技能职业卷列表：{jobs:[{id,skills}]}（按 mtime 缓存）。"""
     sk = _skill_nx()
@@ -2503,6 +2540,33 @@ def c_skill_export(job: str, skill: str) -> dict:
     if not mf.exists():
         raise CliError("这个技能没有任何特效帧", 1)
     man = json.loads(mf.read_text(encoding="utf-8"))
+    # 剔除国服加密位图的噪点帧（判定结果缓存到 _noise.json，manifest 没变不重算）
+    bad: set[str] = set()
+    verdict_p = outdir / "_noise.json"
+    stamp = mf.stat().st_mtime
+    try:
+        saved = json.loads(verdict_p.read_text(encoding="utf-8"))
+        if saved.get("mtime") == stamp:
+            bad = set(saved.get("bad") or [])
+    except Exception:                     # noqa: BLE001
+        saved = None
+    if saved is None:
+        bad = {fr["img"]
+               for seq in man.get("seqs") or []
+               for fr in seq.get("frames") or []
+               if (outdir / fr["img"]).exists() and _png_noise_flag(outdir / fr["img"])}
+        verdict_p.write_text(json.dumps({"mtime": stamp, "bad": sorted(bad)}),
+                             encoding="utf-8")
+    seqs = []
+    for seq in man.get("seqs") or []:
+        frs = seq.get("frames") or []
+        good = [fr for fr in frs if fr["img"] not in bad]
+        if not good:
+            continue
+        if len(good) * 3 < len(frs) * 2:
+            continue                        # 噪点超过 1/3：整条序列缺帧跳闪，干脆丢掉
+        seqs.append({**seq, "frames": good})
+    man = {**man, "seqs": seqs}
     for seq in man.get("seqs") or []:
         for fr in seq.get("frames") or []:
             # 国服 Skill.nx 的帧节点没有 origin，nxskill 写出的 ax/ay 全是
