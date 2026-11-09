@@ -199,7 +199,7 @@
   .btstage { position: relative; height: 430px; border: 1px solid var(--line);
     border-radius: 10px; overflow: hidden; margin-top: 8px;
     background: linear-gradient(#28304a 0%, #1c2233 62%, #171c29 62%, #10141d 100%); }
-  .btground { position: absolute; left: 0; right: 0; top: 62%; height: 2px;
+  .btground { position: absolute; left: 0; right: 0; top: 72%; height: 2px;
     background: linear-gradient(90deg, transparent, #3a4560 15%, #3a4560 85%, transparent); }
   .btactor { position: absolute; left: 0; top: 0; }
   .btactor img { position: absolute; image-rendering: pixelated; }
@@ -1900,7 +1900,7 @@ async function btRollDmg() {
 function btGeom() {
   const st = $("#bt-stage");
   const W = st.clientWidth || 900;
-  const G = Math.round((st.clientHeight || 430) * 0.62);   // 地面 y（和 .btground 对齐）
+  const G = Math.round((st.clientHeight || 430) * 0.72);   // 地面 y（和 .btground 对齐）
   // 攻击距离：游戏里贴身输出也就一两百像素，人物/怪物以舞台中线为界
   // 相隔 ~150 游戏像素（×2 缩放），窄屏再收紧，别隔着半张图对砍
   const gap = Math.min(300, Math.max(140, Math.round(W * 0.28)));
@@ -1961,10 +1961,14 @@ function btLoops() {
     }
     const f = list[BT.ci++];
     const g = btGeom(), img = $("#bt-char img");
+    // 人物素材默认朝左，战斗页站在左侧要朝右打怪 → 水平镜像，
+    // 翻转后原锚点 ox 变成 w - ox（沿中轴线翻），站位/落点才不偏
+    const fox = f.w - (f.ox ?? f.w / 2);
     img.src = f.url;
     img.style.width = f.w * g.Z + "px"; img.style.height = f.h * g.Z + "px";
-    img.style.left = (g.charX - (f.ox ?? f.w / 2) * g.Z) + "px";
+    img.style.left = (g.charX - fox * g.Z) + "px";
     img.style.top = (g.G - (f.oy ?? f.h) * g.Z) + "px";
+    img.style.transform = "scaleX(-1)";
     const sh = $("#bt-chshadow");
     if (sh) { sh.style.width = "90px"; sh.style.left = (g.charX - 45) + "px"; sh.style.top = (g.G - 4) + "px"; }
     BT.tChar = setTimeout(stepChar, f.delay > 0 ? f.delay : 100);
