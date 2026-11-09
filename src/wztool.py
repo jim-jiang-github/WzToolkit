@@ -609,14 +609,16 @@ def _cn_workdir(data: Path) -> Path:
         return link
 
 
-def c_convert_cn(log, only: list[str] | None = None) -> dict:
+def c_convert_cn(log, only: list[str] | None = None, prog=None) -> dict:
     """国服官方客户端 → .cache\\cn\\：Map.nx（10 个地图分片 + Back/Tile/Obj 全量位图）
     + String.nx（地图名等中文表）+ Mob.nx（全部怪物素材——怪物的 canvas 分片本身
     就带完整帧结构）+ Character.nx（人物光板/头发/脸/装备部位，供 nxchar 用）。
     产物是经典布局，nxmap/nxmob/nxscan/nxchar 直接可用。
     Map.nx 要解压并重压约 9 GB 位图，一次大约 10~40 分钟（做完永久缓存）。
 
-    only 非空 = 只转这几项（按需转换，用户点哪行的「转换」就转哪个）。"""
+    only 非空 = 只转这几项（按需转换，用户点哪行的「转换」就转哪个）。
+    prog(stage, done) 可选：每开始一项回调一次（done = 已完成的项数），
+    供 WebUI 进度条实时显示当前在转哪个，不然 Map.nx 一转几十分钟进度条不动。"""
     data = _cn_mode()
     if data is None:
         raise CliError("不是国服官方数据源", 1)
@@ -638,9 +640,16 @@ def c_convert_cn(log, only: list[str] | None = None) -> dict:
     if not todo:
         return {"started": False, "total": 0,
                 "message": "国服数据已转换完成（.cache\\cn）"}
+
+    def _start(name: str) -> None:
+        if prog:
+            prog(f"转换 {name}（第 {todo.index(name) + 1}/{len(todo)} 项）", todo.index(name))
+
     if "String.nx" in todo:
+        _start("String.nx")
         _cn_wz2nx(work, "String/String_000.wz", str(str_nx), [], "String", None, log)
     if "Map.nx" in todo:
+        _start("Map.nx")
         m = [("Map/Map/Map0/_Canvas", "Map/Map/Map0/_Canvas")]
         for n in range(1, 10):
             m += [(f"Map/Map{n}", f"Map/Map{n}/Map{n}_000.wz"),
@@ -651,6 +660,7 @@ def c_convert_cn(log, only: list[str] | None = None) -> dict:
         log("  Map.nx 是全量转换（含全部物件/背景位图），大约 10~40 分钟，请耐心等 …")
         _cn_wz2nx(data, "Map/Map/Map0/Map0_000.wz", str(map_nx), m, "Map", None, log)
     if "Mob.nx" in todo:
+        _start("Mob.nx")
         # 普通怪的 WZ 卷是空的（Mob.wz 只索引事件系统），全部怪物都在 6 个
         # canvas 分片里（结构+位图一体、无外链）。基卷选 000，其余 5 片以空名
         # 挂载（= 并进 .nx 根），合成经典布局 Mob/<id>.img，nxmob 直接可用。
@@ -658,6 +668,7 @@ def c_convert_cn(log, only: list[str] | None = None) -> dict:
         log("  Mob.nx 全量转换（约 10 GB 位图，15 分钟上下）…")
         _cn_wz2nx(work, "Mob/_Canvas/_Canvas_000.wz", str(mob_nx), m, "", None, log)
     if "Character.nx" in todo:
+        _start("Character.nx")
         # 人物：基卷 Character_000.wz 是光板身体/头（000020XX / 000120XX）的结构，
         # 位图在同级 _Canvas；每个部位目录（Hair/Face/Coat/…）各有一份结构卷
         # <P>_000.wz + <P>/_Canvas 位图卷。全部以空名/部位名挂到 .nx 根，得到
@@ -670,6 +681,7 @@ def c_convert_cn(log, only: list[str] | None = None) -> dict:
         log("  Character.nx 全量转换（约 1.8 GB 位图，10 分钟上下）…")
         _cn_wz2nx(work, "Character/Character_000.wz", str(char_nx), m, "", None, log)
     if "Skill.nx" in todo:
+        _start("Skill.nx")
         # 技能：结构与位图都在 8 个 canvas 分片里（Skill.wz 本体是空壳）。基卷选
         # 000，其余 7 片空名挂载并进 .nx 根；MobSkill/Dragon/AbyssExpedition/
         # Roguelike 子卷用命名挂载（独立子树）——空名 merge 多卷时 wz2nx 的加密
@@ -3188,14 +3200,15 @@ def _web_convert(names: list[str], force: bool) -> dict:
         if _job["running"]:
             raise CliError("已有转换在跑，等它完成", 1)
         _job.update(id=_job["id"] + 1, running=True, log=[], done=0,
-                    total=total, error="")
+                    total=total, stage="", error="")
 
     def work():
         try:
             if cn_todo is not None:
                 if cn_todo:
-                    c_convert_cn(lambda s: _job["log"].append(s), cn_todo)
-                    _job["done"] = total - (1 if cls_todo else 0)
+                    c_convert_cn(lambda s: _job["log"].append(s), cn_todo,
+                                 prog=lambda stage, done: _job.update(stage=stage, done=done))
+                    _job.update(stage="", done=total - (1 if cls_todo else 0))
                 if cls_todo:
                     _job["log"].append("转换完成，接着构建怀旧服小地图库…")
                     _cls_build()
