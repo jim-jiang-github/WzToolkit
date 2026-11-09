@@ -2467,7 +2467,7 @@ def c_skill_export(job: str, skill: str) -> dict:
     """导出一个技能的全部特效序列（帧 PNG + manifest.json），缓存到 .cache/skill/。"""
     sk = _skill_nx()
     job = re.sub(r"\D", "", str(job))[:6]
-    skill = re.sub(r"\D", "", str(skill))[:8]
+    skill = re.sub(r"\D", "", str(skill))[:12]
     if not job or not skill:
         raise CliError("技能 id 不合法", 2)
     outdir = CACHE / "skill" / job / skill
