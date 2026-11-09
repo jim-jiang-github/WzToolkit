@@ -192,31 +192,31 @@
   /* 怪物素材查看器：左列表 + 右帧播放/逐帧表 */
   #mobdex[hidden] { display: none; }
   #skdex[hidden] { display: none; }
-  #mobdex .md-bar { padding: 8px 14px; display: flex; gap: 10px; align-items: center;
+  .md-bar { padding: 8px 14px; display: flex; gap: 10px; align-items: center;
                     flex-wrap: wrap; background: var(--panel);
                     border-bottom: 1px solid var(--line); }
-  #mobdex .md-bar input[type=text] { min-width: 240px; padding: 5px 10px; }
-  #mobdex .md-body { flex: 1; min-height: 0; display: grid;
+  .md-bar input[type=text] { min-width: 240px; padding: 5px 10px; }
+  .md-body { flex: 1; min-height: 0; display: grid;
                      grid-template-columns: 290px 1fr; gap: 12px; padding: 12px 14px; }
-  #mobdex .md-list { border: 1px solid var(--line); border-radius: 8px; overflow: auto;
+  .md-list { border: 1px solid var(--line); border-radius: 8px; overflow: auto;
                      background: #0b0f14; }
-  #mobdex .md-list .it { padding: 5px 10px; cursor: pointer;
+  .md-list .it { padding: 5px 10px; cursor: pointer;
                          border-bottom: 1px solid #1c2128; display: flex; gap: 8px;
                          align-items: baseline; }
-  #mobdex .md-list .it:hover { background: #161b22; }
-  #mobdex .md-list .it.on { background: #0e3b35; }
-  #mobdex .md-list .id { font: 12.5px Consolas, monospace; color: var(--acc2); }
-  #mobdex .md-list .nm { color: var(--mut); font-size: 12.5px; overflow: hidden;
+  .md-list .it:hover { background: #161b22; }
+  .md-list .it.on { background: #0e3b35; }
+  .md-list .id { font: 12.5px Consolas, monospace; color: var(--acc2); }
+  .md-list .nm { color: var(--mut); font-size: 12.5px; overflow: hidden;
                          text-overflow: ellipsis; white-space: nowrap; }
-  #mobdex .md-list .it.big { background: linear-gradient(90deg, #3d0d14, #1b0b0f 70%); }
-  #mobdex .md-list .it.big .id { color: #ff8f8f; }
-  #mobdex .md-list .it.big .nm { color: #ff6b6b; font-weight: 600; }
-  #mobdex .md-list .it.boss { background: linear-gradient(90deg, #2e1c05, #171008 70%); }
-  #mobdex .md-list .it.boss .id { color: #d9a441; }
-  #mobdex .md-list .it.boss .nm { color: #ffb454; }
-  #mobdex .md-list .it.big.on { background: #521019; }
-  #mobdex .md-list .it.boss.on { background: #4a2f08; }
-  #mobdex .md-detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+  .md-list .it.big { background: linear-gradient(90deg, #3d0d14, #1b0b0f 70%); }
+  .md-list .it.big .id { color: #ff8f8f; }
+  .md-list .it.big .nm { color: #ff6b6b; font-weight: 600; }
+  .md-list .it.boss { background: linear-gradient(90deg, #2e1c05, #171008 70%); }
+  .md-list .it.boss .id { color: #d9a441; }
+  .md-list .it.boss .nm { color: #ffb454; }
+  .md-list .it.big.on { background: #521019; }
+  .md-list .it.boss.on { background: #4a2f08; }
+  .md-detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
                        overflow: auto; background: #0b0f14; min-height: 0; }
   /* 动画帧组：所有帧共用一个按 origin 对齐的画布，默认 1x = 客户端真实渲染尺寸 */
   .animgrp { margin: 10px 0 4px; }
@@ -2232,10 +2232,10 @@ $("#md-q").oninput = mdRenderList;
 /* 技能特效查看器事件 */
 $("#sk-q").oninput = skRenderList;
 $("#sk-export").onclick = (e) => skExport(e.currentTarget);
-$("#mobdex .md-bar").onclick = (e) => {
+$(".md-bar").onclick = (e) => {
   const b = e.target.closest(".md-flt");
   if (!b) return;
-  $$("#mobdex .md-flt").forEach((x) => x.classList.remove("on"));
+  $$(".md-flt").forEach((x) => x.classList.remove("on"));
   b.classList.add("on");
   MD.filt = b.dataset.f;
   mdRenderList();
