@@ -1942,6 +1942,15 @@ def _ensure_mob_preview(raw: str, ws: Path) -> Path:
     return outdir
 
 
+def _mob_anchor(w: int, h: int, ox: int, oy: int) -> tuple[int, int]:
+    """怪物帧锚点兜底：国服 Mob.nx 的帧节点下没有 origin 属性，nxmob 写出的
+    manifest 全是 (0,0)——那是「贴图左上角」而不是锚点，会把怪摆到地面右下方。
+    没有真锚点时按怪物通用规则取脚底中心。"""
+    if ox == 0 and oy == 0:
+        return w // 2, h
+    return ox, oy
+
+
 def _mob_anim_frames(ws: Path, kind_id: str) -> dict:
     """一种怪的全部动画帧，按动作分组：{action: [(path, w, h, ox, oy), ...]}。
 
@@ -1972,6 +1981,7 @@ def _mob_anim_frames(ws: Path, kind_id: str) -> dict:
                 w, h, ox, oy = (int(x) for x in f[5:9])
             except ValueError:
                 continue
+            ox, oy = _mob_anchor(w, h, ox, oy)
             anims.setdefault(f[2], []).append((by_name[f[4]], w, h, ox, oy))
     if not anims and by_name:          # 兜底：没有 manifest 就按文件名前缀分组
         from PIL import Image
@@ -2056,6 +2066,7 @@ def _read_manifest(outdir: Path, root: Path, url_prefix: str, pngs: list[Path]) 
             w, h, ox, oy, delay = (int(x) for x in f[5:10])
         except ValueError:
             continue
+        ox, oy = _mob_anchor(w, h, ox, oy)
         out.append({"file": f[4],
                     "path": str(p),
                     "url": url_prefix + p.relative_to(root).as_posix(),
@@ -2359,16 +2370,26 @@ def c_char_render(spec: dict) -> dict:
             x, y = _char_layer_xy(L, A)
             layers.append((_char_rank(L, fr.get("action") or ""), x, y, outdir / L["img"], L))
         layers.sort(key=lambda t: t[0])       # 稳定排序：同层保持 dump 顺序
-        plans.append((fr, layers))
+        body = next(((x, y, L) for _, x, y, _, L in layers
+                     if L.get("slot") == "body"), None)
+        plans.append((fr, layers, body))
 
-    x0 = min(x for _, ls in plans for _, x, _, _, _ in ls)
-    y0 = min(y for _, ls in plans for _, _, y, _, _ in ls)
-    x1 = max(x + L["w"] for _, ls in plans for _, x, _, _, L in ls)
-    y1 = max(y + L["h"] for _, ls in plans for _, _, y, _, L in ls)
+    x0 = min(x for _, ls, _b in plans for _, x, _, _, _ in ls)
+    y0 = min(y for _, ls, _b in plans for _, _, y, _, _ in ls)
+    x1 = max(x + L["w"] for _, ls, _b in plans for _, x, _, _, L in ls)
+    y1 = max(y + L["h"] for _, ls, _b in plans for _, _, y, _, L in ls)
     bw, bh = max(1, x1 - x0), max(1, y1 - y0)
 
     out = []
-    for fr, layers in plans:
+    for fr, layers, body in plans:
+        # 脚底锚点：body 部件的 origin 在画布里的位置——客户端就是拿它对齐
+        # 角色站位点的。合成画布是全动作的公共包围盒，没有这个锚点帧会悬空。
+        if body:
+            bx, by, BL = body
+            ox = bx + int(BL.get("ox") or 0) - x0
+            oy = by + int(BL.get("oy") or 0) - y0
+        else:
+            ox, oy = bw // 2, bh
         im = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
         for _, x, y, png, _L in layers:
             try:
@@ -2380,7 +2401,8 @@ def c_char_render(spec: dict) -> dict:
         im.save(outdir / name)
         out.append({"action": fr["action"], "frame": fr["frame"],
                     "delay": max(20, int(fr.get("delay") or 100)),
-                    "url": f"/preview/char/{key}/{name}", "w": bw, "h": bh})
+                    "url": f"/preview/char/{key}/{name}", "w": bw, "h": bh,
+                    "ox": ox, "oy": oy})
 
     return {"key": key, "spec": sp, "box": [x0, y0, bw, bh],
             "frames": out, "dir": str(outdir)}
@@ -2483,6 +2505,10 @@ def c_skill_export(job: str, skill: str) -> dict:
     man = json.loads(mf.read_text(encoding="utf-8"))
     for seq in man.get("seqs") or []:
         for fr in seq.get("frames") or []:
+            # 国服 Skill.nx 的帧节点没有 origin，nxskill 写出的 ax/ay 全是
+            # (0,0)（= 贴图左上角）。按中心兜底：命中/施法特效绕锚点环绕更自然。
+            if not fr.get("ax") and not fr.get("ay"):
+                fr["ax"], fr["ay"] = (fr.get("w") or 0) // 2, (fr.get("h") or 0) // 2
             fr["url"] = "/preview/skill/" + job + "/" + skill + "/" + fr["img"]
     for i, ic in enumerate(man.get("icons") or []):
         man["icons"][i] = "/preview/skill/" + job + "/" + skill + "/" + ic
