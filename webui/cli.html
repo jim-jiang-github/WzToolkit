@@ -193,6 +193,30 @@
   #mobdex[hidden] { display: none; }
   #skdex[hidden] { display: none; }
   #dmgdex[hidden] { display: none; }
+  #battle[hidden] { display: none; }
+
+  /* 🎲 随机战斗舞台 */
+  .btstage { position: relative; height: 430px; border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; margin-top: 8px;
+    background: linear-gradient(#28304a 0%, #1c2233 62%, #171c29 62%, #10141d 100%); }
+  .btground { position: absolute; left: 0; right: 0; top: 62%; height: 2px;
+    background: linear-gradient(90deg, transparent, #3a4560 15%, #3a4560 85%, transparent); }
+  .btactor { position: absolute; left: 0; top: 0; }
+  .btactor img { position: absolute; image-rendering: pixelated; }
+  .bteff { position: absolute; left: 0; top: 0; pointer-events: none; }
+  .bteff img { position: absolute; image-rendering: pixelated; }
+  .btshadow { position: absolute; height: 8px; border-radius: 50%;
+    background: radial-gradient(closest-side, rgba(0,0,0,.45), transparent); }
+  .bt-dmgnum { position: absolute; pointer-events: none;
+    animation: btdmg 1.6s cubic-bezier(.2,.7,.4,1) forwards; }
+  .bt-dmgnum img { position: absolute; image-rendering: pixelated; }
+  @keyframes btdmg {
+    0%   { opacity: 0; transform: translateY(10px) scale(.7); }
+    12%  { opacity: 1; transform: translateY(0) scale(1.12); }
+    22%  { transform: translateY(-2px) scale(1); }
+    75%  { opacity: 1; transform: translateY(-26px); }
+    100% { opacity: 0; transform: translateY(-42px); }
+  }
   .dmgscale { position: relative; display: inline-block;
               transform: scale(2); transform-origin: 0 0;
               image-rendering: pixelated; }
@@ -419,6 +443,7 @@
         <button data-m="char" title="人物素材：肤色/发型/脸/帽子/衣服/武器随便配，实时合成动画并导出逐帧 PNG">🧑 人物素材</button>
         <button data-m="skill" title="技能特效：按职业浏览全部技能，播放每个技能的施放/弹道/命中/全屏特效，导出逐帧 PNG">✨ 技能特效</button>
         <button data-m="dmg" title="伤害数字：Effect/BasicEff 里的全部伤害数字样式（红/蓝/暴击…），输入数字实时预览，导出逐帧 PNG">🔢 伤害数字</button>
+        <button data-m="battle" title="随机战斗：人物 / 技能 / 怪物 / 伤害数字随机组合——换一批重新抽，自动播放攻击和伤害">🎲 随机战斗</button>
       </div>
       <span style="flex:1"></span>
       <span class="muted" id="mode-hint"></span>
@@ -536,6 +561,18 @@
         <div class="md-list" id="dmg-list"></div>
         <div class="md-detail" id="dmg-detail"><span class="muted">左侧选一套数字样式：输入任意数字实时预览效果，Miss / 防御等特殊帧单独列出。</span></div>
       </div>
+    </div>
+
+    <div class="pane" id="battle" hidden>
+      <div class="md-bar">
+        <button class="primary mini" id="bt-roll" title="人物 / 技能 / 怪物 / 伤害样式全部重新随机">🎲 换一批</button>
+        <button class="mini" id="bt-atk">⚔️ 攻击</button>
+        <label class="muted" style="display:flex;align-items:center;gap:4px">
+          <input type="checkbox" id="bt-auto" checked> 自动攻击</label>
+        <span class="muted" id="bt-info"></span>
+      </div>
+      <div class="btstage" id="bt-stage"><span class="muted" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">抽卡中 …</span></div>
+      <div class="muted" id="bt-note" style="margin-top:6px">人物 / 技能 / 怪物 / 伤害样式全部随机——点「🎲 换一批」重新抽；「⚔️ 攻击」打一轮：技能特效 + 怪物受击 + 真实排版的伤害数字（5% 概率 Miss）。需要 Mob.nx / Character.nx / Skill.nx / 伤害数字库都已就绪。</div>
     </div>
   </div>
 
@@ -1669,6 +1706,49 @@ function dmgAdvance(c, first, critical) {
   return a;
 }
 
+/* 按客户端 DamageNumber.cpp 算法排版一串数字。
+   返回 { boxes:[{f,x,y}], W, H, firstId, restId, critical }，坐标已归一化到 (0,0)。 */
+function dmgLayout(sets, setId, text) {
+  const s = sets.find((t) => t.id === setId);
+  if (!s) return null;
+  const by = {};
+  s.frames.forEach((f) => by[f.k] = f);
+  // 配对：NoXxx0/NoXxx1 互为一组 —— 首位用 -1（大号），其余用 -0（小号）
+  const m = s.id.match(/^(No.*)([01])$/);
+  const pair = m ? sets.find((t) => t.id === m[1] + (m[2] === "0" ? "1" : "0")) : null;
+  const restSet = (pair && /0$/.test(pair.id) ? pair : s);
+  const firstSet = (pair && /1$/.test(pair.id) ? pair : s);
+  const critical = firstSet.id.startsWith("NoCri");
+  const rby = {};
+  restSet.frames.forEach((f) => rby[f.k] = f);
+
+  const chars = [...text].filter((c) => DMG_ADV[c] && by[c] && rby[c]);
+  if (!chars.length) return null;
+  const boxes = [];
+  let x = 0;
+  const f0 = firstSet.frames.find((f) => f.k === chars[0]) || by[chars[0]];
+  boxes.push({ f: f0, x: -f0.ox, y: -f0.oy });
+  x += dmgAdvance(chars[0], true, critical);
+  for (let i = 1; i < chars.length; i++) {
+    const c = chars[i];
+    const f = rby[c];
+    const yc = (i - 1) % 2 ? -2 : 2;             // 波浪形：+2 / -2 交替
+    boxes.push({ f, x: x - f.ox, y: yc - f.oy });
+    const adv = i < chars.length - 1
+      ? Math.round((dmgAdvance(c, false, critical)
+                    + dmgAdvance(chars[i + 1], false, critical)) / 2)
+      : dmgAdvance(c, false, critical);
+    x += adv;
+  }
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  boxes.forEach(({ f, x: bx, y: byy }) => {
+    minX = Math.min(minX, bx); minY = Math.min(minY, byy);
+    maxX = Math.max(maxX, bx + f.w); maxY = Math.max(maxY, byy + f.h);
+  });
+  return { boxes, W: maxX - minX, H: maxY - minY, minX, minY,
+           firstId: firstSet.id, restId: restSet.id, critical };
+}
+
 function dmgRenderCanvas(s, by) {
   const wrap = $("#dmg-canvas-wrap");
   const raw = ($("#dmg-text").value || "").trim();
@@ -1680,49 +1760,16 @@ function dmgRenderCanvas(s, by) {
         <img src="${special.url}" style="position:absolute;left:0;top:0;width:${special.w}px;height:${special.h}px"></span></span>`;
     return;
   }
-  // 配对：NoXxx0/NoXxx1 互为一组 —— 首位用 -1（大号），其余用 -0（小号）
-  const m = s.id.match(/^(No.*)([01])$/);
-  const pair = m ? DMG.sets.find((t) => t.id === m[1] + (m[2] === "0" ? "1" : "0")) : null;
-  const restSet = (pair && /0$/.test(pair.id) ? pair : s);
-  const firstSet = (pair && /1$/.test(pair.id) ? pair : s);
-  const critical = firstSet.id.startsWith("NoCri");
-  const rby = {};
-  restSet.frames.forEach((f) => rby[f.k] = f);
-
-  const chars = [...raw].filter((c) => DMG_ADV[c] && by[c] && rby[c]);
-  if (!chars.length) {
+  const L = dmgLayout(DMG.sets, s.id, raw);
+  if (!L) {
     wrap.innerHTML = '<span class="muted">输入数字（0-9），或 Miss / guard 等特殊帧名</span>';
     return;
   }
-  // 按客户端算法排版：锚点坐标（x, y），位图绘制在 (x-ox, y-oy)
-  const boxes = [];
-  let x = 0;
-  const f0 = firstSet.frames.find((f) => f.k === chars[0]) || by[chars[0]];
-  boxes.push([f0, -f0.ox, -f0.oy]);
-  x += dmgAdvance(chars[0], true, critical);
-  for (let i = 1; i < chars.length; i++) {
-    const c = chars[i];
-    const f = rby[c];
-    const yc = (i - 1) % 2 ? -2 : 2;             // 波浪形：+2 / -2 交替
-    boxes.push([f, x - f.ox, yc - f.oy]);
-    const adv = i < chars.length - 1
-      ? Math.round((dmgAdvance(c, false, critical)
-                    + dmgAdvance(chars[i + 1], false, critical)) / 2)
-      : dmgAdvance(c, false, critical);
-    x += adv;
-  }
-  // 求包围盒，归一化到 (0,0)
-  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-  boxes.forEach(([f, bx, byy]) => {
-    minX = Math.min(minX, bx); minY = Math.min(minY, byy);
-    maxX = Math.max(maxX, bx + f.w); maxY = Math.max(maxY, byy + f.h);
-  });
-  const W = maxX - minX, H = maxY - minY;
-  const imgs = boxes.map(([f, bx, byy]) =>
-    `<img src="${f.url}" style="position:absolute;left:${bx - minX}px;top:${byy - minY}px;width:${f.w}px;height:${f.h}px">`).join("");
-  wrap.innerHTML = `<span style="display:inline-block;width:${W * 2}px;height:${H * 2}px">
-      <span class="dmgscale" style="width:${W}px;height:${H}px;position:relative">${imgs}</span></span>
-    <div class="muted" style="font-size:12px;margin-top:4px">首位 ${firstSet.id}（大号）· 其余 ${restSet.id} · 波浪错位 ±2px${critical ? " · 暴击间距" : ""}</div>`;
+  const imgs = L.boxes.map(({ f, x, y }) =>
+    `<img src="${f.url}" style="position:absolute;left:${x - L.minX}px;top:${y - L.minY}px;width:${f.w}px;height:${f.h}px">`).join("");
+  wrap.innerHTML = `<span style="display:inline-block;width:${L.W * 2}px;height:${L.H * 2}px">
+      <span class="dmgscale" style="width:${L.W}px;height:${L.H}px;position:relative">${imgs}</span></span>
+    <div class="muted" style="font-size:12px;margin-top:4px">首位 ${L.firstId}（大号）· 其余 ${L.restId} · 波浪错位 ±2px${L.critical ? " · 暴击间距" : ""}</div>`;
 }
 
 async function dmgExport(btn) {
@@ -1743,6 +1790,313 @@ async function dmgExport(btn) {
   }
 }
 
+/* ---------------- 🎲 随机战斗：人物 + 技能 + 伤害数字 + 怪物 随机组合 ---------------- */
+const BT_CATS = ["hair", "face", "cap", "coat", "pants", "longcoat",
+                 "shoes", "glove", "cape", "shield", "weapon"];
+const BT = {
+  gen: 0, loaded: false,
+  parts: null, jobs: null, skl: {}, mobs: null, dmgSets: null,
+  char: null, charSpec: null, charAct: "stand1", ci: 0,
+  mob: null, mobName: "", mobAct: "stand", mi: 0,
+  skill: null, skillName: "", skillJob: "", dmgSetId: "",
+  tChar: 0, tMob: 0, tAuto: 0, timers: [], busy: false,
+};
+
+function btStop() {
+  BT.gen++;                                        // 令所有在飞的回调失效
+  clearTimeout(BT.tChar); clearTimeout(BT.tMob);
+  BT.timers.forEach(clearTimeout); BT.timers = [];
+  clearInterval(BT.tAuto); BT.tAuto = 0;
+  BT.busy = false;
+}
+function btPause() { btStop(); }                   // 切走页签：停动画，回来续播
+
+function btOpen() {
+  if (!BT.loaded) { BT.loaded = true; btRoll(); return; }
+  if (BT.char || BT.mob) { btLoops(); btAuto(); }
+}
+
+async function btRollChar() {
+  if (!BT.parts) {
+    const lists = await Promise.all(BT_CATS.map((c) =>
+      api("/api/char/parts?cat=" + c).catch(() => null)));
+    BT.parts = {};
+    BT_CATS.forEach((c, i) => BT.parts[c] = (lists[i] && lists[i].items) || []);
+  }
+  const P = BT.parts;
+  const pick = (c) => P[c].length
+    ? P[c][Math.floor(Math.random() * P[c].length)].id : "";
+  const maybe = (c, p) => (P[c].length && Math.random() < p) ? pick(c) : "";
+  const spec = { skin: 0, hair: pick("hair"), face: pick("face"),
+    cap: maybe("cap", .55), coat: "", pants: pick("pants"), longcoat: "",
+    shoes: pick("shoes"), glove: maybe("glove", .4), cape: maybe("cape", .3),
+    shield: maybe("shield", .25), weapon: maybe("weapon", .85) };
+  if (Math.random() < .7 || !P["longcoat"].length) spec.coat = pick("coat");
+  else spec.longcoat = pick("longcoat");
+  const d = await api("/api/char/render", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...spec,
+      actions: ["stand1", "alert", "stabO1", "swingO1", "swingT1", "stabT1"] }),
+  });
+  BT.char = d; BT.charSpec = d.spec || spec; BT.charAct = "stand1"; BT.ci = 0;
+}
+
+async function btRollMob() {
+  if (!BT.mobs) {
+    const d = await api("/api/mobs");
+    BT.mobs = (d.mobs || []).filter((m) => m.img_ok);
+  }
+  if (!BT.mobs.length) throw new Error("没有可显示的怪物（Mob.nx 没转换？）");
+  for (let t = 0; t < 6; t++) {
+    const m = BT.mobs[Math.floor(Math.random() * BT.mobs.length)];
+    try {
+      BT.mob = await api("/api/mob/icon/" + m.id);
+      BT.mobName = m.name || m.id;
+      BT.mobAct = (BT.mob.anims && BT.mob.anims.stand) ? "stand"
+        : Object.keys(BT.mob.anims || {})[0];
+      BT.mi = 0;
+      return;
+    } catch (e) { /* 这只怪资源坏了，换一只 */ }
+  }
+  throw new Error("连抽几只怪都没有图片资源");
+}
+
+async function btRollSkill() {
+  if (!BT.jobs) {
+    const d = await api("/api/skill/jobs");
+    BT.jobs = (d.jobs || []).filter((j) => (j.skills | 0) > 0);
+  }
+  if (!BT.jobs.length) throw new Error("没有技能数据（Skill.nx 没转换？）");
+  for (let t = 0; t < 8; t++) {
+    const job = BT.jobs[Math.floor(Math.random() * BT.jobs.length)];
+    if (!BT.skl[job.id]) {
+      const d = await api("/api/skill/list?job=" + encodeURIComponent(job.id));
+      BT.skl[job.id] = d.items || [];
+    }
+    const items = BT.skl[job.id];
+    if (!items.length) continue;
+    const s = items[Math.floor(Math.random() * items.length)];
+    try {
+      const d = await api("/api/skill/frames?job=" + encodeURIComponent(job.id) +
+                          "&skill=" + encodeURIComponent(s.id));
+      const seqs = (d.manifest && d.manifest.seqs) || [];
+      if (!seqs.some((q) => q.frames && q.frames.length)) continue;
+      BT.skill = d; BT.skillName = s.name || s.id; BT.skillJob = job.id;
+      return;
+    } catch (e) { /* 这个技能没特效帧，换一个 */ }
+  }
+  BT.skill = null;      // 没抽到也不致命：攻击就只有伤害数字
+}
+
+async function btRollDmg() {
+  if (!BT.dmgSets) {
+    const d = await api("/api/dmg/sets");
+    BT.dmgSets = d.items || [];
+  }
+  if (!BT.dmgSets.length) throw new Error("伤害数字库没建（工作区里点「转换缺失数据」）");
+  BT.dmgSetId = BT.dmgSets[Math.floor(Math.random() * BT.dmgSets.length)].id;
+}
+
+function btGeom() {
+  const st = $("#bt-stage");
+  const W = st.clientWidth || 900;
+  const G = Math.round((st.clientHeight || 430) * 0.62);   // 地面 y（和 .btground 对齐）
+  return { W, G, charX: Math.round(W * 0.24), mobX: Math.round(W * 0.76), Z: 2 };
+}
+
+function btInfo() {
+  $("#bt-info").textContent = [
+    BT.skill ? `技能 ${BT.skillName}` : "技能（没抽到）",
+    BT.mob ? `怪物 ${BT.mobName}` : "",
+    BT.dmgSetId ? `数字 ${BT.dmgSetId}` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+async function btRoll() {
+  btStop();
+  const gen = BT.gen;
+  const st = $("#bt-stage");
+  st.innerHTML = '<span class="muted" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">抽卡中 …（技能特效首次导出要等几秒）</span>';
+  $("#bt-info").textContent = "";
+  const rs = await Promise.allSettled([btRollChar(), btRollMob(), btRollSkill(), btRollDmg()]);
+  if (gen !== BT.gen) return;                      // 抽卡途中又点了「换一批」
+  if (!BT.char || !BT.mob) {
+    const errs = rs.filter((r) => r.status === "rejected")
+      .map((r) => (r.reason && r.reason.message) || r.reason).join("；");
+    st.innerHTML = `<span class="miss" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">随机失败：${errs || "未知错误"}</span>`;
+    return;
+  }
+  btBuildStage();
+  btLoops();
+  btAuto();
+  btInfo();
+  BT.timers.push(setTimeout(() => { if (gen === BT.gen) btAttack(); }, 900));
+}
+
+function btBuildStage() {
+  $("#bt-stage").innerHTML = `
+    <div class="btground"></div>
+    <div class="btshadow" id="bt-chshadow"></div>
+    <div class="btshadow" id="bt-mbshadow"></div>
+    <div class="btactor" id="bt-char"><img></div>
+    <div class="btactor" id="bt-mob"><img></div>
+    <div class="bteff" id="bt-effs"></div>`;
+}
+
+function btLoops() {
+  const gen = BT.gen;
+  const stepChar = () => {
+    if (gen !== BT.gen || !BT.char || !$("#bt-char")) return;
+    let list = BT.char.frames.filter((f) => f.action === BT.charAct);
+    if (!list.length && BT.charAct !== "stand1") { BT.charAct = "stand1"; BT.ci = 0; }
+    list = BT.char.frames.filter((f) => f.action === BT.charAct);
+    if (!list.length) return;
+    if (BT.ci >= list.length) {
+      BT.ci = 0;
+      if (BT.charAct !== "stand1") { BT.charAct = "stand1"; list = BT.char.frames.filter((f) => f.action === "stand1"); }
+    }
+    const f = list[BT.ci++];
+    const g = btGeom(), img = $("#bt-char img");
+    img.src = f.url;
+    img.style.width = f.w * g.Z + "px"; img.style.height = f.h * g.Z + "px";
+    img.style.left = (g.charX - f.w * g.Z / 2) + "px";
+    img.style.top = (g.G - f.h * g.Z) + "px";
+    const sh = $("#bt-chshadow");
+    if (sh) { sh.style.width = "90px"; sh.style.left = (g.charX - 45) + "px"; sh.style.top = (g.G - 4) + "px"; }
+    BT.tChar = setTimeout(stepChar, f.delay > 0 ? f.delay : 100);
+  };
+  const stepMob = () => {
+    if (gen !== BT.gen || !BT.mob || !$("#bt-mob")) return;
+    const anims = BT.mob.anims || {};
+    let list = anims[BT.mobAct];
+    if (!list) { BT.mobAct = "stand"; list = anims.stand; }
+    if (!list) return;
+    if (BT.mi >= list.length) {
+      BT.mi = 0;
+      if (BT.mobAct !== "stand" && anims.stand) { BT.mobAct = "stand"; list = anims.stand; }
+    }
+    const f = list[BT.mi++];
+    const g = btGeom(), img = $("#bt-mob img");
+    img.src = f.url;
+    img.style.width = f.w * g.Z + "px"; img.style.height = f.h * g.Z + "px";
+    img.style.left = (g.mobX - f.ox * g.Z) + "px";
+    img.style.top = (g.G - f.oy * g.Z) + "px";
+    const sh = $("#bt-mbshadow");
+    if (sh) { sh.style.width = Math.round(f.w * g.Z * .7) + "px";
+      sh.style.left = (g.mobX - f.w * g.Z * .35) + "px"; sh.style.top = (g.G - 4) + "px"; }
+    BT.tMob = setTimeout(stepMob, 110);
+  };
+  stepChar(); stepMob();
+}
+
+function btSeqDur(q) {
+  return (q.frames || []).reduce((s, f) => s + (f.delay > 0 ? f.delay : 120), 0);
+}
+
+/* 播一组特效序列：锚点 (xFn(), yFn()) 处逐帧，播完自动移除。返回总时长 ms */
+function btPlaySeq(q, xFn, yFn) {
+  const gen = BT.gen, host = $("#bt-effs");
+  if (!host || !q.frames || !q.frames.length) return 0;
+  const img = document.createElement("img");
+  host.appendChild(img);
+  let k = 0;
+  const step = () => {
+    if (gen !== BT.gen || k >= q.frames.length) { img.remove(); return; }
+    const f = q.frames[k++], Z = 2;
+    img.src = f.url;
+    img.style.width = f.w * Z + "px"; img.style.height = f.h * Z + "px";
+    img.style.left = (xFn() - f.ax * Z) + "px";
+    img.style.top = (yFn() - f.ay * Z) + "px";
+    setTimeout(step, f.delay > 0 ? f.delay : 120);
+  };
+  step();
+  return btSeqDur(q);
+}
+
+function btAttack() {
+  if (BT.busy || !BT.char || !BT.mob) return;
+  const gen = BT.gen;
+  BT.busy = true;
+  // 攻击动作：随机挑一个这套外观真的有的（stabO1/swingO1…），没有就摆 alert 架势
+  const acts = [...new Set(BT.char.frames.map((f) => f.action))]
+    .filter((a) => a !== "stand1" && a !== "alert");
+  BT.charAct = acts.length ? acts[Math.floor(Math.random() * acts.length)] : "alert";
+  BT.ci = 0;                              // 打完一轮自动回 stand1（stepChar 的回退逻辑）
+  const seqs = (BT.skill && BT.skill.manifest && BT.skill.manifest.seqs) || [];
+  const playable = seqs.filter((q) => q.frames && q.frames.length);
+  let hitDelay = 650, total = 1600;
+  if (playable.length) {
+    total = Math.max(total, btPlaySeq(playable[0],   // 第一组：施法特效，放人物身上
+      () => btGeom().charX, () => btGeom().G - 40) + 300);
+    const onMob = playable.slice(1);      // 其余组：弹道/命中，叠怪物身上
+    if (onMob.length) {
+      let longest = 0;
+      onMob.forEach((q) => {
+        longest = Math.max(longest, btPlaySeq(q,
+          () => btGeom().mobX, () => btGeom().G - 60));
+      });
+      hitDelay = Math.max(300, longest * 0.45);
+      total = Math.max(total, longest + 300);
+    }
+  }
+  BT.timers.push(setTimeout(() => {
+    if (gen !== BT.gen) return;
+    const anims = BT.mob.anims || {};
+    if (anims.hit1 || anims.hit2) {       // 受击动作一轮，打完自动回 stand
+      BT.mobAct = anims.hit1 ? "hit1" : "hit2"; BT.mi = 0;
+    }
+    btSpawnDamage();
+  }, hitDelay));
+  BT.timers.push(setTimeout(() => { if (gen === BT.gen) BT.busy = false; }, total));
+}
+
+function btSpawnDamage() {
+  const st = $("#bt-stage");
+  if (!st || !BT.dmgSets || !BT.dmgSetId) return;
+  const g = btGeom(), Z = 2;
+  const layer = document.createElement("div");
+  layer.className = "bt-dmgnum";
+  let html = "", W = 0, H = 0;
+  if (Math.random() < 0.05) {             // 5% Miss
+    const s = BT.dmgSets.find((t) => t.id === BT.dmgSetId);
+    const fr = s && s.frames.find((f) => f.k === "Miss");
+    if (fr) {
+      W = fr.w * Z; H = fr.h * Z;
+      html = `<img src="${fr.url}" style="left:0;top:0;width:${fr.w * Z}px;height:${fr.h * Z}px">`;
+    }
+  }
+  if (!html) {
+    const digits = 3 + Math.floor(Math.random() * 7);    // 3~9 位伤害
+    let v = "";
+    for (let i = 0; i < digits; i++) v += Math.floor(Math.random() * 10);
+    if (v[0] === "0") v = "1" + v.slice(1);
+    const L = dmgLayout(BT.dmgSets, BT.dmgSetId, v);
+    if (L) {
+      W = L.W * Z; H = L.H * Z;
+      html = L.boxes.map(({ f, x, y }) =>
+        `<img src="${f.url}" style="left:${(x - L.minX) * Z}px;top:${(y - L.minY) * Z}px;width:${f.w * Z}px;height:${f.h * Z}px">`).join("");
+    }
+  }
+  if (!html) return;
+  layer.style.width = W + "px"; layer.style.height = H + "px";
+  const mobH = Math.min((BT.mob && BT.mob.h) || 120, 150);
+  layer.style.left = Math.round(g.mobX - W / 2) + "px";
+  layer.style.top = Math.round(g.G - mobH * Z * 0.8 - H - 14) + "px";
+  layer.innerHTML = html;
+  st.appendChild(layer);
+  setTimeout(() => layer.remove(), 1700);
+}
+
+function btAuto() {
+  clearInterval(BT.tAuto);
+  const cb = $("#bt-auto");
+  if (cb && cb.checked) BT.tAuto = setInterval(btAttack, 4800);
+}
+
+$("#bt-roll").onclick = btRoll;
+$("#bt-atk").onclick = btAttack;
+$("#bt-auto").onchange = btAuto;
+
 /* ---------------- 三大类切换：地图 / 怪物素材 / 人物素材 ----------------
    三个大类平级，用卡片标题里的分段控件切换；面板互斥显示，切走时停掉动画定时器。 */
 const MODE_HINT = {
@@ -1751,16 +2105,18 @@ const MODE_HINT = {
   char: "左侧换装 → 实时合成 / 导出",
   skill: "左侧选职业和技能 → 看特效动画 / 导出",
   dmg: "左侧选数字样式 → 输入数字实时预览 / 导出",
+  battle: "🎲 换一批重新抽 → 自动打怪",
 };
 let MODE = "map";
 function setMode(m) {
-  if (m !== "mob" && m !== "char" && m !== "skill" && m !== "dmg") m = "map";
+  if (m !== "mob" && m !== "char" && m !== "skill" && m !== "dmg" && m !== "battle") m = "map";
   MODE = m;
   $("#pane-map").hidden = m !== "map";
   $("#mobdex").hidden = m !== "mob";
   $("#chardex").hidden = m !== "char";
   $("#skdex").hidden = m !== "skill";
   $("#dmgdex").hidden = m !== "dmg";
+  $("#battle").hidden = m !== "battle";
   $$("#mainseg button").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
   $("#mode-hint").textContent = MODE_HINT[m] || "";
   if (m !== "map") $("#mapzoom").hidden = true;
@@ -1771,6 +2127,8 @@ function setMode(m) {
   if (m === "skill") skOpen();
   else clearTimeout(SK.timer);
   if (m === "dmg") dmgOpen();
+  if (m === "battle") btOpen();
+  else btPause();
 }
 
 /* ---------------- 人物素材（角色）：选装 → 实时合成 → 导出 ---------------- */
