@@ -726,10 +726,12 @@ def c_convert_cn(log, only: list[str] | None = None, prog=None) -> dict:
                   sub=_sub)
     if "Map.nx" in todo:
         _start("Map.nx")
+        # 地图分卷在 Map/Map/Map{n}/（两层 Map）——旧代码写成 Map/Map{n}/ 找不到卷，
+        # 9 个分卷全部静默挂成空目录，Map.nx 里只剩 Map0 的 87 张平铺图
         m = [("Map/Map/Map0/_Canvas", "Map/Map/Map0/_Canvas")]
         for n in range(1, 10):
-            m += [(f"Map/Map{n}", f"Map/Map{n}/Map{n}_000.wz"),
-                  (f"Map/Map/Map{n}/_Canvas", f"Map/Map{n}/_Canvas")]
+            m += [(f"Map/Map{n}", f"Map/Map/Map{n}"),
+                  (f"Map/Map/Map{n}/_Canvas", f"Map/Map/Map{n}/_Canvas")]
         m += [("Map/Back", "Map/Back/Back_000.wz"), ("Map/Back/_Canvas", "Map/Back/_Canvas"),
               ("Map/Tile", "Map/Tile/Tile_000.wz"), ("Map/Tile/_Canvas", "Map/Tile/_Canvas"),
               ("Map/Obj", "Map/Obj/Obj_000.wz"), ("Map/Obj/_Canvas", "Map/Obj/_Canvas")]
@@ -902,7 +904,7 @@ def life_index(ws: Path, mapnx: Path) -> dict[str, list[dict]]:
         except Exception:
             idx = {}
     if not idx:
-        out = _run(["nxmap", "life"], mapnx.parent, timeout=300)
+        out = _run(["nxmap", "life"], mapnx.parent, timeout=900)
         agg: dict[str, dict[str, dict]] = {}
         for row in csv.reader(out.splitlines()):
             if len(row) < 8 or row[2] != "m":   # 只算怪物（m），NPC(n) 不算
@@ -3584,6 +3586,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_progress)
         elif path == "/api/mobs":
             self._api(c_mobs)
+        elif path == "/api/mobmaps":
+            self._api(c_mobmaps)
         elif path.startswith("/api/mob/icon/"):
             self._api(c_mob_icon, path.rsplit("/", 1)[-1])
         elif path.startswith("/api/mob/") and path.endswith("/maps"):
