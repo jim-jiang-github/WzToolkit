@@ -811,7 +811,7 @@ async function imgDoSearch(seq) {
         <img src="${r.thumb}" loading="lazy">
         <div style="flex:1;min-width:0">
           <div><b>${r.id}</b>${r.name ? ` · ${r.name}` : ""}${tag}</div>
-          <div class="muted" style="font-size:11.5px">${r.street || ""}${r.scale !== 1 ? ` · 截图缩放 ${Math.round(r.scale * 100)}%` : ""}</div>
+          <div class="muted" style="font-size:11.5px">${r.street || ""}${r.scale !== 1 ? ` · 截图缩放 ${Math.round(r.scale * 100)}%` : ""}${isCls && /同图共/.test(r.note || "") ? ` · ${(r.note.match(/（同图共.*?）/) || [""])[0]}` : ""}</div>
         </div>
         <span class="sc">${Math.round(r.score * 100)}%</span>
       </div>`;
