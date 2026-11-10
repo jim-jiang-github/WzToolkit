@@ -44,42 +44,33 @@ static bool load_cn() {
     return true;
 }
 
-static bool shard_name(const std::string & n) {
-    // "Map0".."Map9" (CN full merge keeps shards as siblings of the assets).
-    return n.size() >= 4 && n.compare(0, 3, "Map") == 0
-        && n.find_first_not_of("0123456789", 3) == std::string::npos;
+// 地图 img 的名字一定是 9 位数字 + .img（Back/Tile/Obj 的资源 img 名字不是纯数字）
+static bool map_img_name(const std::string & n) {
+    if (n.size() != 13 || n.compare(9, 4, ".img") != 0) return false;
+    return n.find_first_not_of("0123456789", 0) == 9;
 }
 
 // Walk every map img in the merged Map tree, whatever the layout:
-//   CN full merge : Map/<id>.img (Map0 flat) + Map/Map{N}/<id>.img
-//   CN single shard: Map/<id>.img
-//   v83 classic   : Map/Map/Map{N}/<id>.img (via the "Map" group folder)
-// "_Canvas" folders are outlink service trees, never real map imgs.
+//   CN full merge : Map/<id>.img (Map0 flat)
+//                   + Map/Map{N}/Map{N}_000.wz/<id>.img（分片 wz 是一个节点，
+//                     比旧实现多一层——之前 life/mini-all/portal-all 只扫到 Map0 的
+//                     87 张平铺图，全部分片地图被漏掉）
+//                   + Map/Map/Map{N}/<id>.img (v83 classic, via the "Map" group)
+// 资源 img（Back/Tile/Obj 下的非数字 .img）和 "_Canvas" 服务树整棵跳过。
+template <typename Fn>
+static void walk_map_node(nl::node n, int depth, Fn & fn) {
+    std::string nm = n.name();
+    if (map_img_name(nm)) { fn(n); return; }
+    if (nm.size() > 4 && nm.compare(nm.size() - 4, 4, ".img") == 0)
+        return;                                   // 资源 img：不是地图
+    if (nm == "_Canvas" || depth > 6) return;     // 服务树画布不是地图
+    for (auto it = n.begin(); it != n.end(); ++it) walk_map_node(*it, depth + 1, fn);
+}
+
 template <typename Fn>
 static void for_each_map_img(Fn fn) {
     nl::node root = nl::nx::Map;
-    for (auto it = root.begin(); it != root.end(); ++it) {
-        nl::node c = *it;
-        std::string n = c.name();
-        if (n.size() > 4 && n.compare(n.size() - 4, 4, ".img") == 0) {
-            fn(c);
-            continue;
-        }
-        if (n != "Map" && !shard_name(n)) continue;   // Back/Tile/Obj/... skip
-        for (auto jt = c.begin(); jt != c.end(); ++jt) {
-            nl::node g = *jt;
-            std::string gn = g.name();
-            if (gn == "_Canvas") continue;
-            if (gn.size() > 4 && gn.compare(gn.size() - 4, 4, ".img") == 0) {
-                fn(g);
-                continue;
-            }
-            for (auto kt = g.begin(); kt != g.end(); ++kt) {
-                if (std::string(kt.name()) == "_Canvas") continue;
-                fn(*kt);
-            }
-        }
-    }
+    walk_map_node(root, 0, fn);
 }
 
 static std::string stem_of(const std::string & n) {
