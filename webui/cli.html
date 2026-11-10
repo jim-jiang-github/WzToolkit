@@ -570,13 +570,20 @@
           <button data-k="mob" class="on">👾 怪物</button>
           <button data-k="boss">👑 Boss</button>
         </div>
+        <span style="position:relative;display:inline-block">
+          <input id="bt-map" placeholder="🗺 限定地图（输名字/ID）" autocomplete="off"
+            style="width:180px;padding:4px 8px;font:inherit;color:inherit;background:inherit;border:1px solid rgba(128,128,128,.4);border-radius:6px">
+          <div id="bt-mapdd" hidden style="position:absolute;z-index:40;left:0;top:100%;min-width:280px;max-height:260px;overflow:auto;
+            background:#fff;color:#222;font-size:12px;border:1px solid rgba(128,128,128,.4);border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.18)"></div>
+        </span>
+        <button class="mini" id="bt-mapclear" hidden title="取消地图限定，恢复全库抽怪">✕</button>
         <button class="mini" id="bt-atk">⚔️ 攻击</button>
         <label class="muted" style="display:flex;align-items:center;gap:4px">
           <input type="checkbox" id="bt-auto" checked> 自动攻击</label>
         <span class="muted" id="bt-info"></span>
       </div>
       <div class="btstage" id="bt-stage"><span class="muted" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">抽卡中 …</span></div>
-      <div class="muted" id="bt-note" style="margin-top:6px">人物 / 技能 / 怪物 / 伤害样式全部随机——点「🎲 换一批」重新抽；「👾 怪物 / 👑 Boss」切换抽卡怪物池；「⚔️ 攻击」打一轮：技能特效 + 怪物受击 + 真实排版的伤害数字（5% 概率 Miss）。需要 Mob.nx / Character.nx / Skill.nx / 伤害数字库都已就绪。</div>
+      <div class="muted" id="bt-note" style="margin-top:6px">人物 / 技能 / 怪物 / 伤害样式全部随机——点「🎲 换一批」重新抽；「👾 怪物 / 👑 Boss」切换抽卡怪物池；「🗺 限定地图」只抽那张图里自然刷新的怪（输地图名或 ID 从下拉里选）；「⚔️ 攻击」打一轮：技能特效 + 怪物受击 + 真实排版的伤害数字（5% 概率 Miss）。需要 Mob.nx / Character.nx / Skill.nx / 伤害数字库都已就绪。</div>
     </div>
   </div>
 
@@ -1800,6 +1807,7 @@ const BT_CATS = ["hair", "face", "cap", "coat", "pants", "longcoat",
 const BT = {
   gen: 0, loaded: false,
   kind: "mob",                          // 怪物池：mob 普通怪 / boss Boss
+  mapSel: null, mobMaps: null,          // 限定地图抽怪：{id,name,mobs} / 地图清单
   parts: null, jobs: null, skl: {}, mobs: null, dmgSets: null,
   char: null, charSpec: null, charAct: "stand1", ci: 0,
   mob: null, mobName: "", mobAct: "stand", mobIdle: "stand", mi: 0, mobScale: 2,
@@ -1852,8 +1860,16 @@ async function btRollMob() {
     BT.mobs = (d.mobs || []).filter((m) => m.img_ok);
   }
   if (!BT.mobs.length) throw new Error("没有可显示的怪物（Mob.nx 没转换？）");
-  // 怪物池按页签开关分流：👑 Boss 只抽 boss=1 的，👾 怪物抽其余的
-  const pool = BT.mobs.filter((m) => (BT.kind === "boss") === !!m.boss);
+  // 怪物池按页签开关分流：👑 Boss 只抽 boss=1 的，👾 怪物抽其余的；
+  // 限定地图时只抽那张图里自然刷新的怪（该图没有对应类型就退回全图怪）
+  let pool = BT.mobs.filter((m) => (BT.kind === "boss") === !!m.boss);
+  if (BT.mapSel) {
+    const ids = new Set(BT.mapSel.mobs || []);
+    const inMap = BT.mobs.filter((m) => ids.has(m.id));
+    const byKind = inMap.filter((m) => (BT.kind === "boss") === !!m.boss);
+    pool = byKind.length ? byKind : inMap;
+    if (!pool.length) throw new Error(`地图「${BT.mapSel.name || BT.mapSel.id}」里没有有图的怪`);
+  }
   if (!pool.length) throw new Error(BT.kind === "boss"
     ? "Boss 池是空的（Mob.nx 里没有 boss 标记且有图的怪）" : "普通怪池是空的");
   for (let t = 0; t < 6; t++) {
@@ -2138,6 +2154,58 @@ $$("#bt-kind button").forEach((b) => b.onclick = () => {
   b.classList.add("on");
   BT.kind = b.dataset.k === "boss" ? "boss" : "mob";   // 切池子，下一次抽卡生效
 });
+
+/* ---- 限定地图抽怪：搜索下拉（地图清单懒加载一次）---- */
+async function btMapList() {
+  if (BT.mobMaps) return BT.mobMaps;
+  const d = await api("/api/mobmaps");
+  BT.mobMaps = d.maps || [];
+  return BT.mobMaps;
+}
+const btMapIn = $("#bt-map"), btMapDd = $("#bt-mapdd"), btMapClr = $("#bt-mapclear");
+function btMapPaint(maps, q) {
+  const hit = maps.filter((m) => !q || m.id.includes(q) ||
+    (m.name || "").toLowerCase().includes(q)).slice(0, 14);
+  btMapDd.innerHTML = hit.length ? hit.map((m) =>
+    `<div class="bt-mapitem" data-id="${m.id}" style="padding:6px 10px;cursor:pointer;white-space:nowrap">
+       <b>${m.name || m.id}</b>
+       <span style="opacity:.6">${m.id} · ${m.mobs.length} 种怪</span></div>`).join("")
+    : `<div style="padding:6px 10px;opacity:.6">没有匹配「${q}」的有怪地图</div>`;
+  btMapDd.hidden = false;
+  $$("#bt-mapdd .bt-mapitem").forEach((el) => {
+    el.onmouseenter = () => el.style.background = "rgba(128,128,128,.15)";
+    el.onmouseleave = () => el.style.background = "";
+    el.onclick = () => {
+      const m = (BT.mobMaps || []).find((x) => x.id === el.dataset.id);
+      BT.mapSel = m || null;
+      btMapIn.value = m ? `${m.name || m.id} (${m.id})` : "";
+      btMapDd.hidden = true;
+      btMapClr.hidden = !BT.mapSel;
+      btMapIn.blur();
+    };
+  });
+}
+btMapIn.oninput = async () => {
+  BT.mapSel = null; btMapClr.hidden = true;           // 重新输入 = 取消当前限定
+  const q = (btMapIn.value || "").trim().toLowerCase();
+  let maps;
+  try { maps = await btMapList(); }
+  catch (e) {
+    btMapDd.innerHTML = `<div style="padding:6px 10px">读取地图清单失败：${e.message}</div>`;
+    btMapDd.hidden = false;
+    return;
+  }
+  btMapPaint(maps, q);
+};
+btMapIn.onfocus = () => { if (btMapIn.value) btMapIn.select(); };
+btMapIn.onblur = () => setTimeout(() => {
+  btMapDd.hidden = true;
+  if (!BT.mapSel) btMapIn.value = "";                 // 没选中就别留着半截文字误导
+}, 200);
+btMapClr.onclick = () => {
+  BT.mapSel = null; btMapIn.value = "";
+  btMapClr.hidden = true; btMapIn.focus();
+};
 
 /* ---------------- 三大类切换：地图 / 怪物素材 / 人物素材 ----------------
    三个大类平级，用卡片标题里的分段控件切换；面板互斥显示，切走时停掉动画定时器。 */

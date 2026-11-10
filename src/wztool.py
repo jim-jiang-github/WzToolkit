@@ -972,6 +972,28 @@ def c_mob_maps(kid: str) -> dict:
     return {"maps": idx.get(kid.lstrip("0"), [])}
 
 
+def c_mobmaps() -> dict:
+    """有怪的地图清单（life 索引再反转）：[{id,name,mobs:[怪id]}]，战斗页限定地图抽怪。"""
+    mapnx = _nx_dir() / "Map.nx"
+    if not mapnx.exists():
+        raise CliError("没有 Map.nx —— 先转换地图数据", 1)
+    k2 = f"mobmaps:{int(mapnx.stat().st_mtime)}"
+    if _lists.get("mobmaps_key") != k2:
+        idx = life_index(mapnx.parent, mapnx)
+        maps: dict[str, dict] = {}
+        for kid, rows in idx.items():
+            for m in rows:
+                e = maps.setdefault(m["mapid"], {"id": m["mapid"], "name": m["name"],
+                                                 "mobs": set(), "n": 0})
+                e["mobs"].add(kid)
+                e["n"] += m["n"]
+        out = sorted(maps.values(), key=lambda m: int(m["id"]) if m["id"].isdigit() else 0)
+        for e in out:
+            e["mobs"] = sorted(e["mobs"], key=lambda s: int(s) if s.isdigit() else 0)
+        _lists.update(mobmaps_key=k2, mobmaps=out)
+    return {"maps": _lists.get("mobmaps", [])}
+
+
 def c_maps() -> dict:
     mapnx = _nx_dir() / "Map.nx"
     if not mapnx.exists():
