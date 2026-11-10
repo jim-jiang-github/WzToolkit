@@ -1449,13 +1449,17 @@ def c_map_imgsearch(image: str) -> dict:
 # 游戏内左上角小地图 = 包里 spritesheet atlas 上的 miniMap/canvas 素材缩放显示
 # （2026-11-09 用「勇士部落东入口」实测：canvas 101040000 与游戏画面 0.767 强匹配）。
 # 库 = 把 canvas 按 alpha 裁剪提取成透明 PNG（.cache\minimap-cls\），找图走多尺度匹配
-# （游戏里显示倍率不固定，和现代版的单尺度匹配不同）。地图名由服务器下发，本地没有。
+# （游戏里显示倍率不固定，和现代版的单尺度匹配不同）。
+# 地图名是本地就有的：json_a2909* 包的 TextAsset「Map」（204KB JSON，1838 张，
+# streetName/mapName/mapDesc/ObjectName）——早先「名字由服务器下发」的判断是错的。
 
 CLS_MMIDX = CACHE / "minimap-cls"
 CLS_THUMBS_NPZ = CLS_MMIDX / "thumbs.npz"
+CLS_NAMES = CLS_MMIDX / "names.json"          # 地图名表缓存（带 json 包 mtime 戳）
 _clsjob: dict = {"running": False, "error": "", "done": 0, "total": 0, "stage": ""}
 _cls_lock = threading.Lock()
 _cls_thumbs: dict = {"state": None, "building": False}
+_cls_names_state: dict = {"state": None}
 
 
 def _cls_w_dir() -> Path | None:
@@ -1505,6 +1509,81 @@ def _cls_state() -> dict:
             n = 0
     return {"dir": str(w) if w else None, "ready": _cls_ready(), "count": n,
             "building": _clsjob["running"]}
+
+
+def _cls_names() -> dict:
+    """怀旧服地图名表：去掉前导零的 mapid → {street, name, desc}。
+
+    名字在本地 json_a2909* 包的 TextAsset「Map」里（204KB JSON，1838 张）。
+    包名哈希会随客户端更新变，所以扫 json_*.bundle 找 TextAsset 名叫 Map 的那个；
+    结果按所有 json 包的最新 mtime 打戳缓存到 .cache\\minimap-cls\\names.json。
+    """
+    w = _cls_w_dir()
+    if w is None:
+        return {}
+    try:
+        stamp = max(p.stat().st_mtime for p in (w / "w").glob("json_*.bundle"))
+    except ValueError:
+        return {}
+    st = _cls_names_state["state"]
+    if st is not None and st["stamp"] == stamp:
+        return st["maps"]
+    try:
+        raw = json.loads(CLS_NAMES.read_text(encoding="utf-8"))
+        if raw.get("stamp") == stamp:
+            maps = raw.get("maps") or {}
+            _cls_names_state["state"] = {"stamp": stamp, "maps": maps}
+            return maps
+    except (OSError, ValueError):
+        pass
+    try:
+        import UnityPy
+    except ImportError:
+        return {}
+    for b in sorted((w / "w").glob("json_*.bundle")):
+        try:
+            env = UnityPy.load(str(b))
+        except Exception:                    # noqa: BLE001
+            continue
+        for o in env.objects:
+            if o.type.name != "TextAsset":
+                continue
+            try:
+                d = o.read()
+            except Exception:                # noqa: BLE001
+                continue
+            if getattr(d, "m_Name", "") != "Map":
+                continue
+            s = d.m_Script
+            if isinstance(s, str):
+                s = s.encode("utf-8", "surrogateescape")
+            try:
+                j = json.loads(s.decode("utf-8-sig"))
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if not isinstance(j, dict) or not any(
+                    isinstance(v, dict) and "mapName" in v for v in list(j.values())[:20]):
+                continue
+            maps: dict[str, dict] = {}
+            for k, v in j.items():
+                if not isinstance(v, dict):
+                    continue
+                maps[k.lstrip("0") or "0"] = {
+                    "street": v.get("streetName") or "",
+                    "name": v.get("mapName") or "",
+                    "desc": v.get("mapDesc") or "",
+                }
+            try:
+                CLS_MMIDX.mkdir(parents=True, exist_ok=True)
+                tmp = CLS_NAMES.with_suffix(".tmp")
+                tmp.write_text(json.dumps({"stamp": stamp, "maps": maps}, ensure_ascii=False),
+                               encoding="utf-8")
+                os.replace(tmp, CLS_NAMES)
+            except OSError:
+                pass
+            _cls_names_state["state"] = {"stamp": stamp, "maps": maps}
+            return maps
+    return {}
 
 
 def _cls_bundle_meta() -> Path | None:
@@ -1840,30 +1919,75 @@ def c_cls_imgsearch(image: str) -> dict:
 
     index = json.loads((CLS_MMIDX / "index.json").read_text(encoding="utf-8"))
     # 怀旧服 id 有一半左右在现代版数据里也有（同一张图新旧客户端共用 9 位 id，
-    # 实测 523 张里 230 张重叠）——这些结果可以直接点开看/导出大地图，
-    # 顺便从现代小地图索引里把中文名借过来。找不到现代库就按「只能识别」处理。
+    # 实测 523 张里 230 张重叠）——这些结果可以直接点开看/导出大地图。
+    # 剩下的再按「街道 + 地图名」在现代库里找同名图（新旧版改过 id 的图，21 张）。
+    # 两条都不中就是现代版确实没有这张图（改版删掉的旧地图），只能识别 id。
     modern_ids: set[str] = set()
-    modern_names: dict[str, str] = {}
+    modern_by_name: dict[tuple[str, str], list[str]] = {}
     try:
         modern_ids = set(c_maps().get("maps") or [])
         mj = MMIDX / "index.json"
         if mj.exists():
             for k, v in json.loads(mj.read_text(encoding="utf-8")).items():
-                if isinstance(v, dict) and v.get("name"):
-                    modern_names[str(k)] = v["name"]
+                if not isinstance(v, dict):
+                    continue
+                k = str(k)
+                modern_ids.add(k)
+                nm, sd = v.get("name") or "", v.get("street") or ""
+                if nm:
+                    modern_by_name.setdefault((sd, nm), []).append(k)
     except Exception:                        # noqa: BLE001
         pass
-    out = []
-    for score, f, mid in s2[:9]:
-        meta = index.get(mid, {})
+    cls_names = _cls_names()
+
+    def resolve(mid: str):
+        """一张 canvas → (open_id, note, mod, alt, 名字元信息)。"""
+        nm = cls_names.get(mid.lstrip("0") or "0") or {}
         in_mod = mid in modern_ids
-        out.append({"id": mid, "score": round(score, 3), "scale": round(f, 2),
-                    "name": modern_names.get(mid, "") if in_mod else "",
-                    "street": "现代版同一张图（可打开大地图）" if in_mod
-                              else "怀旧服（名字由服务器下发，本地没有）",
-                    "mod": in_mod,
-                    "w": meta.get("cw"), "h": meta.get("ch"),
-                    "thumb": f"/preview/minimap-cls/{mid}.png"})
+        alt = ""
+        if not in_mod and nm.get("name"):
+            cand = modern_by_name.get((nm.get("street") or "", nm["name"])) or []
+            if len(set(cand)) == 1:          # 同名唯一才敢认，重名的不猜
+                alt = cand[0]
+        note = ("现代版有同一张图" if in_mod else
+                f"现代版有同名图 {alt}" if alt else
+                "现代版数据里没有这张图（只能识别）")
+        return (mid if in_mod else alt), note, in_mod, alt, nm
+
+    # 同一张大地图常被多张 canvas 覆盖：现代版同 id 的和怀旧服独有 id 的往往是
+    # 同一张图；「隐秘的研究室」这种还有 24 个 id 共用一张 canvas。按打开目标
+    # 或「街道+名字」归并，只留分数最高的一行，并标出同名共几张。
+    groups: dict[str, dict] = {}
+    order: list[str] = []
+    for score, f, mid in s2[:40]:
+        open_id, note, in_mod, alt, nm = resolve(mid)
+        key = open_id or (f"{nm.get('street')}/{nm.get('name')}" if nm.get("name") else f"id:{mid}")
+        if key not in groups:
+            groups[key] = {"row": {"id": mid, "score": round(score, 3), "scale": round(f, 2),
+                                   "name": nm.get("name") or "", "street": nm.get("street") or "",
+                                   "desc": nm.get("desc") or "", "note": note,
+                                   "mod": in_mod, "alt": alt, "open": open_id,
+                                   "w": index.get(mid, {}).get("cw"),
+                                   "h": index.get(mid, {}).get("ch"),
+                                   "thumb": f"/preview/minimap-cls/{mid}.png"},
+                           "more": 0, "ids": [mid]}
+            order.append(key)
+        else:
+            g = groups[key]
+            g["more"] += 1
+            g["ids"].append(mid)
+            if score > g["row"]["score"]:      # 用分数更高的那行做代表
+                g["row"].update({"id": mid, "score": round(score, 3), "scale": round(f, 2),
+                                 "w": index.get(mid, {}).get("cw"),
+                                 "h": index.get(mid, {}).get("ch"),
+                                 "thumb": f"/preview/minimap-cls/{mid}.png"})
+    out = []
+    for key in order[:9]:
+        g = groups[key]
+        row = dict(g["row"])
+        if g["more"]:
+            row["note"] += f"（同图共 {g['more'] + 1} 张）"
+        out.append(row)
     return {"building": False, "results": out}
 
 
