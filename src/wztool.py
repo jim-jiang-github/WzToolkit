@@ -1839,11 +1839,29 @@ def c_cls_imgsearch(image: str) -> dict:
     s2.sort(reverse=True)
 
     index = json.loads((CLS_MMIDX / "index.json").read_text(encoding="utf-8"))
+    # 怀旧服 id 有一半左右在现代版数据里也有（同一张图新旧客户端共用 9 位 id，
+    # 实测 523 张里 230 张重叠）——这些结果可以直接点开看/导出大地图，
+    # 顺便从现代小地图索引里把中文名借过来。找不到现代库就按「只能识别」处理。
+    modern_ids: set[str] = set()
+    modern_names: dict[str, str] = {}
+    try:
+        modern_ids = set(c_maps().get("maps") or [])
+        mj = MMIDX / "index.json"
+        if mj.exists():
+            for k, v in json.loads(mj.read_text(encoding="utf-8")).items():
+                if isinstance(v, dict) and v.get("name"):
+                    modern_names[str(k)] = v["name"]
+    except Exception:                        # noqa: BLE001
+        pass
     out = []
     for score, f, mid in s2[:9]:
         meta = index.get(mid, {})
+        in_mod = mid in modern_ids
         out.append({"id": mid, "score": round(score, 3), "scale": round(f, 2),
-                    "name": "", "street": "怀旧服（名字由服务器下发，本地没有）",
+                    "name": modern_names.get(mid, "") if in_mod else "",
+                    "street": "现代版同一张图（可打开大地图）" if in_mod
+                              else "怀旧服（名字由服务器下发，本地没有）",
+                    "mod": in_mod,
                     "w": meta.get("cw"), "h": meta.get("ch"),
                     "thumb": f"/preview/minimap-cls/{mid}.png"})
     return {"building": False, "results": out}

@@ -153,7 +153,8 @@
                    border: 1px solid var(--line); border-radius: 8px; margin-top: 6px;
                    cursor: pointer; }
   .imgpop .isres:hover { border-color: var(--acc); background: #ffffff0a; }
-  .imgpop .isres.cls { cursor: default; }      /* 怀旧服结果点不开浏览，别给手型 */
+  .imgpop .isres.cls { cursor: default; }      /* 怀旧服独有的图（现代版库里没有）点不开 */
+  .imgpop .isres.cls.mod { cursor: pointer; }  /* 现代版里同一张图存在 → 可以点开大地图 */
   .imgpop .isres img { width: 120px; height: 56px; object-fit: contain; flex: none;
                        image-rendering: pixelated; background: #0b0f14; border-radius: 4px; }
   .imgpop .isres .sc { color: var(--acc); font-size: 12px; flex: none; width: 44px; }
@@ -796,19 +797,26 @@ async function imgDoSearch(seq) {
     st.textContent = d.results.length
       ? (weak ? "最像的是这张，但分数偏低（<0.6）——截图最好只截小地图面板本身" : "")
       : "没找到相似的地图";
-    out.innerHTML = d.results.map((r) => `
-      <div class="isres${IMGSRC === "cls" ? " cls" : ""}" data-id="${r.id}"${IMGSRC === "cls" ? ' title="怀旧服地图暂不支持点开浏览"' : ""}>
+    out.innerHTML = d.results.map((r) => {
+      const clsLocked = IMGSRC === "cls" && !r.mod;      // 怀旧服独有 id：本地没有大地图
+      const clsOpen = IMGSRC === "cls" && r.mod;         // 怀旧服识别 → 开现代版同一张图
+      return `
+      <div class="isres${IMGSRC === "cls" ? " cls" : ""}${clsOpen ? " mod" : ""}" data-id="${r.id}" data-mod="${r.mod ? 1 : 0}"
+        ${clsLocked ? 'title="现代版数据里没有这张图（怀旧服独有），只能识别出 id"' : ""}
+        ${clsOpen ? 'title="点开现代版数据里的同一张大地图（导出/预览）"' : ""}>
         <img src="${r.thumb}" loading="lazy">
         <div style="flex:1;min-width:0">
-          <div><b>${r.id}</b>${r.name ? ` · ${r.name}` : ""}</div>
+          <div><b>${r.id}</b>${r.name ? ` · ${r.name}` : ""}${clsOpen ? ' <span class="ok" style="font-size:11px">→ 可打开大地图</span>' : ""}</div>
           <div class="muted" style="font-size:11.5px">${r.street || ""}${r.scale !== 1 ? ` · 截图缩放 ${Math.round(r.scale * 100)}%` : ""}</div>
         </div>
         <span class="sc">${Math.round(r.score * 100)}%</span>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     for (const el of out.querySelectorAll(".isres")) {
       el.onclick = (e) => {
         e.stopPropagation();
-        if (IMGSRC === "cls") return;              // 怀旧服 id 不在现代地图库里，点不开
+        // 怀旧服识别结果：现代版库里有同一张图就打开它，没有就保持只能识别
+        if (IMGSRC === "cls" && el.dataset.mod !== "1") return;
         $("#img-pop").hidden = true;
         mapLoad(el.dataset.id, true);
       };
