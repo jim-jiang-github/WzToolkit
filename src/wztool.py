@@ -2353,8 +2353,9 @@ def _char_rank(L: dict, action: str = "") -> int:
     return CHAR_ZRANK.get(L.get("z") or "", CHAR_ZSLOT.get(L.get("slot"), 0))
 
 
-CHAR_DUMP_V = 3                          # dump 结构/规则有变时+1，旧缓存自动失效
+CHAR_DUMP_V = 4                          # dump 结构/规则有变时+1，旧缓存自动失效
                                          # v3: nxchar 帧枚举改为数字名子节点（帧号不再要求从 0 开始）
+                                         # v4: nxchar 脸没有 default 表情时回退其它表情（0005xxxx 170 张脸）
 
 
 def _char_dump(spec: dict) -> tuple[dict, Path, str]:

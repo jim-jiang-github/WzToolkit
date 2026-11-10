@@ -333,6 +333,17 @@ static const char * category_of(const std::string & slot) {
     return "";
 }
 
+// 表情节点里的脸位图：常规脸 default/face（1 层），表情脸 <表情>/<帧>/face（2 层）
+static nl::node expr_face(nl::node ex) {
+    if (!ex) return {};
+    if (ex.get_bitmap()) return ex;
+    for (nl::node c : ex) {
+        if (c.get_bitmap()) return c;
+        for (nl::node g : c) if (g.get_bitmap()) return g;
+    }
+    return {};
+}
+
 static int cmd_dump(int argc, char ** argv) {
     Opts o;
     for (int i = 2; i < argc; ++i) {
@@ -407,14 +418,37 @@ static int cmd_dump(int argc, char ** argv) {
                     // 脸的位图在 default/<layer> 里（通常是 default/face，带 brow 锚点），
                     // default 节点本身没有 bitmap —— 两个层级都要试。
                     nl::node fd = img["default"];
-                    if (fd.get_bitmap()) {
-                        emit(layers, "face", "face", fd, std::string("face") + id + "_default");
-                    } else {
-                        for (nl::node c : fd) {
-                            if (!c.get_bitmap()) continue;
-                            emit(layers, "face", std::string(c.name()), c,
-                                 std::string("face") + id + "_default_" + c.name());
+                    size_t before = layers.size();
+                    if (fd) {
+                        if (fd.get_bitmap()) {
+                            emit(layers, "face", "face", fd, std::string("face") + id + "_default");
+                        } else {
+                            for (nl::node c : fd) {
+                                if (!c.get_bitmap()) continue;
+                                emit(layers, "face", std::string(c.name()), c,
+                                     std::string("face") + id + "_default_" + c.name());
+                            }
                         }
+                    }
+                    if (layers.size() == before) {
+                        // 一批脸（国服 0005xxxx 高级脸，170 个）没有 default 表情节点，
+                        // 只有 angry/blink/...（层级还是 <表情>/<帧>/face，多一层帧）——
+                        // 客户端遇到缺失表情会回退到其它表情，这里按固定顺序挑一个
+                        // 有位图的表情代替，不然整张脸直接消失。
+                        nl::node ex;
+                        const char * prefs[] = { "blink", "smile", "hit", "angry", "glitter" };
+                        for (const char * p : prefs) {
+                            if (expr_face(img[p])) { ex = img[p]; break; }
+                        }
+                        if (!ex) {
+                            for (nl::node c : img) {
+                                if (std::string(c.name()) == "default") continue;
+                                if (expr_face(c)) { ex = c; break; }
+                            }
+                        }
+                        nl::node b = expr_face(ex);
+                        if (b) emit(layers, "face", "face", b,
+                                    std::string("face") + id + "_" + (ex ? ex.name() : "default"));
                     }
                     continue;
                 }
@@ -457,9 +491,18 @@ static int cmd_icon(const std::string & cat, const std::string & id, const std::
         for (nl::node c : fr) if (c.get_bitmap()) { pick = c; break; }
     }
     if (!pick) {
+        // 没有 stand1 的图走 default；连 default 表情都没有的脸（0005xxxx）
+        // 回退到任意一个有位图的表情（表情脸多一层帧：<表情>/<帧>/face）
         nl::node d = img["default"];
         if (d.get_bitmap()) pick = d;
         else for (nl::node c : d) if (c.get_bitmap()) { pick = c; break; }
+        if (!pick) {
+            for (nl::node e : img) {
+                if (std::string(e.name()) == "default") continue;
+                pick = expr_face(e);
+                if (pick) break;
+            }
+        }
     }
     if (!pick) { std::cerr << "no bitmap\n"; return 3; }
 
