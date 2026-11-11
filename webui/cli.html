@@ -390,12 +390,19 @@
   .mm-hud .mm-nb .mm-names { position: absolute; left: 42px; top: 4px; right: 4px;
             font: bold 12px/15px "SimSun","NSimSun",serif; color: #000; }
   .mm-hud .mm-nb .mm-names div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* canvas 行：整行铺半透明背板（客户端 MaxMap/c），canvas 按 map_draw_origin_x 居中画在上面 */
+  /* canvas 行（游戏截图 1:1 实测）：整行白底 + 两侧「浅灰边|灰线|白」框条列
+     （客户端 MiddleLeft/Right 纵向拉伸）+ 上下深蓝线；内容居中、
+     上留 14px / 其余 6px 白边；MaxMap/c 深色背板只垫在内容后面 */
   .mm-hud .mm-cvrow { position: relative; flex: none; line-height: 0;
+            border-top: 1px solid rgb(85,119,153); border-bottom: 1px solid rgb(85,119,153);
+            padding: 14px 6px 6px;
+            background:
+              linear-gradient(90deg, #b8b8b8 0 1px, #6f6f73 1px 2px, #fff 2px) 0 0/3px 100% no-repeat,
+              linear-gradient(270deg, #b8b8b8 0 1px, #6f6f73 1px 2px, #fff 2px) 100% 0/3px 100% no-repeat,
+              #fff; }
+  .mm-hud .mm-inner { position: relative; line-height: 0; margin: 0 auto;
             background: rgba(0,0,0,.65); }
-  .mm-hud .mm-cv { position: absolute; top: 0; line-height: 0;
-            padding-bottom: 3px; border: 1px solid rgb(85,119,153); background: rgba(0,0,0,.65); }
-  .mm-hud .mm-cv img.mm-img { display: block; width: 100%; height: auto;
+  .mm-hud .mm-cvrow .mm-img { display: block; width: 100%; height: auto;
                               image-rendering: pixelated; }
   .mm-hud .mm-bt { height: 14px; flex: none; margin-top: 1px;
             background: url("webui/assets/minimap/cls/bottom.png") 0 0 / 100% 14px no-repeat; }
@@ -2629,13 +2636,12 @@ function mmTextW(s) {                              // 客户端 Text 用 12px �
 }
 function mmFrame(mm, street, name) {
   const cw = mm.cw, ch = mm.ch;
-  // 客户端布局（UIMiniMap.cpp::update_canvas）：
-  //   window_width = max(178, 48 + max(区域名宽,地图名宽) + 10, canvas宽 + 20)
-  //   canvas_x     = max(10, window_width/2 - canvas宽/2)，canvas 永远 1:1 原生尺寸
-  const winW = Math.max(178, 58 + Math.max(mmTextW(street), mmTextW(name)), cw + 20);
-  const ox = Math.max(10, Math.floor(winW / 2 - cw / 2));
-  const cvH = ch + 5;                              // 描边 1 + canvas ch + 底白边 3 + 描边 1
-  return { winW, ox, winH: 20 + 46 + cvH + 14, cvH };
+  // 布局按游戏内截图 1:1 实测（对照 UIMiniMap.cpp::update_canvas，178 下限是
+  // v208 新版的，怀旧服没有）：窗口宽 = max(143, 48+max(名宽)+10, canvas宽+20)，
+  // canvas 永远 1:1 居中（≥10px 边距）；canvas 行总高 = 1+14+ch+6+1
+  const winW = Math.max(143, 58 + Math.max(mmTextW(street), mmTextW(name)), cw + 20);
+  const cvH = ch + 22;
+  return { winW, winH: 20 + 46 + cvH + 14, cvH };
 }
 const MMHUD = {
   // 位置 = 客户端 PosMINIMAP：默认左上 (0,0)，拖动后记住（不提供下拉设置）
@@ -2668,7 +2674,7 @@ function mmHudHTML(d) {
       ${mm.auto ? '<span class="hud-auto" title="源数据没有小地图，这张是工具自动生成的：黑底无背景，只标传送点">自动生成</span>' : ""}
     </div>
     <div class="mm-cvrow" style="height:${g.cvH}px">
-      <div class="mm-cv" style="left:${g.ox}px;width:${mm.cw}px;height:${g.cvH}px">
+      <div class="mm-inner" style="width:${mm.cw}px;height:${mm.ch}px">
         <img class="mm-img" src="${mm.url}" alt="minimap">${marks}
       </div>
     </div>

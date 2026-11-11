@@ -3681,11 +3681,11 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
     浅蓝名字条(46px，太阳图章+黑字) → canvas(1px 深蓝描边+3px 白边) →
     渐变底条(14px)。img 是已经画好标记的 canvas RGBA 图。
 
-    布局公式照抄客户端 UIMiniMap.cpp::update_canvas：
-      window_width = max(178, 48+max(区域名宽,地图名宽)+10, canvas宽+20)
-      canvas_x     = max(10, window_width/2 - canvas宽/2)
-    canvas 两侧露出的不是场景而是 MaxMap/c 半透明背板（实测黑 ~65%），
-    整行铺满、canvas 画在上面 → 和游戏内一样没有"断开"的观感。
+    布局按游戏内截图 1:1 实测（对照 UIMiniMap.cpp::update_canvas，178 下限是
+    v208 新版的，怀旧服实测没有）：
+      window_width = max(143, 48+max(区域名宽,地图名宽)+10, canvas宽+20)
+      canvas_x     = max(10, (window_width-canvas宽)/2)
+    canvas 两侧是白衬+框条列，深色半透明背板（实测黑 ~65%）只垫在内容后面。
     """
     from PIL import Image, ImageDraw, ImageFont
     cw, chh = img.size
@@ -3704,9 +3704,14 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
         except Exception:                     # noqa: BLE001
             return len(s) * 12
 
-    winW = int(max(178, 48 + max(tw(street), tw(name)) + 10, cw + 20))
-    ox = max(10, winW // 2 - cw // 2)
-    winH = 20 + 46 + (chh + 5) + 14
+    winW = int(max(143, 48 + max(tw(street), tw(name)) + 10, cw + 20))
+    # canvas 行（游戏截图 1:1 实测：窗宽 = canvas宽+20，内容左缘在窗内 x=10）：
+    # 整行白底 + 两侧「浅灰边|灰线|白」框条列（客户端 MiddleLeft/Right 纵向拉伸）
+    # + 上下深蓝线；canvas 内容居中、上留 14px / 其余 6px 白边，
+    # MaxMap/c 半透明深色背板只垫在内容后面（其余地方是白衬）
+    ox = max(10, (winW - cw) // 2)
+    rowh = chh + 22                             # 顶蓝线1 + 上白14 + 内容 + 下白6 + 底蓝线1
+    winH = 20 + 46 + rowh + 14
     win = Image.new("RGBA", (winW, winH), (0, 0, 0, 0))
     # 顶条：左段贴左、右段贴右、中间补渐变
     tb = Image.new("RGBA", (winW, 20), (255, 255, 255, 255))
@@ -3733,14 +3738,17 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
     d.line([(0, 0), (0, 45)], fill=(102, 102, 110, 255))
     d.line([(winW - 1, 0), (winW - 1, 45)], fill=(85, 119, 153, 255))
     win.alpha_composite(nb, (0, 20))
-    # canvas 行：整行铺半透明背板（客户端 MaxMap/c），canvas 居中画在上面
-    row = Image.new("RGBA", (winW, chh + 5), (0, 0, 0, 166))
-    cv = Image.new("RGBA", (cw + 2, chh + 5), (255, 255, 255, 255))
-    dc = ImageDraw.Draw(cv)
-    dc.rectangle([0, 0, cw + 1, chh + 4], outline=(85, 119, 153, 255))
-    dc.rectangle([1, 1, cw, chh], fill=(0, 0, 0, 166))
-    cv.alpha_composite(img, (1, 1))
-    row.alpha_composite(cv, (ox, 0))
+    # canvas 行：白底框 + 两侧框条列 + 上下深蓝线，内容居中、背板只垫内容
+    row = Image.new("RGBA", (winW, rowh), (255, 255, 255, 255))
+    d = ImageDraw.Draw(row)
+    d.line([(0, 0), (winW - 1, 0)], fill=(85, 119, 153, 255))
+    d.line([(0, rowh - 1), (winW - 1, rowh - 1)], fill=(85, 119, 153, 255))
+    for i, c in ((0, (184, 184, 184)), (1, (111, 111, 119))):
+        d.line([(i, 1), (i, rowh - 2)], fill=c + (255,))
+    for i, c in ((0, (237, 237, 237)), (1, (111, 111, 119))):
+        d.line([(winW - 1 - i, 1), (winW - 1 - i, rowh - 2)], fill=c + (255,))
+    d.rectangle([ox, 15, ox + cw - 1, 15 + chh - 1], fill=(0, 0, 0, 166))
+    row.alpha_composite(img, (ox, 15))
     win.alpha_composite(row, (0, 66))
     # 底条
     win.alpha_composite(Image.open(C / "bottom.png").convert("RGBA").resize((winW, 14)), (0, winH - 14))
