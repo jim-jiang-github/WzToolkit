@@ -3685,7 +3685,9 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
     v208 新版的，怀旧服实测没有）：
       window_width = max(143, 48+max(区域名宽,地图名宽)+10, canvas宽+20)
       canvas_x     = max(10, (window_width-canvas宽)/2)
-    canvas 两侧是白衬+框条列，深色半透明背板（实测黑 ~65%）只垫在内容后面。
+    canvas 两侧是白衬+框条列；MaxMap/c 半透明深色背板（实测黑 ~65%）
+    铺满整个内窗（客户端 update_canvas 就是先铺 MiddleCenter 再居中画 canvas），
+    所以 canvas 两侧/上下的空白区和地图透明天空是同一块背板，不是白底。
     """
     from PIL import Image, ImageDraw, ImageFont
     cw, chh = img.size
@@ -3706,11 +3708,11 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
 
     winW = int(max(144, 48 + max(tw(street), tw(name)) + 10, cw + 20))
     # canvas 行（游戏截图 1:1 实测：窗宽 = canvas宽+20，内容左缘在窗内 x=10）：
-    # 整行白底 + 两侧「浅灰边|灰线|白」框条列（客户端 MiddleLeft/Right 纵向拉伸）
-    # + 上下深蓝线；canvas 内容居中、上留 14px / 其余 6px 白边，
-    # MaxMap/c 半透明深色背板只垫在内容后面（其余地方是白衬）
+    # 白底 + 整块 MaxMap/c 半透明深色背板（客户端 update_canvas 先把 MaxMap/c
+    # 拉伸铺满整个内窗、再居中画 canvas —— 空白区与地图透明天空同色，不是白衬）
+    # + 两侧框条列 + 上下深蓝线；canvas 内容居中、上留 14px / 其余 6px 边
     ox = max(10, (winW - cw) // 2)
-    rowh = chh + 22                             # 顶蓝线1 + 上白14 + 内容 + 下白6 + 底蓝线1
+    rowh = chh + 22                             # 顶蓝线1 + 上边14 + 内容 + 下边6 + 底蓝线1
     winH = 20 + 46 + rowh + 14
     win = Image.new("RGBA", (winW, winH), (0, 0, 0, 0))
     # 顶条：左段贴左、右段贴右、中间补渐变
@@ -3741,9 +3743,10 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
                  (winW - 2, (255, 255, 255)), (winW - 1, (110, 110, 114))):
         d.line([(x, 0), (x, 45)], fill=c + (255,))
     win.alpha_composite(nb, (0, 20))
-    # canvas 行：白底框 + 两侧框条列 + 上下深蓝线，内容居中、背板只垫内容
+    # canvas 行：白底 + 整块背板（盖住框条列之间的全部内窗）+ 两侧框条列 + 上下深蓝线
     row = Image.new("RGBA", (winW, rowh), (255, 255, 255, 255))
     d = ImageDraw.Draw(row)
+    d.rectangle([4, 1, winW - 4, rowh - 2], fill=(0, 0, 0, 166))
     d.line([(0, 0), (winW - 1, 0)], fill=(85, 119, 153, 255))
     d.line([(0, rowh - 1), (winW - 1, rowh - 1)], fill=(85, 119, 153, 255))
     # 两侧框条列照游戏：左 = 浅灰|灰线|白|蓝线，右 = 深色外框|白|蓝线
@@ -3751,7 +3754,6 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
         d.line([(i, 1), (i, rowh - 2)], fill=c + (255,))
     for i, c in ((0, (110, 110, 114)), (2, (85, 119, 153))):
         d.line([(winW - 1 - i, 1), (winW - 1 - i, rowh - 2)], fill=c + (255,))
-    d.rectangle([ox, 15, ox + cw - 1, 15 + chh - 1], fill=(0, 0, 0, 166))
     row.alpha_composite(img, (ox, 15))
     win.alpha_composite(row, (0, 66))
     # 底条
