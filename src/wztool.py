@@ -3375,14 +3375,18 @@ def _mmui_ready() -> bool:
 
 
 def _mmui_frame(w: int, h: int) -> Path | None:
-    """按窗口尺寸合成九宫格框（缓存 .cache/minimap-ui/frame/<w>x<h>.png）。
+    """按窗口尺寸合成九宫格框（缓存 .cache/minimap-ui/frame/v2-<w>x<h>.png）。
 
-    边 = 角件最内 1 像素列/行拉伸，中心保持透明（游戏里 canvas 贴在里面）。
+    严格按客户端 UIMiniMap::update_canvas() 的摆法：
+    - 中件 MiddleCenter=MaxMap/c 盖 (7,10)-(w-7,h-7)，CN 的 UI.wz 没这件，
+      用角件内部同款 rgba(0,0,0,0.73) 补（视觉上就是那块深色半透明窗体）；
+    - 四角原样；上/下中段 = nw/sw 最右 1 像素列拉伸，左/右中段 = nw/ne 最下
+      1 像素行拉伸（角件本体自带圆角与白描边，标题「小地图」烤在 nw 里）。
     """
     if not _mmui_ready():
         return None
     w, h = max(2, int(w)), max(2, int(h))
-    out = MMUI_FRAME / f"{w}x{h}.png"
+    out = MMUI_FRAME / f"v2-{w}x{h}.png"
     if out.is_file():
         return out
     from PIL import Image
@@ -3391,6 +3395,8 @@ def _mmui_frame(w: int, h: int) -> Path | None:
           for c in MMUI_CORNERS}
     cw, ch = cs["nw"].size
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    if w > 14 and h > 17:                       # MiddleCenter (7,10)~(w-7,h-7)
+        img.paste((0, 0, 0, 186), (7, 10, w - 7, h - 7))
     img.alpha_composite(cs["nw"], (0, 0))
     img.alpha_composite(cs["ne"], (w - cw, 0))
     img.alpha_composite(cs["sw"], (0, h - ch))
@@ -3542,39 +3548,72 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
 
 
 def _minimap_composite(export: dict, out: Path, zoom: int = 2) -> Path:
-    """把 minimap canvas 放大 zoom 倍，按客户端规则画上标记，存成 PNG。
+    """按客户端 UIMiniMap 画出完整小地图窗口（框体+canvas+官方标记+按钮）→ PNG。
 
-    标记配色沿用地图详情的约定：传送门=蓝圈、NPC=黄点、
-    刷怪点 红=普通怪 / 橙=BOSS / 品红=大BOSS。
+    层序与 update_canvas()/draw() 一致：窗体底(MiddleCenter) → canvas →
+    四角/边件 → 按钮 → 标记。放大 zoom 倍时所有坐标/素材同步放大。
     """
-    from PIL import Image, ImageDraw
+    from PIL import Image
     mm = export.get("minimap")
     if not mm:
         raise CliError("这张图没有 miniMap（hideMinimap=1 或该版本数据缺失）", 1)
-    src = Image.open(mm["img_file"]).convert("RGBA")
-    img = src.resize((src.width * zoom, src.height * zoom), Image.NEAREST)
-    d = ImageDraw.Draw(img)
-    dot = max(2, zoom)                      # 实心点半径
-    ring = dot + zoom                       # 传送门圈半径
+    if not _mmui_ready():
+        raise CliError("官方小地图素材缺失（webui/assets/minimap）", 1)
+    # 先按 1x 原生布局合成完整窗口（框体素材就是 1x 的，坐标换算才不会错位），
+    # 最后整窗放大 zoom 倍（NEAREST，和客户端像素风一致）。
+    img = Image.open(mm["img_file"]).convert("RGBA")
+    cw, chh = img.size
+    winW = max(178, cw + 20)                        # update_canvas() 公式
+    ox = max(10, round(winW / 2 - cw / 2))
+    downY = chh if chh > 20 else 22
+    oy = 20 if chh > 20 else 15 - chh
+    winH = downY + 27
+    win = Image.new("RGBA", (winW, winH), (0, 0, 0, 0))
+    if winW > 14 and winH > 17:                     # MiddleCenter (7,10)~(winW-7,winH-7)
+        win.paste((0, 0, 0, 186), (7, 10, winW - 7, winH - 7))
+    win.alpha_composite(img, (ox, oy))
+    cs = {c: Image.open(MMUI_STATIC / f"MinMap_{c}.png").convert("RGBA")
+          for c in MMUI_CORNERS}
+    fcw, fch = cs["nw"].size
+    if winW > 2 * fcw:
+        mid = winW - 2 * fcw
+        win.alpha_composite(cs["nw"].crop((fcw - 1, 0, fcw, fch)).resize((mid, fch),
+                                                                        Image.NEAREST), (fcw, 0))
+        win.alpha_composite(cs["sw"].crop((fcw - 1, 0, fcw, fch)).resize((mid, fch),
+                                                                        Image.NEAREST), (fcw, winH - fch))
+    if winH > 2 * fch:
+        mid = winH - 2 * fch
+        win.alpha_composite(cs["nw"].crop((0, fch - 1, fcw, fch)).resize((fcw, mid),
+                                                                        Image.NEAREST), (0, fch))
+        win.alpha_composite(cs["ne"].crop((0, fch - 1, fcw, fch)).resize((fcw, mid),
+                                                                        Image.NEAREST), (winW - fcw, fch))
+    win.alpha_composite(cs["nw"], (0, 0))
+    win.alpha_composite(cs["ne"], (winW - fcw, 0))
+    win.alpha_composite(cs["sw"], (0, winH - fch))
+    win.alpha_composite(cs["se"], (winW - fcw, winH - fch))
+    # 标题栏按钮：toggle_buttons()，右端 = middle_right_x = winW-9，BIG MAP NPC
+    bx = winW - 9 - 91
+    for name, x in (("BtBig", bx), ("BtMap", bx + 13), ("BtNpc", bx + 52)):
+        b = Image.open(MMUI_STATIC / f"{name}_normal.png").convert("RGBA")
+        win.alpha_composite(b, (x, 4))
+    # 标记 = MapHelper 官方贴图；客户端画法 draw(pos-(宽/2,0))：横向居中、顶边对准
+    tier_mark = {"normal": "mob_1", "big": "mob_3", "boss": "mob_4"}
+
+    def mark(name: str, x: int, y: int) -> None:
+        p = Image.open(MMUI_STATIC / "marks" / f"{name}.png").convert("RGBA")
+        win.alpha_composite(p, (int(x) - p.width // 2, int(y)))
+
     for n in mm.get("npcs", []):
-        x, y = n["x"] * zoom, n["y"] * zoom
-        d.ellipse([x - dot, y - dot, x + dot, y + dot],
-                  fill=(255, 221, 0, 255), outline=(90, 70, 0, 255))
-    tier_color = {"normal": (255, 64, 64, 255),
-                  "boss": (255, 140, 0, 255),
-                  "big": (255, 0, 255, 255)}
+        mark("npc", n["x"], n["y"])
     for m in mm.get("mobs", []):
-        x, y = m["x"] * zoom, m["y"] * zoom
-        c = tier_color.get(m.get("tier"), tier_color["normal"])
-        d.ellipse([x - dot, y - dot, x + dot, y + dot], fill=c)
+        mark(tier_mark.get(m.get("tier"), "mob_1"), m["x"], m["y"])
     for p in mm.get("portals", []):
-        # 传送门是脚底坐标：上移 3px 才不会压在地面线上（同兜底生成）
-        x, y = p["x"] * zoom, (p["y"] - 3) * zoom
-        d.ellipse([x - ring, y - ring, x + ring, y + ring],
-                  outline=(64, 160, 255, 255), width=max(1, zoom // 2 + 1))
+        mark("portal", p["x"], p["y"])
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    img.convert("RGB").save(out)
+    if zoom > 1:
+        win = win.resize((win.width * zoom, win.height * zoom), Image.NEAREST)
+    win.convert("RGB").save(out)
     return out
 
 
@@ -3589,11 +3628,12 @@ def c_map_minimap(mid: str, out: str = "", zoom: int = 2,
     mm = d.get("minimap") or {}
     z = max(1, min(8, int(zoom or 2)))
     png = _minimap_composite(d, target, z)
+    mmw = max(178, mm.get("cw", 0) * z + 20)
     return {"map": mid,
             "name": d.get("name", ""), "street_name": d.get("street_name", ""),
             "image": str(png),
-            "w": mm.get("cw", 0) * z,
-            "h": mm.get("ch", 0) * z,
+            "w": mmw,
+            "h": mm.get("ch", 0) * z + 27,
             "zoom": z,
             "portals": len(mm.get("portals", [])),
             "npcs": len(mm.get("npcs", [])),
