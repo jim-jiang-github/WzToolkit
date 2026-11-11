@@ -3352,7 +3352,7 @@ def _minimap_payload(outdir: Path, root: Path, mj: dict, meta: dict) -> dict | N
             "cw": cw, "ch": ch,
             "center_x": mm.get("centerX"), "center_y": mm.get("centerY"),
             "mag": mm.get("mag"), "scale": scale,
-            "auto": auto,
+            "auto": auto, "map_mark": mj.get("mapMark"),
             "portals": portals, "npcs": npcs, "mobs": mobs}
 
 
@@ -3547,61 +3547,81 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     return result
 
 
-def _minimap_composite(export: dict, out: Path, zoom: int = 2) -> Path:
-    """按客户端 UIMiniMap 画出完整小地图窗口（框体+canvas+官方标记+按钮）→ PNG。
+def _cls_window(img: "Image", winW: int, street: str = "", name: str = "") -> "Image":
+    """合成经典版小地图窗口（怀旧服客户端样式，素材从游戏内截图 1:1 抠出）。
 
-    层序与 update_canvas()/draw() 一致：窗体底(MiddleCenter) → canvas →
-    四角/边件 → 按钮 → 标记。放大 zoom 倍时所有坐标/素材同步放大。
+    结构：白底标题栏(20px，左「小地图」黑字 / 右 −/+/大地图 按钮) →
+    浅蓝名字条(46px，太阳图章+黑字) → canvas(1px 深蓝描边+3px 白边) →
+    渐变底条(14px)。img 是已经画好标记的 canvas RGBA 图。
+    """
+    from PIL import Image, ImageDraw
+    cw, chh = img.size
+    winW = max(143, cw + 9)
+    C = MMUI_STATIC / "cls"
+    winH = 20 + 46 + (chh + 5) + 14
+    win = Image.new("RGBA", (winW, winH), (153, 187, 204, 255))
+    # 顶条：左段贴左、右段贴右、中间补渐变
+    tb = Image.new("RGBA", (winW, 20), (255, 255, 255, 255))
+    tb.alpha_composite(Image.open(C / "tb-left.png").convert("RGBA"), (0, 0))
+    tb.alpha_composite(Image.open(C / "tb-right.png").convert("RGBA"), (winW - 71, 0))
+    if winW > 143:
+        mid = Image.new("RGBA", (winW - 143, 20))
+        d = ImageDraw.Draw(mid)
+        grad = [(102, 102, 110), (255, 255, 255), (85, 119, 153),
+                (153, 187, 204), (136, 153, 187)]
+        for y in range(20):
+            c = grad[y] if y < 5 else ((136, 153, 187) if y == 19 else (255, 255, 255))
+            d.line([(0, y), (mid.width, y)], fill=c + (255,))
+        tb.alpha_composite(mid, (71, 0))
+    win.alpha_composite(tb, (0, 0))
+    # 名字条：图章 + 两行黑字（客户端就是直接写在浅蓝底上）
+    nb = Image.new("RGBA", (winW, 46), (153, 187, 204, 255))
+    nb.alpha_composite(Image.open(C / "mark-sun.png").convert("RGBA"), (4, 2))
+    d = ImageDraw.Draw(nb)
+    try:                                      # 客户端字体是 12px 宋体位图字
+        from PIL import ImageFont
+        f = ImageFont.truetype("C:/Windows/Fonts/simsun.ttc", 12)
+    except Exception:                         # noqa: BLE001
+        f = None
+    if street:
+        d.text((42, 6), street, fill=(0, 0, 0, 255), font=f)
+    if name:
+        d.text((42, 24), name, fill=(0, 0, 0, 255), font=f)
+    d.line([(0, 0), (0, 45)], fill=(102, 102, 110, 255))
+    d.line([(winW - 1, 0), (winW - 1, 45)], fill=(85, 119, 153, 255))
+    win.alpha_composite(nb, (0, 20))
+    # canvas：深蓝描边 + 白边
+    cv = Image.new("RGBA", (cw + 2, chh + 5), (255, 255, 255, 255))
+    dc = ImageDraw.Draw(cv)
+    dc.rectangle([0, 0, cw + 1, chh + 4], outline=(85, 119, 153, 255))
+    cv.alpha_composite(img, (1, 1))
+    win.alpha_composite(cv, ((winW - cw - 2) // 2, 66))
+    # 底条
+    win.alpha_composite(Image.open(C / "bottom.png").convert("RGBA").resize((winW, 14)), (0, winH - 14))
+    return win
+
+
+def _minimap_composite(export: dict, out: Path, zoom: int = 2) -> Path:
+    """画出完整经典版小地图窗口（框体+canvas+官方标记）→ PNG。
+
+    框体 = 怀旧服客户端样式（webui/assets/minimap/cls 分层素材），
+    标记 = MapHelper.img/minimap 官方贴图。先按 1x 原生布局合成，
+    再整窗 NEAREST 放大 zoom 倍（和客户端像素风一致）。
     """
     from PIL import Image
     mm = export.get("minimap")
     if not mm:
         raise CliError("这张图没有 miniMap（hideMinimap=1 或该版本数据缺失）", 1)
-    if not _mmui_ready():
-        raise CliError("官方小地图素材缺失（webui/assets/minimap）", 1)
-    # 先按 1x 原生布局合成完整窗口（框体素材就是 1x 的，坐标换算才不会错位），
-    # 最后整窗放大 zoom 倍（NEAREST，和客户端像素风一致）。
+    if not (MMUI_STATIC / "cls" / "tb-left.png").is_file():
+        raise CliError("经典版小地图素材缺失（webui/assets/minimap/cls）", 1)
     img = Image.open(mm["img_file"]).convert("RGBA")
     cw, chh = img.size
-    winW = max(178, cw + 20)                        # update_canvas() 公式
-    ox = max(10, round(winW / 2 - cw / 2))
-    downY = chh if chh > 20 else 22
-    oy = 20 if chh > 20 else 15 - chh
-    winH = downY + 27
-    win = Image.new("RGBA", (winW, winH), (0, 0, 0, 0))
-    if winW > 14 and winH > 17:                     # MiddleCenter (7,10)~(winW-7,winH-7)
-        win.paste((0, 0, 0, 186), (7, 10, winW - 7, winH - 7))
-    win.alpha_composite(img, (ox, oy))
-    cs = {c: Image.open(MMUI_STATIC / f"MinMap_{c}.png").convert("RGBA")
-          for c in MMUI_CORNERS}
-    fcw, fch = cs["nw"].size
-    if winW > 2 * fcw:
-        mid = winW - 2 * fcw
-        win.alpha_composite(cs["nw"].crop((fcw - 1, 0, fcw, fch)).resize((mid, fch),
-                                                                        Image.NEAREST), (fcw, 0))
-        win.alpha_composite(cs["sw"].crop((fcw - 1, 0, fcw, fch)).resize((mid, fch),
-                                                                        Image.NEAREST), (fcw, winH - fch))
-    if winH > 2 * fch:
-        mid = winH - 2 * fch
-        win.alpha_composite(cs["nw"].crop((0, fch - 1, fcw, fch)).resize((fcw, mid),
-                                                                        Image.NEAREST), (0, fch))
-        win.alpha_composite(cs["ne"].crop((0, fch - 1, fcw, fch)).resize((fcw, mid),
-                                                                        Image.NEAREST), (winW - fcw, fch))
-    win.alpha_composite(cs["nw"], (0, 0))
-    win.alpha_composite(cs["ne"], (winW - fcw, 0))
-    win.alpha_composite(cs["sw"], (0, winH - fch))
-    win.alpha_composite(cs["se"], (winW - fcw, winH - fch))
-    # 标题栏按钮：toggle_buttons()，右端 = middle_right_x = winW-9，BIG MAP NPC
-    bx = winW - 9 - 91
-    for name, x in (("BtBig", bx), ("BtMap", bx + 13), ("BtNpc", bx + 52)):
-        b = Image.open(MMUI_STATIC / f"{name}_normal.png").convert("RGBA")
-        win.alpha_composite(b, (x, 4))
     # 标记 = MapHelper 官方贴图；客户端画法 draw(pos-(宽/2,0))：横向居中、顶边对准
     tier_mark = {"normal": "mob_1", "big": "mob_3", "boss": "mob_4"}
 
     def mark(name: str, x: int, y: int) -> None:
         p = Image.open(MMUI_STATIC / "marks" / f"{name}.png").convert("RGBA")
-        win.alpha_composite(p, (int(x) - p.width // 2, int(y)))
+        img.alpha_composite(p, (int(x) - p.width // 2, int(y)))
 
     for n in mm.get("npcs", []):
         mark("npc", n["x"], n["y"])
@@ -3609,6 +3629,8 @@ def _minimap_composite(export: dict, out: Path, zoom: int = 2) -> Path:
         mark(tier_mark.get(m.get("tier"), "mob_1"), m["x"], m["y"])
     for p in mm.get("portals", []):
         mark("portal", p["x"], p["y"])
+    win = _cls_window(img, max(143, cw + 9),
+                      export.get("street_name", ""), export.get("name", ""))
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     if zoom > 1:
@@ -3628,12 +3650,13 @@ def c_map_minimap(mid: str, out: str = "", zoom: int = 2,
     mm = d.get("minimap") or {}
     z = max(1, min(8, int(zoom or 2)))
     png = _minimap_composite(d, target, z)
-    mmw = max(178, mm.get("cw", 0) * z + 20)
+    from PIL import Image as _I
+    w, h = _I.open(png).size                 # 窗口实际尺寸（1x 布局 × zoom）
     return {"map": mid,
             "name": d.get("name", ""), "street_name": d.get("street_name", ""),
             "image": str(png),
-            "w": mmw,
-            "h": mm.get("ch", 0) * z + 27,
+            "w": w,
+            "h": h,
             "zoom": z,
             "portals": len(mm.get("portals", [])),
             "npcs": len(mm.get("npcs", [])),

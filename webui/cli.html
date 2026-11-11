@@ -367,23 +367,38 @@
   .mmd.npc { width: 8px; height: 11px; cursor: help; }
   .mmd.mob { width: 12px; height: 12px; cursor: help; }
   .mmd.mob.big, .mmd.mob.boss { width: 15px; height: 15px; }
-  /* 游戏内 HUD：小地图窗口贴在预览图上。位置 = 客户端 Setting<PosMINIMAP>（默认 0,0
-     = 视口左上角，拖动后写回设置）；框体 = 官方 4 角件九宫格合成图
-     （/api/minimap/frame，标题「小地图」烤在 nw 角件里），布局按 UIMiniMap.cpp */
+  /* 经典版小地图窗口（怀旧服客户端样式，素材 = webui/assets/minimap/cls/，
+     从游戏内截图 1:1 抠出：白底标题栏黑字「小地图」+ 蓝−/灰+/橙大地图按钮、
+     浅蓝名字条 + 太阳图章、深蓝描边 canvas 框、渐变底条）。
+     布局：顶条 20px + 名字条 46px + canvas(1px 深蓝描边) + 底条 14px。 */
   .mm-hud { position: absolute; z-index: 5; cursor: move; touch-action: none; user-select: none;
-            background-size: 100% 100%; background-repeat: no-repeat;
-            image-rendering: pixelated; }
+            display: flex; flex-direction: column;
+            filter: drop-shadow(1px 1px 1px #00000055); }
   .mm-hud[hidden] { display: none; }
-  .mm-hud .mm-canvas { position: absolute; line-height: 0; }
-  .mm-hud .mm-canvas img.mm-img { display: block; width: 100%; height: 100%;
-                                 image-rendering: pixelated; }
-  /* 标题栏按钮（BtBig/BtMap/BtNpc 官方四态贴图，--n 常态 --h 悬停） */
-  .mm-hud .mmb { position: absolute; top: 4px; width: 13px; height: 12px; line-height: 0;
-                 background-size: 100% 100%; image-rendering: pixelated; }
-  .mm-hud .mmb { background-image: var(--n); }
-  .mm-hud .mmb:hover { background-image: var(--h, var(--n)); filter: brightness(1.2); }
-  .mm-hud .hud-auto { position: absolute; left: 6px; bottom: 0; font-size: 9px; line-height: 11px;
-                      color: #ffd24d; opacity: .9; pointer-events: none; text-shadow: 0 1px 2px #000c; }
+  .mm-hud .mm-tb { position: relative; height: 20px; flex: none; }
+  .mm-hud .mm-tb img { position: absolute; top: 0; height: 20px; image-rendering: pixelated; }
+  .mm-hud .mm-tb .tb-l { left: 0; }
+  .mm-hud .mm-tb .tb-r { right: 0; }
+  .mm-hud .mm-tb .tb-mid { position: absolute; left: 71px; right: 70px; top: 0; bottom: 0;
+            background: linear-gradient(to bottom,
+              rgb(102,102,110) 0 1px, #fff 1px 2px, rgb(85,119,153) 2px 3px,
+              rgb(153,187,204) 3px 4px, rgb(136,153,187) 4px 5px,
+              #fff 5px 19px, rgb(136,153,187) 19px 20px); }
+  .mm-hud .mm-nb { position: relative; height: 46px; flex: none; background: rgb(153,187,204);
+            border-left: 1px solid #666; border-right: 1px solid #555; }
+  .mm-hud .mm-nb img.mm-mark { position: absolute; left: 4px; top: 2px; width: 33px; height: 33px;
+            image-rendering: pixelated; }
+  .mm-hud .mm-nb .mm-names { position: absolute; left: 42px; top: 4px; right: 4px;
+            font: bold 12px/15px "SimSun","NSimSun",serif; color: #000; }
+  .mm-hud .mm-nb .mm-names div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mm-hud .mm-cv { position: relative; flex: none; margin: 0 auto; line-height: 0;
+            padding-bottom: 3px; border: 1px solid rgb(85,119,153); background: #fff; }
+  .mm-hud .mm-cv img.mm-img { display: block; width: 100%; height: auto;
+                              image-rendering: pixelated; }
+  .mm-hud .mm-bt { height: 14px; flex: none; margin-top: 1px;
+            background: url("assets/minimap/cls/bottom.png") 0 0 / 100% 14px no-repeat; }
+  .mm-hud .hud-auto { position: absolute; right: 46px; top: 3px; font: bold 11px/14px "SimSun",serif;
+            color: #0a0a0a; opacity: .85; pointer-events: none; }
   .mm-hud[data-n="off"] .mmd.npc, .mm-hud[data-m="off"] .mmd.mob,
   .mm-hud[data-p="off"] .mmd.portal { display: none; }
 </style>
@@ -2593,27 +2608,22 @@ function bindMinimap(d) {
   }
 }
 
-/* ---- 小地图 HUD：按客户端 UIMiniMap 的位置/尺寸/素材贴在预览图上 ----
+/* ---- 小地图 HUD：经典版窗口（怀旧服客户端样式）贴在预览图上 ----
    位置：UIMiniMap 继承 UIDragElement<PosMINIMAP>，position = Setting<PosMINIMAP>，
          默认值 "(0, 0)" —— 就是游戏视口左上角；拖完写回设置（所以"自定义"= 拖过的位置）。
-   尺寸/摆位：update_canvas() 原公式 ——
-         window_width = max(178, 名字文字宽, canvas宽 + 20)（本工具没有region文字，取前两项）
-         中件(窗体底) = (7, 10) 起，(c_stretch+114, m_stretch+27)
-         canvas 原点  = ( max(10, window_width/2 - canvas宽/2), 20 )   （高≤20 时贴中：oy=15-ch）
-         窗口尺寸     = (ur_x_offset+64, down_y_offset+27) = (winW, canvas高+27)
-   按钮：toggle_buttons() —— 右端对齐 middle_right_x = winW-9，顺序 BIG MAP NPC，y=4。
-   框体：官方 4 角件九宫格（后端 /api/minimap/frame 合成），标记 = MapHelper 官方贴图。 */
+   尺寸：怀旧服实测（游戏内截图逐像素）——
+         窗口宽 = max(143, canvas宽 + 9)      （143 = 标题栏文字+按钮的排布下限）
+         结构   = 顶条 20 + 名字条 46 + canvas(1px 深蓝描边 + 3px 底白边) + 底条 14
+   标记：MapHelper.img/minimap 官方贴图，(世界坐标 + center) / 2^mag，
+         客户端画法 draw(pos-(宽/2,0))：横向居中、顶边对准。 */
 let MMUI = null;                                   // /api/minimap/ui 素材清单（启动时拉一次）
 (async () => { try { MMUI = await api("/api/minimap/ui"); } catch { /* 旧后端无此端点 */ } })();
+const MMCLS = "assets/minimap/cls/";               // 经典版窗口分层素材
 function mmFrame(mm) {
   const cw = mm.cw, ch = mm.ch;
-  const winW = Math.max(178, cw + 20);
-  const mrx = winW - 9;                            // middle_right_x（按钮右端）
-  const ox = Math.max(10, Math.round(winW / 2 - cw / 2));
-  if (ch <= 20) {          // 极扁的图：客户端把 canvas 贴着中间横线画
-    return { winW, winH: 22 + 27, ox, oy: 10 + 5 - ch, mrx, btnX: mrx - 91 };
-  }
-  return { winW, winH: ch + 27, ox, oy: 20, mrx, btnX: mrx - 91 };
+  const winW = Math.max(143, cw + 9);
+  const cvH = ch + 5;                              // 描边 1 + canvas ch + 底白边 3 + 描边 1
+  return { winW, winH: 20 + 46 + cvH + 14, cvH };
 }
 const MMHUD = {
   // 位置 = 客户端 PosMINIMAP：默认左上 (0,0)，拖动后记住（不提供下拉设置）
@@ -2621,8 +2631,8 @@ const MMHUD = {
 };
 function mmHudHTML(d) {
   const mm = d.minimap, g = mmFrame(mm), B = MMUI && MMUI.ready ? MMUI.base : null;
-  const name = [d.street_name, d.name].filter(Boolean).join(" · ") || "";
-  // 官方标记：portal=绿靶(pt=2 才画) / npc=蓝椭圆 / mob=红点（boss 橙星、大怪青星）。
+  const street = d.street_name || "", name = d.name || "";
+  // 官方标记：portal(pt=2 才画) / npc / mob（boss 橙星、大怪青星）。
   // 客户端画法 draw(pos-(宽/2,0))：横向居中、顶边对准 → CSS translateX(-50%)
   const marks = B ? mm.portals.map((p) =>
     `<img class="mmd portal" data-t="p" src="${B}marks/portal.png" style="left:${p.x}px;top:${p.y}px"
@@ -2635,17 +2645,23 @@ function mmHudHTML(d) {
        src="${B}marks/${m.tier === "boss" ? "mob_4" : m.tier === "big" ? "mob_3" : "mob_1"}.png"
        style="left:${m.x}px;top:${m.y}px" title="${m.name || "怪物"} ${m.id}" alt="">`).join("")
     : "";
-  // 标题栏按钮：toggle_buttons() 摆位（BT_BIG→BT_MAP→BT_NPC，右端 = middle_right_x）
-  const btns = B ? `
-    <div class="mmb" style="left:${g.btnX}px;--n:url(${B}BtBig_normal.png);--h:url(${B}BtBig_mouseOver.png)" title="切换大地图（游戏里放大画布，本工具暂未实现）"></div>
-    <div class="mmb" style="left:${g.btnX + 13}px;width:39px;--n:url(${B}BtMap_normal.png);--h:url(${B}BtMap_mouseOver.png)" title="世界地图"></div>
-    <div class="mmb" id="mm-btn-npc" style="left:${g.btnX + 52}px;width:39px;--n:url(${B}BtNpc_normal.png);--h:url(${B}BtNpc_mouseOver.png)" title="显示 / 隐藏 NPC 标记"></div>` : "";
   return `<div class="mm-hud" id="mm-hud" hidden data-p="on" data-n="on" data-m="on"
-      style="width:${g.winW}px;height:${g.winH}px;background-image:url(/api/minimap/frame?w=${g.winW}&h=${g.winH})"
-      title="${name}｜拖动可移动（= 客户端PosMINIMAP设置），双击回到 (0,0)">
-    <div class="mm-canvas" style="left:${g.ox}px;top:${g.oy}px;width:${mm.cw}px;height:${mm.ch}px">
+      style="width:${g.winW}px;height:${g.winH}px"
+      title="${street} ${name}｜拖动可移动（= 客户端PosMINIMAP设置），双击回到 (0,0)">
+    <div class="mm-tb">
+      <div class="tb-mid"></div>
+      <img class="tb-l" src="${MMCLS}tb-left.png" alt="">
+      <img class="tb-r" src="${MMCLS}tb-right.png" alt="">
+    </div>
+    <div class="mm-nb">
+      <img class="mm-mark" src="${MMCLS}mark-sun.png" alt="" title="地图图章（mapMark）">
+      <div class="mm-names"><div>${street}</div><div>${name}</div></div>
+      ${mm.auto ? '<span class="hud-auto" title="源数据没有小地图，这张是工具自动生成的：黑底无背景，只标传送点">自动生成</span>' : ""}
+    </div>
+    <div class="mm-cv" style="width:${mm.cw}px;height:${g.cvH}px">
       <img class="mm-img" src="${mm.url}" alt="minimap">${marks}
-    </div>${btns}${mm.auto ? '<span class="hud-auto" title="源数据没有小地图，这张是工具自动生成的：黑底无背景，只标传送点">自动生成</span>' : ""}
+    </div>
+    <div class="mm-bt"></div>
   </div>`;
 }
 function mmHudPlace() {
@@ -2697,12 +2713,6 @@ function bindMmHud(d) {
       if (tm && +tm > 0 && +tm !== 999999999) mapLoad(String(tm).padStart(9, "0"), true);
     };
   });
-  const bn = hud.querySelector("#mm-btn-npc");   // BtNpc = 官方「寻找NPC」按钮 → 开关 NPC 标记
-  if (bn) bn.onclick = (e) => {
-    e.stopPropagation();
-    const cb = $("#mm-n");
-    if (cb) { cb.checked = !cb.checked; cb.onchange(); }
-  };
 }
 
 async function mapLoad(id, preview) {
