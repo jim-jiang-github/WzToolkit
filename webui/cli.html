@@ -391,7 +391,9 @@
             font: bold 12px/15px "SimSun","NSimSun",serif; color: #000; }
   .mm-hud .mm-nb .mm-names div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mm-hud .mm-cv { position: relative; flex: none; margin: 0 auto; line-height: 0;
-            padding-bottom: 3px; border: 1px solid rgb(85,119,153); background: #fff; }
+            padding-bottom: 3px; border: 1px solid rgb(85,119,153);
+            /* 背板：客户端 MaxMap/c 是半透明深色（实测黑色 ~65% 不透明，透出场景） */
+            background: rgba(0,0,0,.65); }
   .mm-hud .mm-cv img.mm-img { display: block; width: 100%; height: auto;
                               image-rendering: pixelated; }
   .mm-hud .mm-bt { height: 14px; flex: none; margin-top: 1px;

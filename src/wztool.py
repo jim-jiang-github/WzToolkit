@@ -3590,10 +3590,12 @@ def _cls_window(img: "Image", winW: int, street: str = "", name: str = "") -> "I
     d.line([(0, 0), (0, 45)], fill=(102, 102, 110, 255))
     d.line([(winW - 1, 0), (winW - 1, 45)], fill=(85, 119, 153, 255))
     win.alpha_composite(nb, (0, 20))
-    # canvas：深蓝描边 + 白边
+    # canvas：深蓝描边 + 白边；内部背板 = 客户端 MaxMap/c（半透明深色，实测
+    # 黑色 ~65% 不透明、透出场景 —— 从游戏内截图逐像素回归测得）
     cv = Image.new("RGBA", (cw + 2, chh + 5), (255, 255, 255, 255))
     dc = ImageDraw.Draw(cv)
     dc.rectangle([0, 0, cw + 1, chh + 4], outline=(85, 119, 153, 255))
+    dc.rectangle([1, 1, cw, chh], fill=(0, 0, 0, 166))
     cv.alpha_composite(img, (1, 1))
     win.alpha_composite(cv, ((winW - cw - 2) // 2, 66))
     # 底条
