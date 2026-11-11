@@ -3281,6 +3281,133 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
                              seed=seed, outdir=outdir, mj=mj, no_bg=no_bg)
 
 
+# ── 全库出图（map-all）──────────────────────────────────────────────────────
+# 临时脚本 scripts/_maptest.py 的正式版：把每张图的预览缓存
+# （map.json + 贴图 + preview.png，WebUI「预览」同一条链路）批量建好，
+# 顺带把全库「能否正常显示」验了一遍。断点续跑，中断重跑自动跳过。
+MAPALL_BASE = ROOT / ".build" / "mapall"
+
+
+def _map_all_one(mid: str) -> dict:
+    """子进程里给一张图建预览缓存（与 WebUI「预览」完全同链路）。"""
+    t0 = time.time()
+    outdir = CACHE / "map" / mid
+    try:
+        # 已有新鲜缓存 + 预览图：跳过（用户浏览过的图秒过）
+        if (_map_cache_fresh(outdir) and (outdir / "preview.png").exists()
+                and (outdir / "preview.png").with_suffix(".meta").exists()):
+            return {"id": mid, "ok": True, "skip": True, "sec": 0.0}
+        outdir.mkdir(parents=True, exist_ok=True)
+        _run(["nxmap", mid, str(outdir)], _nx_dir(), timeout=600)
+        mjf = outdir / "map.json"
+        if not mjf.exists():
+            return {"id": mid, "ok": False, "err": "nxmap 没产出 map.json",
+                    "sec": round(time.time() - t0, 1)}
+        # 链接图跟随（客户端同款）：目标图的贴图要导进同一目录
+        seen = {mid}
+        mj = json.loads(mjf.read_text(encoding="utf-8"))
+        for _ in range(3):
+            link = str(mj.get("info", {}).get("link") or "").strip()
+            if not (link.isdigit() and link not in seen):
+                break
+            seen.add(link)
+            _run(["nxmap", link, str(outdir)], _nx_dir(), timeout=600)
+            mj = json.loads(mjf.read_text(encoding="utf-8"))
+        _map_cache_stamp(outdir)
+        size = _render_preview(outdir, outdir / "preview.png")
+        if (size.get("w") or 0) <= 0 or (size.get("h") or 0) <= 0:
+            return {"id": mid, "ok": False,
+                    "err": f"渲染尺寸异常 {size.get('w')}x{size.get('h')}",
+                    "sec": round(time.time() - t0, 1)}
+        return {"id": mid, "ok": True, "w": size["w"], "h": size["h"],
+                "sec": round(time.time() - t0, 1)}
+    except Exception as e:                     # noqa: BLE001
+        return {"id": mid, "ok": False,
+                "err": f"{type(e).__name__}: {str(e)[:300]}",
+                "sec": round(time.time() - t0, 1)}
+
+
+def _map_all_done_ids() -> set:
+    """断点续跑的已完成集合：results.jsonl 里 ok 的 id + 已有可用缓存的图。"""
+    done: set = set()
+    res = MAPALL_BASE / "results.jsonl"
+    if res.exists():
+        for ln in res.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(ln.strip())
+                if r.get("ok"):
+                    done.add(r["id"])
+            except Exception:                  # noqa: BLE001
+                pass
+    return done
+
+
+def _map_all_pending() -> list:
+    """还差哪些图没出（决定转换任务要不要并上全库出图这一步）。"""
+    mapnx = _nx_dir() / "Map.nx"
+    if not mapnx.exists():
+        return []
+    ids = [i for i in c_maps()["maps"] if re.fullmatch(r"\d{9}", i)]
+    done = _map_all_done_ids()
+    return [i for i in ids
+            if i not in done and not (CACHE / "map" / i / "preview.png").exists()]
+
+
+def c_map_all(workers: int = 2, log=None, prog=None) -> dict:
+    """全库出图：把所有地图的预览缓存批量建好（WebUI 预览同一条链路）。
+
+    跑完之后浏览任何图都是秒开（不用现场 nxmap + 渲染大图），同时等于把
+    全库「能否正常显示」全验了一遍。断点续跑：已完成记录在
+    .build/mapall/results.jsonl，中断/停掉后重跑自动跳过。
+    workers 默认 2 —— 抢得少，跑的时候照样能浏览地图（8 个 worker 会把
+    23G Map.nx 和 CPU 全占了，网页点新图会卡几分钟）。
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    _need_ws()
+    workers = max(1, min(16, int(workers)))
+    ids = [i for i in c_maps()["maps"] if re.fullmatch(r"\d{9}", i)]
+    MAPALL_BASE.mkdir(parents=True, exist_ok=True)
+    res_path = MAPALL_BASE / "results.jsonl"
+    done_ids = _map_all_done_ids()
+    todo = [i for i in ids if i not in done_ids]
+    total = len(ids)
+    say = log or print
+    say(f"全库出图: 库里 {total} 张，已出 {len(done_ids)}，本轮 {len(todo)}（workers={workers}）")
+    stats = {"total": total, "done": len(done_ids), "ok": len(done_ids),
+             "fail": 0, "sec": 0.0}
+    if not todo:
+        return {**stats, "started": False}
+    t0 = time.time()
+    n = 0
+    with res_path.open("a", encoding="utf-8") as rf, \
+            ProcessPoolExecutor(max_workers=workers) as ex:
+        futs = [ex.submit(_map_all_one, i) for i in todo]
+        for fu in as_completed(futs):
+            r = fu.result()
+            rf.write(json.dumps(r, ensure_ascii=False) + "\n")
+            rf.flush()
+            n += 1
+            stats["done"] += 1
+            stats["sec"] += r.get("sec") or 0
+            if r.get("ok"):
+                stats["ok"] += 1
+            else:
+                stats["fail"] += 1
+                say(f"✗ {r['id']}: {r['err']}")
+            if n % 50 == 0 or n == len(todo):
+                el = time.time() - t0
+                left = len(todo) - n
+                eta = el / max(1, n) * left / 60
+                frac = stats["done"] / max(1, total)
+                stage = f"全量出图 {stats['done']}/{total}"
+                if prog:
+                    prog(stage, frac)
+                say(f"… {stage}（预计还要 {eta:.0f} 分钟）")
+    say(f"全库出图完成: {stats['ok']}/{total} 可显示，失败 {stats['fail']}")
+    return {**stats, "started": True,
+            "elapsed_min": round((time.time() - t0) / 60, 1)}
+
+
 def _minimap_payload(outdir: Path, root: Path, mj: dict, meta: dict) -> dict | None:
     """把 nxmap 导出的 miniMap 数据整理成前端可直接渲染的小地图。
 
@@ -4025,7 +4152,13 @@ def _web_convert(names: list[str], force: bool) -> dict:
         cls_todo = _cls_w_dir() is not None and not _cls_ready() and not _clsjob["running"]
         # 伤害数字库（Effect/BasicEff 的 No* 数字集）没建好 → 一样并进这次任务
         dmg_todo = _dmg_effect_dir() is not None and not _dmg_ready()
-        if not todo_names and not cls_todo and not dmg_todo:
+        # 全库出图没跑完 → 同样并进这次任务：转换完自动把每张图的预览缓存
+        # 批量建好（map-all 断点续跑），之后浏览任何图都秒开
+        if (_nx_dir() / "Map.nx").exists():
+            mapall_todo = bool(_map_all_pending())
+        else:
+            mapall_todo = "Map.nx" in todo_names     # 本次会转出 Map.nx → 全量必跑
+        if not todo_names and not cls_todo and not dmg_todo and not mapall_todo:
             return {"started": False, "message": "国服数据已转换完成（.cache\\cn）"}
         cn_todo = todo_names
     else:
@@ -4034,11 +4167,14 @@ def _web_convert(names: list[str], force: bool) -> dict:
         if not todo:
             return {"started": False, "message": "选中的都已是 .nx（要重转勾「强制重转」）"}
         cn_todo = None
+        mapall_todo = False
     total = len(cn_todo) if cn_todo is not None else len(todo)
     if cls_todo:
         total += 1                      # 小地图库算一项，进度条能走满
     if dmg_todo:
         total += 1                      # 伤害数字库同上
+    if mapall_todo:
+        total += 1                      # 全库出图算一项（进度用它自己的 frac 走满）
     with _lock:
         if _job["running"]:
             raise CliError("已有转换在跑，等它完成", 1)
@@ -4061,7 +4197,18 @@ def _web_convert(names: list[str], force: bool) -> dict:
                     _job["log"].append("接着提取伤害数字库（Effect/BasicEff）…")
                     _dmg_build(lambda s: _job["log"].append(s),
                                stage=lambda s: _job.update(stage=s, frac=0.0))
-                    _job["done"] = _job["total"]
+                if mapall_todo:
+                    _job["log"].append(
+                        "接着全库出图（每张图的预览缓存；跑完浏览任何图都秒开，"
+                        "可中断、重跑续传）…")
+                    try:
+                        c_map_all(2,
+                                  log=lambda s: _job["log"].append(s),
+                                  prog=lambda stage, frac:
+                                  _job.update(stage=stage, frac=frac))
+                    finally:
+                        _job.update(stage="", frac=0.0)
+                _job.update(stage="", done=_job["total"], frac=0.0)
             else:
                 for wz in todo:
                     _convert_one(wz, lambda s: _job["log"].append(s))
@@ -4390,6 +4537,19 @@ def cmd_map_export(a) -> int:
     return 0
 
 
+def cmd_map_all(a) -> int:
+    d = c_map_all(a.workers, log=print)
+    if a.json:
+        _out(d, True)
+    else:
+        if not d.get("started"):
+            print(f"全库 {d['total']} 张都已出过图，无需重跑（清缓存或删 .build/mapall 可强制）")
+        else:
+            print(f"全库出图完成: 可显示 {d['ok']}/{d['total']} · 失败 {d['fail']} · "
+                  f"耗时 {d['elapsed_min']} 分钟；缓存目录 .cache\\map\\<id>")
+    return 0
+
+
 def cmd_clear_cache(a) -> int:
     _out(c_clear_cache(), a.json)
     return 0
@@ -4525,6 +4685,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="导出窗口左上角的世界坐标（默认地图正中）。导出图固定 1366×768 —— "
                         "和客户端画面同尺寸，只此一种；含负数时必须用 = 形式，如 --view=-1500,300")
     _j(p); p.set_defaults(fn=cmd_map_export)
+
+    p = sub.add_parser("map-all",
+                       help="全库出图：批量建好所有地图的预览缓存（之后浏览任何图都秒开）",
+                       epilog="与 WebUI「预览」同一条链路（nxmap → map.json+贴图 → preview.png），\n"
+                              "跑完等于把全库「能否正常显示」也验了一遍。断点续跑：\n"
+                              "已完成记录在 .build/mapall/results.jsonl，中断后重跑自动跳过。\n"
+                              "工作区第一次「转换」时也会自动跑这一步（进度在转换任务里显示）。\n"
+                              "workers 默认 2：8 个会抢 23G Map.nx 和 CPU，网页浏览新图会卡几分钟。")
+    p.add_argument("--workers", type=int, default=2, metavar="N",
+                   help="并发进程数（默认 2；浏览无感，8 个抢资源）")
+    _j(p); p.set_defaults(fn=cmd_map_all)
 
     p = sub.add_parser("map-minimap",
                        help="渲染游戏内小地图（miniMap canvas + 标记）→ PNG",
