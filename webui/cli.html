@@ -396,7 +396,7 @@
   .mm-hud .mm-cv img.mm-img { display: block; width: 100%; height: auto;
                               image-rendering: pixelated; }
   .mm-hud .mm-bt { height: 14px; flex: none; margin-top: 1px;
-            background: url("assets/minimap/cls/bottom.png") 0 0 / 100% 14px no-repeat; }
+            background: url("webui/assets/minimap/cls/bottom.png") 0 0 / 100% 14px no-repeat; }
   .mm-hud .hud-auto { position: absolute; right: 46px; top: 3px; font: bold 11px/14px "SimSun",serif;
             color: #0a0a0a; opacity: .85; pointer-events: none; }
   .mm-hud[data-n="off"] .mmd.npc, .mm-hud[data-m="off"] .mmd.mob,
@@ -2618,7 +2618,7 @@ function bindMinimap(d) {
          客户端画法 draw(pos-(宽/2,0))：横向居中、顶边对准。 */
 let MMUI = null;                                   // /api/minimap/ui 素材清单（启动时拉一次）
 (async () => { try { MMUI = await api("/api/minimap/ui"); } catch { /* 旧后端无此端点 */ } })();
-const MMCLS = "assets/minimap/cls/";               // 经典版窗口分层素材
+const MMCLS = "webui/assets/minimap/cls/";         // 经典版窗口分层素材（后端静态目录挂在 /webui/ 下）
 function mmFrame(mm) {
   const cw = mm.cw, ch = mm.ch;
   const winW = Math.max(143, cw + 9);
