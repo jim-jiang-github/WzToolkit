@@ -322,14 +322,24 @@
              will-change: transform; }
   .expthumb { display: block; max-width: 340px; max-height: 200px; margin-top: 4px;
               border: 1px solid var(--line); border-radius: 4px; image-rendering: pixelated; }
-  /* 窗口边框（不拦截鼠标，拖拽交给 .gameview） */
+  /* 窗口边框（不拦截鼠标，拖拽交给 .gameview）。渲染图里地图外的深色填充
+     和框底色几乎一样，边界隐形 → 用四角亮色取景框 + 描边把 1366×768 窗口
+     明确圈出来；标签放顶部（底部在窗口小于 768+头部时会被浏览器裁掉看不见） */
   #vpframe { position: absolute; inset: 0; z-index: 4; pointer-events: none;
-             border: 2px solid #3ba7ff66; }
+             border: 1px solid #3ba7ffaa;
+             background:
+               linear-gradient(#3ee0c8, #3ee0c8) 0 0/18px 3px no-repeat,
+               linear-gradient(#3ee0c8, #3ee0c8) 0 0/3px 18px no-repeat,
+               linear-gradient(#3ee0c8, #3ee0c8) 100% 0/18px 3px no-repeat,
+               linear-gradient(#3ee0c8, #3ee0c8) 100% 0/3px 18px no-repeat,
+               linear-gradient(#3ee0c8, #3ee0c8) 0 100%/18px 3px no-repeat,
+               linear-gradient(#3ee0c8, #3ee0c8) 0 100%/3px 18px no-repeat,
+               linear-gradient(#3ee0c8, #3ee0c8) 100% 100%/18px 3px no-repeat,
+               linear-gradient(#3ee0c8, #3ee0c8) 100% 100%/3px 18px no-repeat; }
   #vpframe .mm-hud { pointer-events: auto; }
-  #vpframe .vp-tag { position: absolute; left: 0; bottom: 0; background: #3ba7ffb8;
+  #vpframe .vp-tag { position: absolute; right: 0; top: 0; background: #3ba7ffd9;
              color: #001322; font-size: 11px; line-height: 16px; padding: 0 6px;
-             border-radius: 0 4px 0 0; pointer-events: none; white-space: nowrap;
-             opacity: .85; }
+             border-radius: 0 0 0 4px; pointer-events: none; white-space: nowrap; }
   .lifedots { position: absolute; inset: 0; pointer-events: none; }
   .ldot { position: absolute; width: 8px; height: 8px; border-radius: 50%;
           background: #ff5d5d; border: 1px solid #000c; transform: translate(-50%, -50%);
