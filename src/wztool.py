@@ -3704,7 +3704,7 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
         except Exception:                     # noqa: BLE001
             return len(s) * 12
 
-    winW = int(max(143, 48 + max(tw(street), tw(name)) + 10, cw + 20))
+    winW = int(max(144, 48 + max(tw(street), tw(name)) + 10, cw + 20))
     # canvas 行（游戏截图 1:1 实测：窗宽 = canvas宽+20，内容左缘在窗内 x=10）：
     # 整行白底 + 两侧「浅灰边|灰线|白」框条列（客户端 MiddleLeft/Right 纵向拉伸）
     # + 上下深蓝线；canvas 内容居中、上留 14px / 其余 6px 白边，
@@ -3716,16 +3716,16 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
     # 顶条：左段贴左、右段贴右、中间补渐变
     tb = Image.new("RGBA", (winW, 20), (255, 255, 255, 255))
     tb.alpha_composite(Image.open(C / "tb-left.png").convert("RGBA"), (0, 0))
-    tb.alpha_composite(Image.open(C / "tb-right.png").convert("RGBA"), (winW - 71, 0))
-    if winW > 143:
-        mid = Image.new("RGBA", (winW - 143, 20))
+    tb.alpha_composite(Image.open(C / "tb-right.png").convert("RGBA"), (winW - 72, 0))
+    if winW > 144:
+        mid = Image.new("RGBA", (winW - 144, 20))
         d = ImageDraw.Draw(mid)
         grad = [(102, 102, 110), (255, 255, 255), (85, 119, 153),
                 (153, 187, 204), (136, 153, 187)]
         for y in range(20):
             c = grad[y] if y < 5 else ((136, 153, 187) if y == 19 else (255, 255, 255))
             d.line([(0, y), (mid.width, y)], fill=c + (255,))
-        tb.alpha_composite(mid, (71, 0))
+        tb.alpha_composite(mid, (72, 0))
     win.alpha_composite(tb, (0, 0))
     # 名字条：图章 + 两行黑字（客户端就是直接写在浅蓝底上）
     nb = Image.new("RGBA", (winW, 46), (153, 187, 204, 255))
@@ -3735,17 +3735,21 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
         d.text((42, 6), street, fill=(0, 0, 0, 255), font=f)
     if name:
         d.text((42, 24), name, fill=(0, 0, 0, 255), font=f)
-    d.line([(0, 0), (0, 45)], fill=(102, 102, 110, 255))
-    d.line([(winW - 1, 0), (winW - 1, 45)], fill=(85, 119, 153, 255))
+    # 两缘照游戏 1:1：左 = 浅灰|灰线|白|蓝线，右 = …|蓝线|白|深色外框
+    for x, c in ((0, (187, 187, 187)), (1, (102, 102, 102)), (2, (255, 255, 255)),
+                 (3, (85, 119, 153)), (winW - 3, (85, 119, 153)),
+                 (winW - 2, (255, 255, 255)), (winW - 1, (110, 110, 114))):
+        d.line([(x, 0), (x, 45)], fill=c + (255,))
     win.alpha_composite(nb, (0, 20))
     # canvas 行：白底框 + 两侧框条列 + 上下深蓝线，内容居中、背板只垫内容
     row = Image.new("RGBA", (winW, rowh), (255, 255, 255, 255))
     d = ImageDraw.Draw(row)
     d.line([(0, 0), (winW - 1, 0)], fill=(85, 119, 153, 255))
     d.line([(0, rowh - 1), (winW - 1, rowh - 1)], fill=(85, 119, 153, 255))
-    for i, c in ((0, (184, 184, 184)), (1, (111, 111, 119))):
+    # 两侧框条列照游戏：左 = 浅灰|灰线|白|蓝线，右 = 深色外框|白|蓝线
+    for i, c in ((0, (184, 184, 184)), (1, (111, 111, 119)), (3, (85, 119, 153))):
         d.line([(i, 1), (i, rowh - 2)], fill=c + (255,))
-    for i, c in ((0, (237, 237, 237)), (1, (111, 111, 119))):
+    for i, c in ((0, (110, 110, 114)), (2, (85, 119, 153))):
         d.line([(winW - 1 - i, 1), (winW - 1 - i, rowh - 2)], fill=c + (255,))
     d.rectangle([ox, 15, ox + cw - 1, 15 + chh - 1], fill=(0, 0, 0, 166))
     row.alpha_composite(img, (ox, 15))

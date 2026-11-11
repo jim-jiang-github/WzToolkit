@@ -378,13 +378,22 @@
   .mm-hud .mm-tb img { position: absolute; top: 0; height: 20px; image-rendering: pixelated; }
   .mm-hud .mm-tb .tb-l { left: 0; }
   .mm-hud .mm-tb .tb-r { right: 0; }
-  .mm-hud .mm-tb .tb-mid { position: absolute; left: 71px; right: 70px; top: 0; bottom: 0;
+  .mm-hud .mm-tb .tb-mid { position: absolute; left: 71px; right: 71px; top: 0; bottom: 0;
             background: linear-gradient(to bottom,
               rgb(102,102,110) 0 1px, #fff 1px 2px, rgb(85,119,153) 2px 3px,
               rgb(153,187,204) 3px 4px, rgb(136,153,187) 4px 5px,
               #fff 5px 19px, rgb(136,153,187) 19px 20px); }
-  .mm-hud .mm-nb { position: relative; height: 46px; flex: none; background: rgb(153,187,204);
-            border-left: 1px solid #666; border-right: 1px solid #555; }
+  /* 名字条两缘照游戏截图 1:1：左 = 浅灰外框|灰线|白|蓝线|浅蓝底，
+     右 = 浅蓝底|蓝线|白|深色外框（深色列和标题栏/底条的最右列同为一根，
+     少了它名字条就显得凸出外框） */
+  .mm-hud .mm-nb { position: relative; height: 46px; flex: none;
+            border-left: 1px solid rgb(102,102,102); border-right: 1px solid rgb(110,110,114);
+            background:
+              linear-gradient(90deg, rgb(187,187,187) 0 1px, transparent 1px) 0 0/1px 100% no-repeat,
+              linear-gradient(90deg, #fff 0 1px, transparent 1px) 2px 0/1px 100% no-repeat,
+              linear-gradient(90deg, rgb(85,119,153) 0 1px, transparent 1px) 3px 0/1px 100% no-repeat,
+              linear-gradient(270deg, #fff 0 1px, rgb(85,119,153) 1px 2px, transparent 2px) 100% 0/3px 100% no-repeat,
+              rgb(153,187,204); }
   .mm-hud .mm-nb img.mm-mark { position: absolute; left: 4px; top: 2px; width: 33px; height: 33px;
             image-rendering: pixelated; }
   .mm-hud .mm-nb .mm-names { position: absolute; left: 42px; top: 4px; right: 4px;
@@ -396,9 +405,10 @@
   .mm-hud .mm-cvrow { position: relative; flex: none; line-height: 0;
             border-top: 1px solid rgb(85,119,153); border-bottom: 1px solid rgb(85,119,153);
             padding: 14px 6px 6px;
+            /* 两侧框条列照游戏 1:1：左 = 浅灰|灰线|白|蓝线，右 = 深色外框|白|蓝线 */
             background:
-              linear-gradient(90deg, #b8b8b8 0 1px, #6f6f73 1px 2px, #fff 2px) 0 0/3px 100% no-repeat,
-              linear-gradient(270deg, #b8b8b8 0 1px, #6f6f73 1px 2px, #fff 2px) 100% 0/3px 100% no-repeat,
+              linear-gradient(90deg, #b8b8b8 0 1px, #6f6f73 1px 2px, #fff 2px 3px, rgb(85,119,153) 3px 4px) 0 0/4px 100% no-repeat,
+              linear-gradient(270deg, rgb(110,110,114) 0 1px, #fff 1px 2px, rgb(85,119,153) 2px 3px) 100% 0/3px 100% no-repeat,
               #fff; }
   .mm-hud .mm-inner { position: relative; line-height: 0; margin: 0 auto;
             background: rgba(0,0,0,.65); }
@@ -2639,7 +2649,7 @@ function mmFrame(mm, street, name) {
   // 布局按游戏内截图 1:1 实测（对照 UIMiniMap.cpp::update_canvas，178 下限是
   // v208 新版的，怀旧服没有）：窗口宽 = max(143, 48+max(名宽)+10, canvas宽+20)，
   // canvas 永远 1:1 居中（≥10px 边距）；canvas 行总高 = 1+14+ch+6+1
-  const winW = Math.max(143, 58 + Math.max(mmTextW(street), mmTextW(name)), cw + 20);
+  const winW = Math.max(144, 58 + Math.max(mmTextW(street), mmTextW(name)), cw + 20);
   const cvH = ch + 22;
   return { winW, winH: 20 + 46 + cvH + 14, cvH };
 }
