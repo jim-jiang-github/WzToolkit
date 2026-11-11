@@ -3547,19 +3547,40 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     return result
 
 
-def _cls_window(img: "Image", winW: int, street: str = "", name: str = "") -> "Image":
+def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
     """合成经典版小地图窗口（怀旧服客户端样式，素材从游戏内截图 1:1 抠出）。
 
     结构：白底标题栏(20px，左「小地图」黑字 / 右 −/+/大地图 按钮) →
     浅蓝名字条(46px，太阳图章+黑字) → canvas(1px 深蓝描边+3px 白边) →
     渐变底条(14px)。img 是已经画好标记的 canvas RGBA 图。
+
+    布局公式照抄客户端 UIMiniMap.cpp::update_canvas：
+      window_width = max(178, 48+max(区域名宽,地图名宽)+10, canvas宽+20)
+      canvas_x     = max(10, window_width/2 - canvas宽/2)
+    canvas 两侧露出的不是场景而是 MaxMap/c 半透明背板（实测黑 ~65%），
+    整行铺满、canvas 画在上面 → 和游戏内一样没有"断开"的观感。
     """
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
     cw, chh = img.size
-    winW = max(143, cw + 9)
     C = MMUI_STATIC / "cls"
+    try:                                      # 客户端字体是 12px 宋体位图字
+        f = ImageFont.truetype("C:/Windows/Fonts/simsun.ttc", 12)
+    except Exception:                         # noqa: BLE001
+        f = None
+    _m = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+
+    def tw(s: str) -> float:
+        if not s:
+            return 0
+        try:
+            return _m.textlength(s, font=f)
+        except Exception:                     # noqa: BLE001
+            return len(s) * 12
+
+    winW = int(max(178, 48 + max(tw(street), tw(name)) + 10, cw + 20))
+    ox = max(10, winW // 2 - cw // 2)
     winH = 20 + 46 + (chh + 5) + 14
-    win = Image.new("RGBA", (winW, winH), (153, 187, 204, 255))
+    win = Image.new("RGBA", (winW, winH), (0, 0, 0, 0))
     # 顶条：左段贴左、右段贴右、中间补渐变
     tb = Image.new("RGBA", (winW, 20), (255, 255, 255, 255))
     tb.alpha_composite(Image.open(C / "tb-left.png").convert("RGBA"), (0, 0))
@@ -3578,11 +3599,6 @@ def _cls_window(img: "Image", winW: int, street: str = "", name: str = "") -> "I
     nb = Image.new("RGBA", (winW, 46), (153, 187, 204, 255))
     nb.alpha_composite(Image.open(C / "mark-sun.png").convert("RGBA"), (4, 2))
     d = ImageDraw.Draw(nb)
-    try:                                      # 客户端字体是 12px 宋体位图字
-        from PIL import ImageFont
-        f = ImageFont.truetype("C:/Windows/Fonts/simsun.ttc", 12)
-    except Exception:                         # noqa: BLE001
-        f = None
     if street:
         d.text((42, 6), street, fill=(0, 0, 0, 255), font=f)
     if name:
@@ -3590,14 +3606,15 @@ def _cls_window(img: "Image", winW: int, street: str = "", name: str = "") -> "I
     d.line([(0, 0), (0, 45)], fill=(102, 102, 110, 255))
     d.line([(winW - 1, 0), (winW - 1, 45)], fill=(85, 119, 153, 255))
     win.alpha_composite(nb, (0, 20))
-    # canvas：深蓝描边 + 白边；内部背板 = 客户端 MaxMap/c（半透明深色，实测
-    # 黑色 ~65% 不透明、透出场景 —— 从游戏内截图逐像素回归测得）
+    # canvas 行：整行铺半透明背板（客户端 MaxMap/c），canvas 居中画在上面
+    row = Image.new("RGBA", (winW, chh + 5), (0, 0, 0, 166))
     cv = Image.new("RGBA", (cw + 2, chh + 5), (255, 255, 255, 255))
     dc = ImageDraw.Draw(cv)
     dc.rectangle([0, 0, cw + 1, chh + 4], outline=(85, 119, 153, 255))
     dc.rectangle([1, 1, cw, chh], fill=(0, 0, 0, 166))
     cv.alpha_composite(img, (1, 1))
-    win.alpha_composite(cv, ((winW - cw - 2) // 2, 66))
+    row.alpha_composite(cv, (ox, 0))
+    win.alpha_composite(row, (0, 66))
     # 底条
     win.alpha_composite(Image.open(C / "bottom.png").convert("RGBA").resize((winW, 14)), (0, winH - 14))
     return win
@@ -3627,8 +3644,7 @@ def _minimap_composite(export: dict, out: Path, zoom: int = 2) -> Path:
         mark("npc", n["x"], n["y"])
     for p in mm.get("portals", []):
         mark("portal", p["x"], p["y"])
-    win = _cls_window(img, max(143, img.width + 9),
-                      export.get("street_name", ""), export.get("name", ""))
+    win = _cls_window(img, export.get("street_name", ""), export.get("name", ""))
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     if zoom > 1:

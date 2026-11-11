@@ -390,10 +390,11 @@
   .mm-hud .mm-nb .mm-names { position: absolute; left: 42px; top: 4px; right: 4px;
             font: bold 12px/15px "SimSun","NSimSun",serif; color: #000; }
   .mm-hud .mm-nb .mm-names div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .mm-hud .mm-cv { position: relative; flex: none; margin: 0 auto; line-height: 0;
-            padding-bottom: 3px; border: 1px solid rgb(85,119,153);
-            /* 背板：客户端 MaxMap/c 是半透明深色（实测黑色 ~65% 不透明，透出场景） */
+  /* canvas 行：整行铺半透明背板（客户端 MaxMap/c），canvas 按 map_draw_origin_x 居中画在上面 */
+  .mm-hud .mm-cvrow { position: relative; flex: none; line-height: 0;
             background: rgba(0,0,0,.65); }
+  .mm-hud .mm-cv { position: absolute; top: 0; line-height: 0;
+            padding-bottom: 3px; border: 1px solid rgb(85,119,153); background: rgba(0,0,0,.65); }
   .mm-hud .mm-cv img.mm-img { display: block; width: 100%; height: auto;
                               image-rendering: pixelated; }
   .mm-hud .mm-bt { height: 14px; flex: none; margin-top: 1px;
@@ -2620,19 +2621,30 @@ function bindMinimap(d) {
 let MMUI = null;                                   // /api/minimap/ui 素材清单（启动时拉一次）
 (async () => { try { MMUI = await api("/api/minimap/ui"); } catch { /* 旧后端无此端点 */ } })();
 const MMCLS = "webui/assets/minimap/cls/";         // 经典版窗口分层素材（后端静态目录挂在 /webui/ 下）
-function mmFrame(mm) {
+const _mmMeasure = document.createElement("canvas").getContext("2d");
+function mmTextW(s) {                              // 客户端 Text 用 12px 字体量宽（mark_text_width）
+  if (!s) return 0;
+  _mmMeasure.font = "12px SimSun";
+  return Math.ceil(_mmMeasure.measureText(s).width);
+}
+function mmFrame(mm, street, name) {
   const cw = mm.cw, ch = mm.ch;
-  const winW = Math.max(143, cw + 9);
+  // 客户端布局（UIMiniMap.cpp::update_canvas）：
+  //   window_width = max(178, 48 + max(区域名宽,地图名宽) + 10, canvas宽 + 20)
+  //   canvas_x     = max(10, window_width/2 - canvas宽/2)，canvas 永远 1:1 原生尺寸
+  const winW = Math.max(178, 58 + Math.max(mmTextW(street), mmTextW(name)), cw + 20);
+  const ox = Math.max(10, Math.floor(winW / 2 - cw / 2));
   const cvH = ch + 5;                              // 描边 1 + canvas ch + 底白边 3 + 描边 1
-  return { winW, winH: 20 + 46 + cvH + 14, cvH };
+  return { winW, ox, winH: 20 + 46 + cvH + 14, cvH };
 }
 const MMHUD = {
   // 位置 = 客户端 PosMINIMAP：默认左上 (0,0)，拖动后记住（不提供下拉设置）
   pos: JSON.parse(localStorage.getItem("wt_mm_pos") || "null"),
 };
 function mmHudHTML(d) {
-  const mm = d.minimap, g = mmFrame(mm);
+  const mm = d.minimap;
   const street = d.street_name || "", name = d.name || "";
+  const g = mmFrame(mm, street, name);
   // 经典版标记：portal(pt=2 才画，8×8 蓝圈)/npc(4×7 绿点)，素材 = 客户端 bundle 的
   // MapHelper.img/minimap 同名精灵（cls/marks/）。客户端画法 draw(pos-(宽/2,0))：
   // 横向居中、顶边对准 → CSS translateX(-50%)。经典版不画怪物标记。
@@ -2655,8 +2667,10 @@ function mmHudHTML(d) {
       <div class="mm-names"><div>${street}</div><div>${name}</div></div>
       ${mm.auto ? '<span class="hud-auto" title="源数据没有小地图，这张是工具自动生成的：黑底无背景，只标传送点">自动生成</span>' : ""}
     </div>
-    <div class="mm-cv" style="width:${mm.cw}px;height:${g.cvH}px">
-      <img class="mm-img" src="${mm.url}" alt="minimap">${marks}
+    <div class="mm-cvrow" style="height:${g.cvH}px">
+      <div class="mm-cv" style="left:${g.ox}px;width:${mm.cw}px;height:${g.cvH}px">
+        <img class="mm-img" src="${mm.url}" alt="minimap">${marks}
+      </div>
     </div>
     <div class="mm-bt"></div>
   </div>`;
