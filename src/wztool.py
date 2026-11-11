@@ -3602,11 +3602,12 @@ def _cls_window(img: "Image", winW: int, street: str = "", name: str = "") -> "I
 
 
 def _minimap_composite(export: dict, out: Path, zoom: int = 2) -> Path:
-    """画出完整经典版小地图窗口（框体+canvas+官方标记）→ PNG。
+    """画出完整经典版小地图窗口（框体+canvas+经典标记）→ PNG。
 
     框体 = 怀旧服客户端样式（webui/assets/minimap/cls 分层素材），
-    标记 = MapHelper.img/minimap 官方贴图。先按 1x 原生布局合成，
-    再整窗 NEAREST 放大 zoom 倍（和客户端像素风一致）。
+    标记 = MapHelper.img/minimap 经典版精灵（portal 8×8 / npc 4×7；经典版
+    不画怪物标记）。canvas 背板半透明 → 导出 RGBA，叠加到别的画面上时
+    透出底图（和游戏内一致）。先按 1x 原生布局合成，再整窗 NEAREST 放大 zoom 倍。
     """
     from PIL import Image
     mm = export.get("minimap")
@@ -3615,27 +3616,22 @@ def _minimap_composite(export: dict, out: Path, zoom: int = 2) -> Path:
     if not (MMUI_STATIC / "cls" / "tb-left.png").is_file():
         raise CliError("经典版小地图素材缺失（webui/assets/minimap/cls）", 1)
     img = Image.open(mm["img_file"]).convert("RGBA")
-    cw, chh = img.size
-    # 标记 = MapHelper 官方贴图；客户端画法 draw(pos-(宽/2,0))：横向居中、顶边对准
-    tier_mark = {"normal": "mob_1", "big": "mob_3", "boss": "mob_4"}
 
     def mark(name: str, x: int, y: int) -> None:
-        p = Image.open(MMUI_STATIC / "marks" / f"{name}.png").convert("RGBA")
+        p = Image.open(MMUI_STATIC / "cls" / "marks" / f"{name}.png").convert("RGBA")
         img.alpha_composite(p, (int(x) - p.width // 2, int(y)))
 
     for n in mm.get("npcs", []):
         mark("npc", n["x"], n["y"])
-    for m in mm.get("mobs", []):
-        mark(tier_mark.get(m.get("tier"), "mob_1"), m["x"], m["y"])
     for p in mm.get("portals", []):
         mark("portal", p["x"], p["y"])
-    win = _cls_window(img, max(143, cw + 9),
+    win = _cls_window(img, max(143, img.width + 9),
                       export.get("street_name", ""), export.get("name", ""))
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     if zoom > 1:
         win = win.resize((win.width * zoom, win.height * zoom), Image.NEAREST)
-    win.convert("RGB").save(out)
+    win.save(out)                                   # 保留 alpha（canvas 背板半透明）
     return out
 
 

@@ -358,15 +358,14 @@
   th:first-child, td:first-child { width: 26px; }
   td { white-space: nowrap; }
   .flexline { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  /* 游戏内小地图标记（HUD 上叠加，官方贴图 MapHelper.img/minimap + UIMiniMap 算法：
-     客户端画标记 = 横向居中、顶边对准坐标，即 draw(pos - (宽/2, 0))） */
+  /* 游戏内小地图标记（HUD 上叠加，经典版素材 = MapHelper.img/minimap 的客户端
+     bundle 精灵：portal 8×8 / npc 4×7，客户端画法 draw(pos-(宽/2,0))：
+     横向居中、顶边对准坐标；经典版没有怪物/玩家标记（那是现代版才有的） */
   .mmd { position: absolute; transform: translateX(-50%); pointer-events: auto;
-         image-rendering: pixelated; filter: drop-shadow(0 1px 1px #0008); }
-  .mmd.portal { width: 12px; height: 12px; cursor: pointer; }
+         image-rendering: pixelated; }
+  .mmd.portal { width: 8px; height: 8px; cursor: pointer; }
   .mmd.portal:hover { filter: brightness(1.5) drop-shadow(0 0 3px #fffa); }
-  .mmd.npc { width: 8px; height: 11px; cursor: help; }
-  .mmd.mob { width: 12px; height: 12px; cursor: help; }
-  .mmd.mob.big, .mmd.mob.boss { width: 15px; height: 15px; }
+  .mmd.npc { width: 4px; height: 7px; cursor: help; }
   /* 经典版小地图窗口（怀旧服客户端样式，素材 = webui/assets/minimap/cls/，
      从游戏内截图 1:1 抠出：白底标题栏黑字「小地图」+ 蓝−/灰+/橙大地图按钮、
      浅蓝名字条 + 太阳图章、深蓝描边 canvas 框、渐变底条）。
@@ -399,7 +398,7 @@
             background: url("webui/assets/minimap/cls/bottom.png") 0 0 / 100% 14px no-repeat; }
   .mm-hud .hud-auto { position: absolute; right: 46px; top: 3px; font: bold 11px/14px "SimSun",serif;
             color: #0a0a0a; opacity: .85; pointer-events: none; }
-  .mm-hud[data-n="off"] .mmd.npc, .mm-hud[data-m="off"] .mmd.mob,
+  .mm-hud[data-n="off"] .mmd.npc,
   .mm-hud[data-p="off"] .mmd.portal { display: none; }
 </style>
 </head>
@@ -2595,10 +2594,10 @@ function mzClose() { $("#mapzoom").hidden = true; }
    标记坐标 = (世界坐标 + centerX/centerY) / 2^mag（后端已换算成 canvas 像素）。
    传送门只画 pt=2 的（update_static_markers 同款），点击直接跳目标图。
    小地图只以 HUD 形式叠在预览图上，不再单独出卡片。 */
-const MMSHOW = { p: true, n: true, m: true };   // 标记开关（HUD 用，换图后重置回默认）
+const MMSHOW = { p: true, n: true };            // 标记开关（HUD 用，换图后重置回默认）
 function bindMinimap(d) {
   if (!d.minimap) return;
-  for (const [id, key] of [["mm-p", "p"], ["mm-n", "n"], ["mm-m", "m"]]) {
+  for (const [id, key] of [["mm-p", "p"], ["mm-n", "n"]]) {
     const el = $("#" + id);
     if (el) el.onchange = () => {
       MMSHOW[key] = el.checked;
@@ -2630,22 +2629,18 @@ const MMHUD = {
   pos: JSON.parse(localStorage.getItem("wt_mm_pos") || "null"),
 };
 function mmHudHTML(d) {
-  const mm = d.minimap, g = mmFrame(mm), B = MMUI && MMUI.ready ? MMUI.base : null;
+  const mm = d.minimap, g = mmFrame(mm);
   const street = d.street_name || "", name = d.name || "";
-  // 官方标记：portal(pt=2 才画) / npc / mob（boss 橙星、大怪青星）。
-  // 客户端画法 draw(pos-(宽/2,0))：横向居中、顶边对准 → CSS translateX(-50%)
-  const marks = B ? mm.portals.map((p) =>
-    `<img class="mmd portal" data-t="p" src="${B}marks/portal.png" style="left:${p.x}px;top:${p.y}px"
+  // 经典版标记：portal(pt=2 才画，8×8 蓝圈)/npc(4×7 绿点)，素材 = 客户端 bundle 的
+  // MapHelper.img/minimap 同名精灵（cls/marks/）。客户端画法 draw(pos-(宽/2,0))：
+  // 横向居中、顶边对准 → CSS translateX(-50%)。经典版不画怪物标记。
+  const marks = mm.portals.map((p) =>
+    `<img class="mmd portal" data-t="p" src="${MMCLS}marks/portal.png" style="left:${p.x}px;top:${p.y}px"
        data-tm="${p.tm}" title="传送门 → ${p.tmn || p.tm || "?"}（点击进入）" alt="">`).join("")
     + mm.npcs.map((n) =>
-    `<img class="mmd npc" data-t="n" src="${B}marks/npc.png" style="left:${n.x}px;top:${n.y}px"
-       title="NPC ${n.id}" alt="">`).join("")
-    + mm.mobs.map((m) =>
-    `<img class="mmd mob${m.tier === "big" ? " big" : m.tier === "boss" ? " boss" : ""}" data-t="m"
-       src="${B}marks/${m.tier === "boss" ? "mob_4" : m.tier === "big" ? "mob_3" : "mob_1"}.png"
-       style="left:${m.x}px;top:${m.y}px" title="${m.name || "怪物"} ${m.id}" alt="">`).join("")
-    : "";
-  return `<div class="mm-hud" id="mm-hud" hidden data-p="on" data-n="on" data-m="on"
+    `<img class="mmd npc" data-t="n" src="${MMCLS}marks/npc.png" style="left:${n.x}px;top:${n.y}px"
+       title="NPC ${n.id}" alt="">`).join("");
+  return `<div class="mm-hud" id="mm-hud" hidden data-p="on" data-n="on"
       style="width:${g.winW}px;height:${g.winH}px"
       title="${street} ${name}｜拖动可移动（= 客户端PosMINIMAP设置），双击回到 (0,0)">
     <div class="mm-tb">
@@ -2720,7 +2715,7 @@ async function mapLoad(id, preview) {
   // 换图时配置全部回到默认（不延续上一张图的设置）
   if (!mapRef || mapRef.id !== id) {
     NOBG = false; EXPORTMOBS = false; DENSITY = 1;
-    MMSHOW.p = true; MMSHOW.n = true; MMSHOW.m = true;
+    MMSHOW.p = true; MMSHOW.n = true;
   }
   mapRef = { id, preview };
   const det = $("#detail");
@@ -2755,8 +2750,7 @@ async function mapLoad(id, preview) {
         ${nLad ? `<label title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" /> 显示梯子（${nLad}）</label>` : ""}
         ${d.minimap ? `<div class="optgrp">小地图 HUD 标记</div>
         <label title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${MMSHOW.p ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
-        <label><input type="checkbox" id="mm-n" ${MMSHOW.n ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>
-        <label><input type="checkbox" id="mm-m" ${MMSHOW.m ? "checked" : ""} /> 刷怪点 ${d.minimap.mobs.length}</label>` : ""}
+        <label><input type="checkbox" id="mm-n" ${MMSHOW.n ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>` : ""}
         ${d.life_count ? `<div class="optgrp">导出选项</div>
         <label title="怪物密度倍数：影响页面叠加与导出合成的怪物数量；是否带怪物由上面的「显示怪物」开关决定" style="cursor:default">密度
           <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:110px" />
