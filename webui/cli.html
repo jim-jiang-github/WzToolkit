@@ -379,54 +379,57 @@
   /* 经典版小地图窗口（怀旧服客户端样式，素材 = webui/assets/minimap/cls/，
      从游戏内截图 1:1 抠出：白底标题栏黑字「小地图」+ 蓝−/灰+/橙大地图按钮、
      浅蓝名字条 + 太阳图章、深蓝描边 canvas 框、渐变底条）。
-     布局：顶条 20px + 名字条 46px + canvas(1px 深蓝描边) + 底条 14px。 */
+     布局：顶条 20px + 名字条 46px + canvas 行(ch+17) + 底条 14px；
+     最右 1px = 半透明阴影列（游戏截图 x143 实测 ~50% 黑，盖在场景上）。 */
   .mm-hud { position: absolute; z-index: 5; cursor: move; touch-action: none; user-select: none;
-            display: flex; flex-direction: column;
-            filter: drop-shadow(1px 1px 1px #00000055); }
+            display: flex; flex-direction: column; }
+  .mm-hud::after { content: ''; position: absolute; top: 0; right: -1px; width: 1px; height: 100%;
+            background: rgba(0,0,0,.5); pointer-events: none; }
   .mm-hud[hidden] { display: none; }
   .mm-hud .mm-tb { position: relative; height: 20px; flex: none; }
   .mm-hud .mm-tb img { position: absolute; top: 0; height: 20px; image-rendering: pixelated; }
   .mm-hud .mm-tb .tb-l { left: 0; }
   .mm-hud .mm-tb .tb-r { right: 0; }
-  .mm-hud .mm-tb .tb-mid { position: absolute; left: 71px; right: 71px; top: 0; bottom: 0;
+  .mm-hud .mm-tb .tb-mid { position: absolute; left: 72px; right: 71px; top: 0; bottom: 0;
             background: linear-gradient(to bottom,
               rgb(102,102,110) 0 1px, #fff 1px 2px, rgb(85,119,153) 2px 3px,
               rgb(153,187,204) 3px 4px, rgb(136,153,187) 4px 5px,
               #fff 5px 19px, rgb(136,153,187) 19px 20px); }
-  /* 名字条两缘照游戏截图 1:1：左 = 浅灰外框|灰线|白|蓝线|浅蓝底，
-     右 = 浅蓝底|蓝线|白|深色外框（深色列和标题栏/底条的最右列同为一根，
-     少了它名字条就显得凸出外框） */
+  /* 名字条照游戏截图 1:1：左外沿 4 列（浅灰184|灰线102|白|蓝线）+ 浅蓝底，
+     右缘 2 列（蓝线|白），底部 3 行浅色渐变（187|204|187）——
+     与标题栏/canvas 行/底条的边列完全同位，交界不再有缺口 */
   .mm-hud .mm-nb { position: relative; height: 46px; flex: none;
-            border-left: 1px solid rgb(102,102,102); border-right: 1px solid rgb(110,110,114);
             background:
-              linear-gradient(90deg, rgb(187,187,187) 0 1px, transparent 1px) 0 0/1px 100% no-repeat,
-              linear-gradient(90deg, #fff 0 1px, transparent 1px) 2px 0/1px 100% no-repeat,
-              linear-gradient(90deg, rgb(85,119,153) 0 1px, transparent 1px) 3px 0/1px 100% no-repeat,
-              linear-gradient(270deg, #fff 0 1px, rgb(85,119,153) 1px 2px, transparent 2px) 100% 0/3px 100% no-repeat,
+              linear-gradient(90deg, rgb(184,184,184) 0 1px, rgb(102,102,110) 1px 2px,
+                #fff 2px 3px, rgb(85,119,153) 3px 4px) 0 0/4px 100% no-repeat,
+              linear-gradient(270deg, #fff 0 1px, rgb(85,119,153) 1px 2px, transparent 2px) 100% 0/2px 100% no-repeat,
+              linear-gradient(0deg, rgb(187,204,221) 0 1px, rgb(204,221,221) 1px 2px,
+                rgb(187,204,221) 2px 3px, transparent 3px) 4px 100%/calc(100% - 6px) 3px no-repeat,
               rgb(153,187,204); }
-  .mm-hud .mm-nb img.mm-mark { position: absolute; left: 4px; top: 2px; width: 33px; height: 33px;
+  .mm-hud .mm-nb img.mm-mark { position: absolute; left: 7px; top: 3px; width: 38px; height: 38px;
             image-rendering: pixelated; }
-  .mm-hud .mm-nb .mm-names { position: absolute; left: 42px; top: 4px; right: 4px;
-            font: bold 12px/15px "SimSun","NSimSun",serif; color: #000; }
+  .mm-hud .mm-nb .mm-names { position: absolute; left: 51px; top: 4px; right: 4px;
+            font: bold 12px/15px "SimSun","NSimSun",serif; color: #000;
+            text-shadow: 1px 1px 0 #fff; }
   .mm-hud .mm-nb .mm-names div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* canvas 行（游戏截图 1:1 实测）：整块 MaxMap/c 半透明深色背板铺满内窗
-     （客户端 update_canvas 先铺 MiddleCenter 再居中画 canvas，空白区与地图
-     透明天空同色，不是白底）+ 两侧「浅灰边|灰线|白」框条列
-     （客户端 MiddleLeft/Right 纵向拉伸）+ 上下深蓝线；内容居中、
-     上留 14px / 其余 6px 边 */
+  /* canvas 行照游戏截图 1:1（101030400 实测）：顶蓝线 → 5px 浅色渐变
+     (204|187|204|238|255) → MaxMap/c 半透明背板铺满内窗（canvas 透明天空与
+     空白区同色、透出游戏画面）→ canvas 1:1 @y15；左右边列与名字条同位：
+     左 = 浅灰184|灰线102|白|蓝线|白衬×3，右 = 蓝线|白 */
   .mm-hud .mm-cvrow { position: relative; flex: none; line-height: 0;
-            border-top: 1px solid rgb(85,119,153); border-bottom: 1px solid rgb(85,119,153);
-            padding: 14px 6px 6px;
-            /* 两侧框条列照游戏 1:1：左 = 浅灰|灰线|白|蓝线，右 = 深色外框|白|蓝线 */
             background:
-              linear-gradient(90deg, #b8b8b8 0 1px, #6f6f73 1px 2px, #fff 2px 3px, rgb(85,119,153) 3px 4px) 0 0/4px 100% no-repeat,
-              linear-gradient(270deg, rgb(110,110,114) 0 1px, #fff 1px 2px, rgb(85,119,153) 2px 3px) 100% 0/3px 100% no-repeat,
-              linear-gradient(rgba(0,0,0,.65), rgba(0,0,0,.65)),
-              #fff; }
-  .mm-hud .mm-inner { position: relative; line-height: 0; margin: 0 auto; }
+              linear-gradient(rgb(85,119,153) 0 1px, transparent 1px) 4px 0/calc(100% - 6px) 1px no-repeat,
+              linear-gradient(180deg, rgb(204,204,204) 0 1px, rgb(187,187,187) 1px 2px,
+                rgb(204,204,204) 2px 3px, rgb(238,238,238) 3px 4px, #fff 4px 5px, transparent 5px) 4px 1px/calc(100% - 6px) 5px no-repeat,
+              linear-gradient(90deg, rgb(184,184,184) 0 1px, rgb(102,102,110) 1px 2px,
+                #fff 2px 3px, rgb(85,119,153) 3px 4px) 0 0/4px 100% no-repeat,
+              linear-gradient(#fff, #fff) 4px 6px/3px calc(100% - 6px) no-repeat,
+              linear-gradient(270deg, #fff 0 1px, rgb(85,119,153) 1px 2px, transparent 2px) 100% 0/2px 100% no-repeat,
+              linear-gradient(rgba(0,0,0,.65), rgba(0,0,0,.65)) 7px 6px/calc(100% - 10px) calc(100% - 6px) no-repeat; }
+  .mm-hud .mm-inner { position: absolute; line-height: 0; }
   .mm-hud .mm-cvrow .mm-img { display: block; width: 100%; height: auto;
                               image-rendering: pixelated; }
-  .mm-hud .mm-bt { height: 14px; flex: none; margin-top: 1px;
+  .mm-hud .mm-bt { height: 14px; flex: none;
             background: url("webui/assets/minimap/cls/bottom.png") 0 0 / 100% 14px no-repeat; }
   .mm-hud .hud-auto { position: absolute; right: 46px; top: 3px; font: bold 11px/14px "SimSun",serif;
             color: #0a0a0a; opacity: .85; pointer-events: none; }
@@ -2658,12 +2661,15 @@ function mmTextW(s) {                              // 客户端 Text 用 12px �
 }
 function mmFrame(mm, street, name) {
   const cw = mm.cw, ch = mm.ch;
-  // 布局按游戏内截图 1:1 实测（对照 UIMiniMap.cpp::update_canvas，178 下限是
-  // v208 新版的，怀旧服没有）：窗口宽 = max(143, 48+max(名宽)+10, canvas宽+20)，
-  // canvas 永远 1:1 居中（≥10px 边距）；canvas 行总高 = 1+14+ch+6+1
-  const winW = Math.max(144, 58 + Math.max(mmTextW(street), mmTextW(name)), cw + 20);
-  const cvH = ch + 22;
-  return { winW, winH: 20 + 46 + cvH + 14, cvH };
+  // 布局照怀旧服游戏截图 1:1 实测（101030400：canvas 127×134 模板匹配 err1.9，
+  // 窗口 x0..142 宽 143 + 最右 1px 半透明阴影列）：
+  //   窗宽 = max(143, 58+max(名宽)+10, canvas宽+16)
+  //   canvas x = max(10, winW/2-cw/2)（右边距比左边距小，客户端公式如此）
+  //   canvas 行 = 顶蓝线1 + 浅色渐变5 + 背板9 + canvas + 背板2 = ch+17，canvas 在行内 y=15
+  const winW = Math.max(143, 58 + Math.max(mmTextW(street), mmTextW(name)), cw + 16);
+  const ox = Math.max(10, Math.floor(winW / 2 - cw / 2));
+  const cvH = ch + 17;
+  return { winW, winH: 20 + 46 + cvH + 14, cvH, ox };
 }
 const MMHUD = {
   // 位置 = 客户端 PosMINIMAP：默认左上 (0,0)，拖动后记住（不提供下拉设置）
@@ -2696,7 +2702,7 @@ function mmHudHTML(d) {
       ${mm.auto ? '<span class="hud-auto" title="源数据没有小地图，这张是工具自动生成的：黑底无背景，只标传送点">自动生成</span>' : ""}
     </div>
     <div class="mm-cvrow" style="height:${g.cvH}px">
-      <div class="mm-inner" style="width:${mm.cw}px;height:${mm.ch}px">
+      <div class="mm-inner" style="left:${g.ox}px;top:15px;width:${mm.cw}px;height:${mm.ch}px">
         <img class="mm-img" src="${mm.url}" alt="minimap">${marks}
       </div>
     </div>

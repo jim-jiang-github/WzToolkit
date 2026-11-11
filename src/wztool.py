@@ -3677,17 +3677,15 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
 def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
     """合成经典版小地图窗口（怀旧服客户端样式，素材从游戏内截图 1:1 抠出）。
 
-    结构：白底标题栏(20px，左「小地图」黑字 / 右 −/+/大地图 按钮) →
-    浅蓝名字条(46px，太阳图章+黑字) → canvas(1px 深蓝描边+3px 白边) →
-    渐变底条(14px)。img 是已经画好标记的 canvas RGBA 图。
-
-    布局按游戏内截图 1:1 实测（对照 UIMiniMap.cpp::update_canvas，178 下限是
-    v208 新版的，怀旧服实测没有）：
-      window_width = max(143, 48+max(区域名宽,地图名宽)+10, canvas宽+20)
-      canvas_x     = max(10, (window_width-canvas宽)/2)
-    canvas 两侧是白衬+框条列；MaxMap/c 半透明深色背板（实测黑 ~65%）
-    铺满整个内窗（客户端 update_canvas 就是先铺 MiddleCenter 再居中画 canvas），
-    所以 canvas 两侧/上下的空白区和地图透明天空是同一块背板，不是白底。
+    结构（101030400 游戏截图 + canvas 127×134 模板匹配 err1.9 实测）：
+    白底标题栏(20px) → 浅蓝名字条(46px，太阳图章+黑字，底 3 行浅色渐变) →
+    canvas 行(ch+17：顶蓝线1 + 浅色渐变5 + 背板9 + canvas + 背板2) →
+    渐变底条(14px)；最右另有 1px 半透明阴影列(~50% 黑)。
+      window_width = max(143, 48+max(区域名宽,地图名宽)+10, canvas宽+16)
+      canvas_x     = max(10, (window_width-canvas宽)/2)   # 右边距比左边距小
+    左外沿 4 列 = 浅灰184|灰线102|白|蓝线（各带同位）；右缘 2 列 = 蓝线|白。
+    MaxMap/c 背板 = 黑 ~65% 半透明、铺满整个内窗（canvas 透明天空与空白区同色，
+    合成到画面上时透出场景，和游戏内一致）。img 是已画好标记的 canvas RGBA 图。
     """
     from PIL import Image, ImageDraw, ImageFont
     cw, chh = img.size
@@ -3706,21 +3704,17 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
         except Exception:                     # noqa: BLE001
             return len(s) * 12
 
-    winW = int(max(144, 48 + max(tw(street), tw(name)) + 10, cw + 20))
-    # canvas 行（游戏截图 1:1 实测：窗宽 = canvas宽+20，内容左缘在窗内 x=10）：
-    # 白底 + 整块 MaxMap/c 半透明深色背板（客户端 update_canvas 先把 MaxMap/c
-    # 拉伸铺满整个内窗、再居中画 canvas —— 空白区与地图透明天空同色，不是白衬）
-    # + 两侧框条列 + 上下深蓝线；canvas 内容居中、上留 14px / 其余 6px 边
+    winW = int(max(143, 48 + max(tw(street), tw(name)) + 10, cw + 16))
     ox = max(10, (winW - cw) // 2)
-    rowh = chh + 22                             # 顶蓝线1 + 上边14 + 内容 + 下边6 + 底蓝线1
+    rowh = chh + 17                             # 顶蓝线1 + 渐变5 + 背板9 + 内容 + 背板2
     winH = 20 + 46 + rowh + 14
-    win = Image.new("RGBA", (winW, winH), (0, 0, 0, 0))
-    # 顶条：左段贴左、右段贴右、中间补渐变
+    win = Image.new("RGBA", (winW + 1, winH), (0, 0, 0, 0))   # +1 = 右侧阴影列
+    # 顶条：左段贴左、右段贴右（71px，已去掉烤进场景的最右列）、中间补渐变
     tb = Image.new("RGBA", (winW, 20), (255, 255, 255, 255))
     tb.alpha_composite(Image.open(C / "tb-left.png").convert("RGBA"), (0, 0))
-    tb.alpha_composite(Image.open(C / "tb-right.png").convert("RGBA"), (winW - 72, 0))
-    if winW > 144:
-        mid = Image.new("RGBA", (winW - 144, 20))
+    tb.alpha_composite(Image.open(C / "tb-right.png").convert("RGBA"), (winW - 71, 0))
+    if winW > 143:
+        mid = Image.new("RGBA", (winW - 143, 20))
         d = ImageDraw.Draw(mid)
         grad = [(102, 102, 110), (255, 255, 255), (85, 119, 153),
                 (153, 187, 204), (136, 153, 187)]
@@ -3729,36 +3723,48 @@ def _cls_window(img: "Image", street: str = "", name: str = "") -> "Image":
             d.line([(0, y), (mid.width, y)], fill=c + (255,))
         tb.alpha_composite(mid, (72, 0))
     win.alpha_composite(tb, (0, 0))
-    # 名字条：图章 + 两行黑字（客户端就是直接写在浅蓝底上）
+    # 名字条：图章（38×38 凹框+太阳，游戏实测 @ (7,3)）+ 两行黑字（带 1px 白投影）
     nb = Image.new("RGBA", (winW, 46), (153, 187, 204, 255))
-    nb.alpha_composite(Image.open(C / "mark-sun.png").convert("RGBA"), (4, 2))
     d = ImageDraw.Draw(nb)
+    for y, c in ((43, (187, 204, 221)), (44, (204, 221, 221)), (45, (187, 204, 221))):
+        d.line([(4, y), (winW - 3, y)], fill=c + (255,))
+    nb.alpha_composite(Image.open(C / "mark-sun.png").convert("RGBA"), (7, 3))
     if street:
-        d.text((42, 6), street, fill=(0, 0, 0, 255), font=f)
+        d.text((52, 7), street, fill=(255, 255, 255, 255), font=f)
+        d.text((51, 6), street, fill=(0, 0, 0, 255), font=f)
     if name:
-        d.text((42, 24), name, fill=(0, 0, 0, 255), font=f)
-    # 两缘照游戏 1:1：左 = 浅灰|灰线|白|蓝线，右 = …|蓝线|白|深色外框
-    for x, c in ((0, (187, 187, 187)), (1, (102, 102, 102)), (2, (255, 255, 255)),
-                 (3, (85, 119, 153)), (winW - 3, (85, 119, 153)),
-                 (winW - 2, (255, 255, 255)), (winW - 1, (110, 110, 114))):
-        d.line([(x, 0), (x, 45)], fill=c + (255,))
+        d.text((52, 25), name, fill=(255, 255, 255, 255), font=f)
+        d.text((51, 24), name, fill=(0, 0, 0, 255), font=f)
+    _edge_cols(d, winW, 0, 45)                # 左外沿 4 列 + 右缘 2 列
     win.alpha_composite(nb, (0, 20))
-    # canvas 行：白底 + 整块背板（盖住框条列之间的全部内窗）+ 两侧框条列 + 上下深蓝线
-    row = Image.new("RGBA", (winW, rowh), (255, 255, 255, 255))
+    # canvas 行：背板(黑~65% 半透明)铺满内窗 → 顶蓝线 → 5px 浅色渐变 →
+    # 左右同位边列 → canvas 1:1 @ (ox,15)
+    row = Image.new("RGBA", (winW, rowh), (0, 0, 0, 0))
     d = ImageDraw.Draw(row)
-    d.rectangle([4, 1, winW - 4, rowh - 2], fill=(0, 0, 0, 166))
-    d.line([(0, 0), (winW - 1, 0)], fill=(85, 119, 153, 255))
-    d.line([(0, rowh - 1), (winW - 1, rowh - 1)], fill=(85, 119, 153, 255))
-    # 两侧框条列照游戏：左 = 浅灰|灰线|白|蓝线，右 = 深色外框|白|蓝线
-    for i, c in ((0, (184, 184, 184)), (1, (111, 111, 119)), (3, (85, 119, 153))):
-        d.line([(i, 1), (i, rowh - 2)], fill=c + (255,))
-    for i, c in ((0, (110, 110, 114)), (2, (85, 119, 153))):
-        d.line([(winW - 1 - i, 1), (winW - 1 - i, rowh - 2)], fill=c + (255,))
+    d.rectangle([7, 6, winW - 4, rowh - 1], fill=(0, 0, 0, 166))
+    d.line([(4, 0), (winW - 3, 0)], fill=(85, 119, 153, 255))
+    for y, c in ((1, (204, 204, 204)), (2, (187, 187, 187)), (3, (204, 204, 204)),
+                 (4, (238, 238, 238)), (5, (255, 255, 255))):
+        d.line([(4, y), (winW - 3, y)], fill=c + (255,))
+    for x in (4, 5, 6):                       # 左白衬条（蓝线/渐变行除外）
+        d.line([(x, 6), (x, rowh - 1)], fill=(255, 255, 255, 255))
+    _edge_cols(d, winW, 0, rowh - 1)
     row.alpha_composite(img, (ox, 15))
     win.alpha_composite(row, (0, 66))
-    # 底条
+    # 底条（143×14 素材 = 游戏截图 y248..261 1:1，含左右圆角；宽窗整体拉伸）
     win.alpha_composite(Image.open(C / "bottom.png").convert("RGBA").resize((winW, 14)), (0, winH - 14))
+    # 最右 1px 半透明阴影列（实测 ~50% 黑，盖在场景上）
+    d = ImageDraw.Draw(win)
+    d.line([(winW, 0), (winW, winH - 1)], fill=(0, 0, 0, 128))
     return win
+
+
+def _edge_cols(d: "ImageDraw", winW: int, y0: int, y1: int) -> None:
+    """窗口纵向边列（名字条/canvas 行共用，照游戏截图 1:1）：
+    左外沿 4 列 = 浅灰184|灰线102|白|蓝线；右缘 2 列 = 蓝线|白。"""
+    for x, c in ((0, (184, 184, 184)), (1, (102, 102, 110)), (2, (255, 255, 255)),
+                 (3, (85, 119, 153)), (winW - 2, (85, 119, 153)), (winW - 1, (255, 255, 255))):
+        d.line([(x, y0), (x, y1)], fill=c + (255,))
 
 
 def _minimap_composite(export: dict, out: Path, zoom: int = 2) -> Path:
