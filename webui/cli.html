@@ -1488,12 +1488,6 @@ async function mdExport(m, btn) {
   }
 }
 
-function mdClose() {
-  clearTimeout(MD.timer);
-  MD.gen++;
-  setMode("map");
-}
-
 /* ================= 技能特效查看器 ==================
    职业 → 技能列表（String 中文名）→ 特效序列（effect/ball/hit/screen/…）
    逐帧播放（按锚点对齐）→ 导出逐帧 PNG + manifest.json。 */
@@ -2645,13 +2639,11 @@ function bindMinimap(d) {
 /* ---- 小地图 HUD：经典版窗口（怀旧服客户端样式）贴在预览图上 ----
    位置：UIMiniMap 继承 UIDragElement<PosMINIMAP>，position = Setting<PosMINIMAP>，
          默认值 "(0, 0)" —— 就是游戏视口左上角；拖完写回设置（所以"自定义"= 拖过的位置）。
-   尺寸：怀旧服实测（游戏内截图逐像素）——
-         窗口宽 = max(143, canvas宽 + 9)      （143 = 标题栏文字+按钮的排布下限）
-         结构   = 顶条 20 + 名字条 46 + canvas(1px 深蓝描边 + 3px 底白边) + 底条 14
+   尺寸：怀旧服实测（游戏内截图逐像素，101030400 金标准）——
+         窗口宽 = max(143, 58+名宽, canvas宽+16)
+         结构   = 顶条 20 + 名字条 46 + canvas 行(蓝线1+渐变5+背板9+canvas+背板2) + 底条 14
    标记：MapHelper.img/minimap 官方贴图，(世界坐标 + center) / 2^mag，
          客户端画法 draw(pos-(宽/2,0))：横向居中、顶边对准。 */
-let MMUI = null;                                   // /api/minimap/ui 素材清单（启动时拉一次）
-(async () => { try { MMUI = await api("/api/minimap/ui"); } catch { /* 旧后端无此端点 */ } })();
 const MMCLS = "webui/assets/minimap/cls/";         // 经典版窗口分层素材（后端静态目录挂在 /webui/ 下）
 const _mmMeasure = document.createElement("canvas").getContext("2d");
 function mmTextW(s) {                              // 客户端 Text 用 12px 字体量宽（mark_text_width）

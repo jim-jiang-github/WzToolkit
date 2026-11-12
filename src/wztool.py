@@ -2201,20 +2201,6 @@ def _act_weight(act: str) -> float:
     return 1.0
 
 
-def _stand_frame(ws: Path, kind_id: str):
-    """一种怪的 stand 帧 + 锚点：(Path, w, h, ox, oy)；没有图返回 None。
-
-    ox/oy 是锚点（脚底中心）在 PNG 里的位置，贴图/定位都用它对准刷怪点。
-    """
-    anims = _mob_anim_frames(ws, kind_id)
-    for act in ("stand", "move", "fly"):
-        if anims.get(act):
-            return anims[act][0]
-    for frames in anims.values():
-        return frames[0]
-    return None
-
-
 def c_mob_icon(raw: str) -> dict:
     """一只怪的「立绘」：stand 帧给地图叠加用；anims 给多种动作状态用。
 
@@ -3487,75 +3473,9 @@ VIEW_W, VIEW_H = 1366, 768      # 客户端画面窗口，也是唯一的导出�
 
 
 # ── 官方小地图素材（UI.wz/UIWindow2.img/MiniMap + Map.wz/MapHelper.img/minimap）──
-# 小地图窗口在客户端里是「4 个 64×27 角件 + 四边拉伸 + 透明中心」的九宫格：
-# WZ 里本来就没有 n/s/e/w/c 边件，边是拿角件最内 1 像素拉出来的，所以 4 个角件
-# 就够还原 1:1。按钮是 4 态小图；标记在 MapHelper.img/minimap（_outlink 到 _Canvas）。
-# 这 103 张 PNG 是从国服 UI.wz / Map.wz 导出的原图，随 webui 一起发布。
+# 现在只用怀旧服经典版皮肤：webui/assets/minimap/cls/（分层素材 + marks 标记），
+# 素材从游戏内截图 1:1 抠出，_cls_window()/前端 HUD 共用。
 MMUI_STATIC = WEBUI / "assets" / "minimap"
-MMUI_FRAME = CACHE / "minimap-ui" / "frame"
-MMUI_CORNERS = ("nw", "ne", "sw", "se")
-MMUI_URL = "/webui/assets/minimap/"
-
-
-def _mmui_ready() -> bool:
-    return all((MMUI_STATIC / f"MinMap_{c}.png").is_file() for c in MMUI_CORNERS)
-
-
-def _mmui_frame(w: int, h: int) -> Path | None:
-    """按窗口尺寸合成九宫格框（缓存 .cache/minimap-ui/frame/v2-<w>x<h>.png）。
-
-    严格按客户端 UIMiniMap::update_canvas() 的摆法：
-    - 中件 MiddleCenter=MaxMap/c 盖 (7,10)-(w-7,h-7)，CN 的 UI.wz 没这件，
-      用角件内部同款 rgba(0,0,0,0.73) 补（视觉上就是那块深色半透明窗体）；
-    - 四角原样；上/下中段 = nw/sw 最右 1 像素列拉伸，左/右中段 = nw/ne 最下
-      1 像素行拉伸（角件本体自带圆角与白描边，标题「小地图」烤在 nw 里）。
-    """
-    if not _mmui_ready():
-        return None
-    w, h = max(2, int(w)), max(2, int(h))
-    out = MMUI_FRAME / f"v2-{w}x{h}.png"
-    if out.is_file():
-        return out
-    from PIL import Image
-    MMUI_FRAME.mkdir(parents=True, exist_ok=True)
-    cs = {c: Image.open(MMUI_STATIC / f"MinMap_{c}.png").convert("RGBA")
-          for c in MMUI_CORNERS}
-    cw, ch = cs["nw"].size
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    if w > 14 and h > 17:                       # MiddleCenter (7,10)~(w-7,h-7)
-        img.paste((0, 0, 0, 186), (7, 10, w - 7, h - 7))
-    img.alpha_composite(cs["nw"], (0, 0))
-    img.alpha_composite(cs["ne"], (w - cw, 0))
-    img.alpha_composite(cs["sw"], (0, h - ch))
-    img.alpha_composite(cs["se"], (w - cw, h - ch))
-    if w > 2 * cw:
-        mid = w - 2 * cw
-        img.alpha_composite(cs["nw"].crop((cw - 1, 0, cw, ch)).resize((mid, ch),
-                                                                     Image.NEAREST), (cw, 0))
-        img.alpha_composite(cs["sw"].crop((cw - 1, 0, cw, ch)).resize((mid, ch),
-                                                                     Image.NEAREST), (cw, h - ch))
-    if h > 2 * ch:
-        mid = h - 2 * ch
-        img.alpha_composite(cs["nw"].crop((0, ch - 1, cw, ch)).resize((cw, mid),
-                                                                     Image.NEAREST), (0, ch))
-        img.alpha_composite(cs["ne"].crop((0, ch - 1, cw, ch)).resize((cw, mid),
-                                                                     Image.NEAREST), (w - cw, ch))
-    img.save(out)
-    return out
-
-
-def _mmui_state() -> dict:
-    """给前端的素材清单：角件/按钮/标记 URL（全部静态，无需转换）。"""
-    ready = _mmui_ready()
-    btn, mark = [], []
-    if ready:
-        btn = sorted(p.name for p in MMUI_STATIC.glob("Bt*.png"))
-        mark = sorted(p.stem for p in (MMUI_STATIC / "marks").glob("*.png"))
-    return {"ok": True, "ready": ready, "base": MMUI_URL,
-            "corner": {c: f"{MMUI_URL}MinMap_{c}.png" for c in MMUI_CORNERS},
-            "corner_size": [64, 27],
-            "btn": btn, "mark": mark,
-            "frame": "/api/minimap/frame"}
 
 
 def _view_origin(view: tuple | None, minx: float, miny: float,
@@ -3930,10 +3850,6 @@ def _out(data: dict, as_json: bool) -> None:
                 print(f"{k}: {v}")
 
 
-def _pick(obj: dict, keys: list[str]) -> dict:
-    return {k: obj[k] for k in keys if k in obj}
-
-
 # ---------------------------------------------------------------- web 适配层
 # 同一套 API 约定（wztool web 供页面/本地程序调用；自动化请优先用子命令）。
 # stdlib http.server，无第三方依赖。
@@ -4051,20 +3967,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(404, {"detail": "no icon"})
         elif path == "/api/map/imgindex":
             self._api(c_map_imgindex)
-        elif path == "/api/minimap/ui":
-            self._api(_mmui_state)
-        elif path == "/api/minimap/frame":
-            qs = urllib.parse.parse_qs(u.query)
-            try:
-                w = int((qs.get("w") or ["178"])[0])
-                h = int((qs.get("h") or ["140"])[0])
-            except ValueError:
-                w, h = 178, 140
-            fp = _mmui_frame(w, h)
-            if fp is None:
-                self._send_json(404, {"detail": "素材未就绪"})
-            else:
-                self._send_file(fp, "image/png")
         elif path == "/api/clsimgindex":
             self._api(c_cls_imgindex)
         elif path.startswith("/preview/"):
