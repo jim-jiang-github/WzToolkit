@@ -1569,7 +1569,8 @@ async function mdSelect(m) {
   const ex = $("#md-export");
   if (ex) ex.disabled = false;
   const det = $("#md-detail");
-  det.innerHTML = `<div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"}<br>
+  const lvTag = m.level > 0 ? ` <span class="tier" style="background:#1c2a3a;color:#7fb4e8" title="怪物等级（服务端数值）">Lv.${m.level}</span>` : "";
+  det.innerHTML = `<div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"}${lvTag}<br>
     <span class="muted">正在导出动画帧 …</span></div>`;
   try {
     const d = await api("/api/mob/export", {
@@ -1634,8 +1635,11 @@ function mdRenderDetail(det, m) {
   if (!zooms.includes(1)) zooms.unshift(1);
   const tierBadge = m.tier === "big" ? '<span class="tier big">大BOSS</span>'
     : m.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
-  const stats = (m.level != null && m.hp != null)
-    ? ` · Lv ${m.level} · HP ${Number(m.hp).toLocaleString()}` : "";
+  const stats = (m.level || 0) > 0
+    ? ` · Lv ${m.level}`
+      + ((m.hp || 0) > 0 ? ` · HP ${Number(m.hp).toLocaleString()}` : "")
+      + ((m.exp || 0) > 0 ? ` · EXP ${Number(m.exp).toLocaleString()}` : "")
+    : "";
   const linkNote = d.link
     ? ` <span class="pill" title="这种怪自己的 img 没有帧，客户端渲染 link 指向的怪">链接怪 → 画面同 <b>${d.link.to}</b></span>` : "";
   det.innerHTML = `<div class="flexline"><div>怪物 <b>${m.id}</b> · ${m.name || "（无名）"}
@@ -3062,7 +3066,7 @@ async function mapLoad(id, preview) {
       </div>
       ${nKinds ? `<div class="dexpop" id="dex-pop" hidden></div>` : ""}
       </div>
-      <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
+      <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个${d.mob_lv ? ` · 推荐等级 <b style="color:var(--acc)">Lv.${d.mob_lv[0]}${d.mob_lv[0] !== d.mob_lv[1] ? "–" + d.mob_lv[1] : ""}</b>` : ""} · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
       <div class="gvbox" id="gvbox">
         <div class="gameview" id="gameview">
           <div class="bk-layer" id="bk-back"></div>
@@ -3102,12 +3106,13 @@ async function mapLoad(id, preview) {
         const ic = await mobIcon(k.id);
         const tier = k.tier === "big" ? '<span class="tier big">大BOSS</span>'
                    : k.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
+        const lv = k.lv ? ` <span class="tier" style="background:#1c2a3a;color:#7fb4e8" title="怪物等级（服务端数值）">Lv.${k.lv}</span>` : "";
         const img = ic ? `<img src="${ic.url}" alt="${k.name || k.id}">`
                        : '<span class="muted" style="font-size:11px">无图</span>';
         return `<div class="dexit" data-id="${k.id}" title="点开看这只怪的全部动作帧 / 导出素材（${k.name || k.id}）">
           <div class="dimg">${img}</div>
           <div class="dnm" title="${k.name || k.id}">${k.name || k.id}</div>
-          <div class="did">${k.id}${tier}</div></div>`;
+          <div class="did">${k.id}${lv}${tier}</div></div>`;
       }));
       dp.innerHTML = cards.length
         ? `<div class="dexgrid">${cards.join("")}</div>`
