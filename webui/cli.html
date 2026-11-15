@@ -310,6 +310,32 @@
   .md-list .it.boss.on { background: #4a2f08; }
   .md-detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
                        overflow: auto; background: #0b0f14; min-height: 0; }
+  /* 掉落图鉴：左图标网格 + 右详情 */
+  #dropdex .md-body { grid-template-columns: 1fr 320px; }
+  .dz-grid { border: 1px solid var(--line); border-radius: 8px; overflow: auto;
+             background: #0b0f14; display: grid; grid-template-columns: repeat(auto-fill, 88px);
+             grid-auto-rows: 96px; gap: 6px; padding: 8px; align-content: start; }
+  .dz-grid .it { border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+                 display: flex; flex-direction: column; align-items: center;
+                 justify-content: flex-start; padding: 6px 2px 3px; gap: 3px; }
+  .dz-grid .it:hover { background: #161b22; }
+  .dz-grid .it.on { background: #0e3b35; border-color: var(--acc); }
+  .dz-grid img { width: 40px; height: 40px; object-fit: contain;
+                 image-rendering: pixelated; }
+  .dz-grid .nm { font-size: 10.5px; color: var(--mut); text-align: center;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                 max-width: 84px; }
+  .dz-grid .id { font: 9.5px Consolas, monospace; color: var(--acc2); }
+  .dz-grid .src { font: 9px Consolas, monospace; color: #d9a441; }
+  .dz-detail { border: 1px solid var(--line); border-radius: 8px; padding: 14px;
+               overflow: auto; background: #0b0f14; min-height: 0; }
+  .dz-detail .big { width: 128px; height: 128px; object-fit: contain;
+                    image-rendering: pixelated; display: block; margin: 4px 0 10px;
+                    background: repeating-conic-gradient(#1c2128 0 25%, #10151b 0 50%) 0 0 / 16px 16px; }
+  .dz-detail .mobchip { display: inline-block; font: 11.5px Consolas, monospace;
+                         background: #1c2a3a; color: #9ecbff; border-radius: 4px;
+                         padding: 3px 7px; margin: 2px 3px 2px 0; cursor: pointer; }
+  .dz-detail .mobchip:hover { background: #274764; }
   /* 动画帧组：所有帧共用一个按 origin 对齐的画布，默认 1x = 客户端真实渲染尺寸 */
   .animgrp { margin: 10px 0 4px; }
   .animgrp .ahead { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
@@ -561,6 +587,7 @@
       <div class="seg" id="mainseg">
         <button class="on" data-m="map" title="地图：按 id/名字浏览，预览 1366×768 客户端画面，导出 map.json + 贴图 + 渲染图">🗺 地图</button>
         <button data-m="mob" title="怪物素材：按 id/名字浏览全部怪物，看每个动作的逐帧动画，导出逐帧 PNG（带锚点 manifest）">👾 怪物素材</button>
+        <button data-m="drop" title="掉落图鉴：全部道具/装备图标 + 哪些怪会掉它（掉落表来自服务端数据）——挂机识别掉落物、防误判用">💎 掉落图鉴</button>
         <button data-m="char" title="人物素材：肤色/发型/脸/帽子/衣服/武器随便配，实时合成动画并导出逐帧 PNG">🧑 人物素材</button>
         <button data-m="skill" title="技能特效：按职业浏览全部技能，播放每个技能的施放/弹道/命中/全屏特效，导出逐帧 PNG">✨ 技能特效</button>
         <button data-m="dmg" title="伤害数字：Effect/BasicEff 里的全部伤害数字样式（红/蓝/暴击…），输入数字实时预览，导出逐帧 PNG">🔢 伤害数字</button>
@@ -613,6 +640,26 @@
       <div class="md-body">
         <div class="md-list" id="md-list"></div>
         <div class="md-detail" id="md-detail"><span class="muted">左侧选一只怪：看全部动作帧（按锚点对齐、可播放），导出逐帧 PNG 素材。</span></div>
+      </div>
+    </div>
+
+    <!-- 掉落图鉴：图标网格 + 出处怪物 -->
+    <div class="pane" id="dropdex" hidden>
+      <div class="md-bar">
+        <div class="filters" style="margin:0">
+          <button class="dz-flt on" data-f="all">全部</button>
+          <button class="dz-flt" data-f="equip">装备</button>
+          <button class="dz-flt" data-f="consume">消耗</button>
+          <button class="dz-flt" data-f="etc">ETC</button>
+          <button class="dz-flt" data-f="pet">宠物</button>
+          <button class="dz-flt" data-f="drop" title="只看有怪物掉落来源的道具">有怪掉</button>
+        </div>
+        <input type="text" id="dz-q" placeholder="搜索 id 或名字 …" />
+        <span class="muted" id="dz-count"></span>
+      </div>
+      <div class="md-body">
+        <div class="dz-grid" id="dz-grid"></div>
+        <div class="dz-detail" id="dz-detail"><span class="muted">左侧点一个道具：看大图、名称、掉落它的怪物。</span></div>
       </div>
     </div>
 
@@ -2739,11 +2786,95 @@ btMapClr.onclick = () => {
   btMapClr.hidden = true; btMapIn.focus();
 };
 
+/* ---------------- 掉落图鉴：图标网格 + 出处怪物 ---------------- */
+const DZ_CAT = { equip: "装备", consume: "消耗", etc: "ETC", pet: "宠物", install: "摆放" };
+const DZ = { icons: null, flt: "all", q: "", sel: null, mobNames: null, timer: 0 };
+
+async function dzMobNames() {
+  if (DZ.mobNames) return DZ.mobNames;
+  try {
+    const d = await api("/api/mobs");
+    DZ.mobNames = {};
+    (d.mobs || []).forEach((m) => { DZ.mobNames[String(m.id).replace(/^0+/, "")] = m.name || m.id; });
+  } catch (e) { DZ.mobNames = {}; }
+  return DZ.mobNames;
+}
+
+async function dzOpen() {
+  if (!DZ.icons) {
+    $("#dz-grid").innerHTML = `<span class="muted">掉落图鉴加载中…（首次要从 12 个 spritesheet 包提图标，约半分钟）</span>`;
+    await dzLoad();
+  }
+  dzRender();
+}
+
+async function dzLoad() {
+  try {
+    let d = await api("/api/cls/icons");
+    if (!d.ready) {                      // 后台构建中：轮询
+      $("#dz-grid").innerHTML =
+        `<span class="muted">${d.stage || "构建中"} … ${d.done || 0}/${d.total || "?"}</span>`;
+      DZ.timer = setTimeout(dzLoad, 2000);
+      return;
+    }
+    clearTimeout(DZ.timer);
+    DZ.icons = d.icons;
+  } catch (e) {
+    $("#dz-grid").innerHTML = `<span class="muted">加载失败：${e}</span>`;
+  }
+}
+
+function dzRender() {
+  const grid = $("#dz-grid"), cnt = $("#dz-count");
+  if (!DZ.icons) return;
+  let items = DZ.icons;
+  if (DZ.flt === "drop") items = items.filter((r) => r.mobs.length);
+  else if (DZ.flt !== "all") items = items.filter((r) => r.cat === DZ.flt);
+  if (DZ.q) {
+    const q = DZ.q.toLowerCase();
+    items = items.filter((r) => r.id.includes(q) || (r.name || "").toLowerCase().includes(q));
+  }
+  cnt.textContent = `${items.length} 个`;
+  const MAX = 600;                       // 一次最多渲染 600 格，避免卡顿
+  items = items.slice(0, MAX);
+  grid.innerHTML = items.map((r) => `
+    <div class="it${DZ.sel === r.id ? " on" : ""}" data-id="${r.id}">
+      <img loading="lazy" src="/api/cls/icon/${r.id}" alt="">
+      <div class="nm" title="${r.name || r.id}">${r.name || r.id}</div>
+      <div class="id">${r.id}</div>
+      ${r.mobs.length ? `<div class="src" title="${r.mobs.length} 种怪掉落">☠${r.mobs.length}</div>` : ""}
+    </div>`).join("")
+    + (DZ.icons.length > MAX && !DZ.q ? `<span class="muted" style="grid-column:1/-1;padding:6px">只显示前 ${MAX} 个，用搜索框定位 …</span>` : "");
+}
+
+async function dzDetail(iid) {
+  DZ.sel = iid;
+  const r = (DZ.icons || []).find((x) => x.id === iid);
+  if (!r) return;
+  const names = await dzMobNames();
+  const mobs = r.mobs.map((m) => {
+    const k = String(m);
+    const nm = names[k] || names[k.replace(/^0+/, "")] || "";
+    return `<span class="mobchip" data-mob="${k}" title="点开这只怪的素材页">${k}${nm ? " " + nm : ""}</span>`;
+  }).join("");
+  $("#dz-detail").innerHTML = `
+    <img class="big" src="/api/cls/icon/${iid}" alt="">
+    <div style="font-size:15px;font-weight:600;margin-bottom:2px">${r.name || "（无名称）"}</div>
+    <div class="muted">id <span style="color:var(--acc2)">${iid}</span> · ${DZ_CAT[r.cat] || r.cat}</div>
+    <div style="margin-top:10px;font-weight:600">掉落来源（${r.mobs.length} 种怪）</div>
+    <div style="margin-top:4px">${mobs || '<span class="muted">无怪物掉落（商店/任务道具）</span>'}</div>`;
+  $$("#dz-detail .mobchip").forEach((el) => el.onclick = () => {
+    setMode("mob");
+    setTimeout(() => mdOpen(el.dataset.mob), 50);   // 切到怪物页并选中这只怪
+  });
+}
+
 /* ---------------- 三大类切换：地图 / 怪物素材 / 人物素材 ----------------
    三个大类平级，用卡片标题里的分段控件切换；面板互斥显示，切走时停掉动画定时器。 */
 const MODE_HINT = {
   map: "左侧选一张地图 → 预览 / 导出",
   mob: "左侧选一只怪 → 看逐帧动画 / 导出",
+  drop: "掉落表来自服务端数据 · 点道具看哪些怪掉它",
   char: "左侧换装 → 实时合成 / 导出",
   skill: "左侧选职业和技能 → 看特效动画 / 导出",
   dmg: "左侧选数字样式 → 输入数字实时预览 / 导出",
@@ -2751,10 +2882,11 @@ const MODE_HINT = {
 };
 let MODE = "map";
 function setMode(m) {
-  if (m !== "mob" && m !== "char" && m !== "skill" && m !== "dmg" && m !== "battle") m = "map";
+  if (m !== "mob" && m !== "drop" && m !== "char" && m !== "skill" && m !== "dmg" && m !== "battle") m = "map";
   MODE = m;
   $("#pane-map").hidden = m !== "map";
   $("#mobdex").hidden = m !== "mob";
+  $("#dropdex").hidden = m !== "drop";
   $("#chardex").hidden = m !== "char";
   $("#skdex").hidden = m !== "skill";
   $("#dmgdex").hidden = m !== "dmg";
@@ -2764,6 +2896,8 @@ function setMode(m) {
   if (m !== "map") $("#mapzoom").hidden = true;
   if (m === "mob") mdOpen(null);
   else { clearTimeout(MD.timer); MD.gen++; }
+  if (m === "drop") dzOpen();
+  else clearTimeout(DZ.timer);
   if (m === "char") chOpen();
   else clearTimeout(CH.timer);
   if (m === "skill") skOpen();
@@ -3444,6 +3578,21 @@ document.addEventListener("keydown", (e) => {
 });
 /* 怪物素材查看器事件 */
 $("#md-q").oninput = mdRenderList;
+/* 掉落图鉴事件 */
+$("#dz-q").oninput = (e) => { DZ.q = (e.target.value || "").trim().toLowerCase(); dzRender(); };
+$("#dz-grid").onclick = (e) => {
+  const it = e.target.closest(".it");
+  if (it) { $$("#dz-grid .it").forEach((x) => x.classList.remove("on"));
+            it.classList.add("on"); dzDetail(it.dataset.id); }
+};
+$("#dropdex .md-bar").onclick = (e) => {
+  const b = e.target.closest(".dz-flt");
+  if (!b) return;
+  $$(".dz-flt").forEach((x) => x.classList.remove("on"));
+  b.classList.add("on");
+  DZ.flt = b.dataset.f;
+  dzRender();
+};
 /* 技能特效查看器事件 */
 $("#sk-q").oninput = skRenderList;
 $("#sk-export").onclick = (e) => skExport(e.currentTarget);

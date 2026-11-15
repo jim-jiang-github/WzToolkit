@@ -1725,6 +1725,10 @@ WZJS_VER = 2                             # 图库格式版本（2 = atlas_idx �
 #       同层 tile/obj 按 z 归并绘制（原来 tile z 恒 0 且后画，地面盖住物件）
 WZJS_MVER = 2
 WZJS_REG = WZJS_MAP / "registry.json.gz"     # spritesheet 注册表（带来源戳）
+# 注册表语义版本（独立于贴图版本：升级它只重建注册表，不重转地图）：
+#   2 = inlink 前缀从 ("Map/",) 扩到 ("Map/", "Item/", "Mob/")——
+#       掉落物图标（Item/Consume/0200 里 02000000 红药水等）走的是 inlink 表
+WZJS_REGVER = 2
 WZJS_BUILT = WZJS_MAP / "built.json"         # {stamp, ver, ids, errs}（断点续跑）
 _wzjsjob: dict = {"running": False, "error": "", "done": 0, "total": 0, "stage": ""}
 _wzjs_lock = threading.Lock()
@@ -1786,6 +1790,195 @@ def _wzjs_mob_ids() -> list:
     return ids
 
 
+def _wzjs_registry(w: Path, progress=None) -> dict:
+    """加载（stamp/regver 一致时复用）或重建 spritesheet 注册表。
+
+    inlink 前缀含 Item/Mob：掉落物图鉴、地图掉落合成都要靠它们取图标/怪物帧
+    （红药水 02000000 的图标在 Item/Consume/0200 的 **inlink 表**里，主帧表没有）。
+    Character 的 inlink 不注册——350 万条发型引用会把注册表撑爆，装备图标
+    本来就是主帧。
+    """
+    stamp = _wzjs_stamp(w)
+    try:
+        with gzip.open(WZJS_REG, "rt", encoding="utf-8") as f:
+            raw = json.load(f)
+        if (raw.get("stamp") == stamp and raw.get("ver") == WZJS_VER
+                and raw.get("regver") == WZJS_REGVER):
+            return raw.get("reg")
+    except (OSError, ValueError):
+        pass
+    from vendor.clssprite import build_registry
+    # build_registry 期望 aa\w 子目录（bundle 都在那层）
+    reg = build_registry(w / "w", progress=progress,
+                         inlink_prefixes=("Map/", "Item/", "Mob/"))
+    try:
+        WZJS_MAP.mkdir(parents=True, exist_ok=True)
+        tmp = WZJS_REG.with_suffix(".tmp")
+        with gzip.open(tmp, "wt", encoding="utf-8") as f:
+            json.dump({"stamp": stamp, "ver": WZJS_VER,
+                       "regver": WZJS_REGVER, "reg": reg}, f, ensure_ascii=False)
+        os.replace(tmp, WZJS_REG)
+    except OSError:
+        pass
+    return reg
+
+
+# ---------------------------------------------------------------- 掉落物（图鉴 + 地图合成）
+
+CLS_ICONS = CACHE / "cls-icons"          # 掉落物图标 PNG + index.json
+_ICON_CAT = {1: "equip", 2: "consume", 3: "install", 4: "etc", 5: "pet"}
+_drops_cache: dict = {}
+_itemnames_cache: dict = {}
+_iconsjob: dict = {"running": False, "error": "", "done": 0, "total": 0, "stage": ""}
+_icons_lock = threading.Lock()
+
+
+def _drops() -> dict:
+    """vendor/drops.json：mobid → [{i, q:[min,max], c:chance}]。"""
+    if not _drops_cache:
+        try:
+            _drops_cache.update(json.loads(
+                (VENDOR / "drops.json").read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+    return _drops_cache
+
+
+def _itemnames() -> dict:
+    """vendor/itemnames.json：zfill8 itemid → {name, desc}。"""
+    if not _itemnames_cache:
+        try:
+            _itemnames_cache.update(json.loads(
+                (VENDOR / "itemnames.json").read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+    return _itemnames_cache
+
+
+def _cls_icons_stamp() -> str:
+    """掉落图标库的有效性戳：注册表戳 + drops/itemnames 的 mtime。"""
+    parts = []
+    try:
+        with gzip.open(WZJS_REG, "rt", encoding="utf-8") as f:
+            parts.append(f"reg:{json.load(f).get('stamp', '')}")
+    except (OSError, ValueError):
+        parts.append("reg:none")
+    for p in (VENDOR / "drops.json", VENDOR / "itemnames.json"):
+        try:
+            parts.append(f"{p.name}:{p.stat().st_mtime:.0f}")
+        except OSError:
+            parts.append(f"{p.name}:none")
+    return "|".join(parts)
+
+
+def _cls_icons_ready() -> bool:
+    try:
+        d = json.loads((CLS_ICONS / "index.json").read_text(encoding="utf-8"))
+        return bool(d.get("icons")) and d.get("stamp") == _cls_icons_stamp()
+    except (OSError, ValueError):
+        return False
+
+
+def _cls_icons_build(log=None) -> None:
+    """后台任务：从 spritesheet 注册表提取全部 `info/icon` 帧 → .cache\\cls-icons\\。
+
+    图标键两形态（id 都取倒数第二段）：
+      Item/<类>/<目录>/<8位id>/info/icon   —— 道具（含 inlink 补齐的红药水等）
+      Character/<部位>/<8位id>/info/icon   —— 装备（穿戴贴图的图鉴头像）
+    只提取**有名字或有怪掉落**的（itemnames.json / drops.json 里查得到），
+    避免 UI/技能杂项把图鉴撑爆。按 bundle+贴图排序遍历，BundleTex 的
+    FIFO 大图缓存不会来回重解码。
+    """
+    if not _icons_lock.acquire(blocking=False):
+        return
+    try:
+        w = _cls_w_dir()
+        if w is None:
+            raise CliError("找不到怀旧服数据（…\\mxdclassic\\Maplestory_Classic_Data\\"
+                           "StreamingAssets\\aa）", 1)
+        reg = _wzjs_registry(w, progress=lambda s, d, t:
+                             _iconsjob.update(stage=f"注册表 {s}"))
+        names = _itemnames()
+        drops = _drops()
+        rev: dict[int, list] = {}          # itemid → [mobid]（哪些怪掉）
+        for mob, items in drops.items():
+            for e in items:
+                rev.setdefault(int(e["i"]), []).append(int(mob))
+        want = set(names) | {f"{i:08d}" for i in rev}
+        # 只取 Item/ 与 Character/ 的图标键；键 = <wzpath>/<sub>/info/icon，
+        # 所以 id 在倒数第三段（倒数第二段恒为 "info"）：
+        #   Item/<类>/<目录>/<id>/info/icon、Character/<部位>/<id>/info/icon。
+        # Skill/<id>/info/icon 同理取 [-3]，但不在图鉴范围。
+        todo = sorted((k for k in reg
+                       if k.endswith("/info/icon")
+                       and (k.startswith("Item/") or k.startswith("Character/"))
+                       and k.split("/")[-3] in want),
+                      key=lambda k: (reg[k]["b"], reg[k]["t"], reg[k]["y"], reg[k]["x"]))
+        _iconsjob.update(running=True, error="", done=0, total=len(todo),
+                         stage="提取掉落物图标")
+        CLS_ICONS.mkdir(parents=True, exist_ok=True)
+        from vendor.clsmap import BundleTex
+        tex = BundleTex(w)
+        icons: dict[str, dict] = {}
+        miss = 0
+        for k in todo:
+            iid = k.split("/")[-3]
+            png = CLS_ICONS / f"{iid}.png"
+            try:
+                if not png.is_file():
+                    im = tex.frame(reg[k])
+                    if im is not None and im.width > 1 and im.height > 1:
+                        im.save(png)
+                if png.is_file():
+                    # 类别看**真实 id** 首位（zfill8 的 "02000000" 首位是 0，会全成 other）
+                    cat = _ICON_CAT.get(int(str(int(iid))[0]), "other")
+                    icons[iid] = {
+                        "n": (names.get(iid) or {}).get("name", ""),
+                        "c": cat,
+                        "m": sorted(rev.get(int(iid), []))}
+                else:
+                    miss += 1
+            except Exception:                     # noqa: BLE001
+                miss += 1
+            _iconsjob["done"] += 1
+        idx = {"stamp": _cls_icons_stamp(), "icons": icons}
+        tmp = CLS_ICONS / "index.tmp"
+        tmp.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, CLS_ICONS / "index.json")
+        msg = (f"掉落物图标库完成：{len(icons)} 个图标"
+               + (f"（{miss} 个取图失败）" if miss else ""))
+        if log:
+            log(msg)
+        _iconsjob["stage"] = msg
+    except Exception as exc:                       # noqa: BLE001
+        _iconsjob["error"] = str(exc)
+    finally:
+        _iconsjob["running"] = False
+        _icons_lock.release()
+
+
+def c_cls_icons() -> dict:
+    """掉落物图鉴：图标库就绪返回清单；没建好（或来源变了）自动后台构建。"""
+    if not _cls_icons_ready():
+        if not _iconsjob["running"]:
+            threading.Thread(target=_cls_icons_build, daemon=True).start()
+        return {"ready": False, "running": _iconsjob["running"],
+                "done": _iconsjob["done"], "total": _iconsjob["total"],
+                "stage": _iconsjob["stage"] or "等待构建"}
+    d = json.loads((CLS_ICONS / "index.json").read_text(encoding="utf-8"))
+    icons = [{"id": iid, "name": v["n"], "cat": v["c"], "mobs": v["m"]}
+             for iid, v in d["icons"].items()]
+    icons.sort(key=lambda r: r["id"])
+    return {"ready": True, "icons": icons}
+
+
+def c_cls_icon_png(iid: str) -> Path:
+    p = CLS_ICONS / f"{iid}.png"
+    if not p.is_file():
+        raise CliError(f"图标 {iid} 不存在（图鉴还没建好？）", 2)
+    return p
+
+
 def _wzjs_build(log=None) -> None:
     """后台任务：注册表 + 1750 张 WZJS 地图 → .cache\\wzjs-map\\<id>\\。
 
@@ -1806,33 +1999,12 @@ def _wzjs_build(log=None) -> None:
             raise CliError("缺 UnityPy —— 先跑 python scripts\\deps.py（依赖装在 .pylibs\\）", 1)
         _wzjsjob.update(running=True, error="", done=0, total=0,
                         stage="扫描 spritesheet 注册表")
-        stamp = _wzjs_stamp(w)
-        reg = None
-        try:
-            with gzip.open(WZJS_REG, "rt", encoding="utf-8") as f:
-                raw = json.load(f)
-            if raw.get("stamp") == stamp and raw.get("ver") == WZJS_VER:
-                reg = raw.get("reg")
-        except (OSError, ValueError):
-            pass
-        if reg is None:
-            from vendor.clssprite import build_registry
-            # build_registry 期望 aa\w 子目录（bundle 都在那层）
-            reg = build_registry(w / "w",
-                                 progress=lambda s, d, t: _wzjsjob.update(stage=s),
-                                 inlink_prefixes=("Map/",))
-            try:
-                WZJS_MAP.mkdir(parents=True, exist_ok=True)
-                tmp = WZJS_REG.with_suffix(".tmp")
-                with gzip.open(tmp, "wt", encoding="utf-8") as f:
-                    json.dump({"stamp": stamp, "ver": WZJS_VER, "reg": reg},
-                             f, ensure_ascii=False)
-                os.replace(tmp, WZJS_REG)
-            except OSError:
-                pass
+        reg = _wzjs_registry(
+            w, progress=lambda s, d, t: _wzjsjob.update(stage=s))
         if not reg:
             raise CliError("spritesheet 注册表是空的（12 个包一个描述符都没解到）"
                            "—— 客户端结构变了？", 1)
+        stamp = _wzjs_stamp(w)
         built: dict = {"stamp": stamp, "ver": WZJS_VER, "mver": WZJS_MVER,
                        "ids": [], "errs": {}, "mobs": []}
         stale = False                     # 旧版图库：img/ 里的 PNG 是按错的 atlas 裁的
@@ -4442,6 +4614,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_cls_imgindex)
         elif path == "/api/cls/maps":
             self._api(c_cls_maps)
+        elif path == "/api/cls/icons":
+            self._api(c_cls_icons)
+        elif path.startswith("/api/cls/icon/"):
+            try:
+                self._send_file(c_cls_icon_png(path.rsplit("/", 1)[-1]),
+                                "image/png")
+            except CliError as e:
+                self._send_json(404, {"detail": str(e)})
+            except Exception:                 # noqa: BLE001
+                self._send_json(404, {"detail": "no icon"})
         elif path == "/api/cls/tables":
             self._api(c_cls_tables)
         elif path.startswith("/preview/"):
