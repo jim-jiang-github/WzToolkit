@@ -30,12 +30,19 @@ class BundleTex:
 
     贴图对象名会重名（Back/Tile 的 dryRock_0 是两张不同的图），所以优先按
     注册表里记的 pathID（``p``）精确定位，取不到再退回按名（唯一时）。
+
+    解码后的大图按 RGBA 估算字节数记账，超过上限（~1.2GB）就 FIFO 淘汰最旧
+    的——全库 1750 张地图转换会摸到几百张 atlas（全留下要好几个 GB），
+    单张地图只引用十几张，淘汰后按需重解码即可。
     """
+
+    MAX_BYTES = 1_200_000_000
 
     def __init__(self, w_dir: Path):
         self.w = w_dir                  # …/StreamingAssets/aa 目录
         self._objs: dict[str, tuple[dict, dict]] = {}   # bundle → (pid→obj, 名→[obj])
         self._imgs: dict[tuple, object] = {}            # (bundle, pid) → PIL Image
+        self._bytes = 0                 # 当前缓存图总字节数（RGBA 估算）
 
     def _load(self, bundle: str):
         if bundle in self._objs:
@@ -66,7 +73,13 @@ class BundleTex:
         if o is None:
             return None
         im = o.read().image.convert("RGBA")
+        k_bytes = im.width * im.height * 4
+        while self._bytes + k_bytes > self.MAX_BYTES and self._imgs:
+            old_k, old_im = next(iter(self._imgs.items()))
+            self._bytes -= old_im.width * old_im.height * 4
+            del self._imgs[old_k]
         self._imgs[k] = im
+        self._bytes += k_bytes
         return im
 
     def frame(self, entry: dict):
@@ -220,6 +233,7 @@ class ClsMapSource:
                 names: dict | None = None) -> dict:
         """mid（地图 id，如 101040000）→ map.json（并写 img/ 贴图）。"""
         from vendor.wzjs import TYPE_CANVAS, TYPE_SUB
+        outdir.mkdir(parents=True, exist_ok=True)
         page = self.page(mid)
         if page is None:
             raise KeyError(f"怀旧服数据里没有地图 {mid}")
