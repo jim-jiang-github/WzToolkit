@@ -770,6 +770,7 @@ const DETAIL_DEFAULT = $("#detail").innerHTML;
    （同 id 画面基本一致）；人物素材/伤害数字的怀旧服贴图未提取，保持现代库。 */
 let CLSMODE = localStorage.getItem("wt_datamode") === "cls";
 let CLS_MAPS = null;       // [{id, street, name, desc, w, h, mod}]
+let CLS_WZJS = false;      // 大图库（WZJS 1750 张）就绪 → 点行渲染完整地图
 let CLS_TAB = null;        // {mob:Set, skill:Set}（去前导零 id）
 let CLS_TAB_LOAD = null;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -796,10 +797,10 @@ function dataModeSync() {
   MD.user = false; SK.user = false;     // 换模式：chip 的手动选择不跨模式保留
   if (MODE === "map") {
     $("#detail").innerHTML = CLSMODE
-      ? `<div class="muted">左侧选一张怀旧服地图：看小地图 canvas / 下载 PNG。<br><br>
-          · 共 ${ (CLS_MAPS || []).length ? CLS_MAPS.length : "—" } 张（有 canvas 的才列）<br>
+      ? `<div class="muted">左侧选一张怀旧服地图：渲染完整大图（WZJS 地图数据，与现代库同款渲染管线）。<br><br>
+          · 共 ${ (CLS_MAPS || []).length ? CLS_MAPS.length : "—" } 张<br>
           · 地图名来自客户端本地数据（1838 张名表）<br>
-          · 完整渲染怀旧服地图需要 WZJS 数据包逆向（未实装）</div>`
+          · ${CLS_WZJS ? "大图库就绪，可窗口导出 / 找图" : "大图库没建好：数据源面板点「⬇ 转换缺失数据」"}</div>`
       : DETAIL_DEFAULT;
     if (!CLSMODE && $("#exp-dir")) $("#exp-dir").textContent = EXPDIR;
     loadLists();
@@ -1497,20 +1498,23 @@ function startProgress() {
 async function tickProgress() {
   let p;
   try { p = await api("/api/progress"); } catch (e) { return; }
-  // 优先级：小地图索引 > 兜底生成 > 怀旧服小地图库 > 转换。重新转换时 _job 全程
-  // running，但那时候用户真正想看的是解压进度，不能被「转换」段挡在前面。
+  // 优先级：小地图索引 > 兜底生成 > 怀旧服小地图库 > 怀旧服大图库 > 转换。
+  // 重新转换时 _job 全程 running，但那时候用户真正想看的是解压进度，
+  // 不能被「转换」段挡在前面。
   const seg = p.minimap.running
     ? { name: p.minimap.stage || "小地图索引（全库解压）", done: p.minimap.done, total: p.minimap.total }
     : p.auto.running
     ? { name: p.auto.stage || "兜底小地图（1×1 退化图）", done: p.auto.done, total: p.auto.total }
     : p.cls && p.cls.running
     ? { name: p.cls.stage || "怀旧服小地图库", done: p.cls.done, total: p.cls.total }
+    : p.clsmap && p.clsmap.running
+    ? { name: p.clsmap.stage || "怀旧服大图库（WZJS 地图）", done: p.clsmap.done, total: p.clsmap.total }
     : p.convert.running
     ? { name: p.convert.stage || "转换", done: p.convert.done, total: p.convert.total, frac: p.convert.frac || 0 }
     : null;
   // 转换/建库进行中：转换与清除按钮都禁用（防止重复排队或删掉正在写的数据）
   const busy = !!(p.convert.running || p.minimap.running || p.auto.running
-                  || (p.cls && p.cls.running));
+                  || (p.cls && p.cls.running) || (p.clsmap && p.clsmap.running));
   if (busy !== BUSY) { BUSY = busy; refreshLock(); }   // 导入中锁住下方浏览区
   const cvb = $("#cn-cv-all"); if (cvb) cvb.disabled = busy;
   const wpb = $("#wipe-go"); if (wpb) wpb.disabled = busy;
@@ -1535,12 +1539,14 @@ async function tickProgress() {
   const box = $("#prog-box"), bar = $("#prog-bar"), fill = $("#prog-fill");
   if (!seg) {
     clearInterval(PTIMER); PTIMER = null;
-    const bad = p.convert.error || p.minimap.error || (p.cls && p.cls.error);
+    const bad = p.convert.error || p.minimap.error || (p.cls && p.cls.error)
+                || (p.clsmap && p.clsmap.error);
     $("#prog-stage").textContent = bad ? "出错" : "已完成";
     $("#prog-pct").textContent = "";
     $("#prog-sub").textContent = bad
       || ((p.ready ? "小地图库就绪：可以浏览地图、找图、导出小地图了" : "")
-          + (p.cls && p.cls.ready ? "；怀旧服找图也就绪" : ""));
+          + (p.cls && p.cls.ready ? "；怀旧服找图也就绪" : "")
+          + (p.clsmap && p.clsmap.ready ? "；怀旧服大图也就绪" : ""));
     bar.classList.remove("indet");
     fill.style.width = "100%";
     if (bad) fill.style.background = "#c0392b";
@@ -1556,9 +1562,10 @@ async function tickProgress() {
   $("#prog-pct").textContent = hasTotal ? `${seg.done} / ${seg.total}` : "";
   $("#prog-sub").textContent = !hasTotal
     ? (seg.done ? `已处理 ${seg.done} 张…` : "启动中…")
-    : (seg.name.includes("怀旧服")
-       ? (seg.done >= seg.total ? "收尾中…" : "从 Unity 包提取 canvas，请勿关闭页面")
-       : (seg.done >= seg.total ? "收尾中…" : "解压全库小地图，请勿关闭页面"));
+    : (seg.done >= seg.total ? "收尾中…"
+       : seg.name.includes("大图库") ? "解析 WZJS 地图数据，请勿关闭页面"
+       : seg.name.includes("怀旧服") ? "从 Unity 包提取 canvas，请勿关闭页面"
+       : "解压全库小地图，请勿关闭页面");
 }
 
 async function loadLists() {
@@ -1570,6 +1577,7 @@ async function loadLists() {
       try {
         const d = await api("/api/cls/maps");
         CLS_MAPS = d.maps;
+        CLS_WZJS = !!d.wzjs;   // 大图库就绪 → 点行渲染完整地图；否则只看 canvas
       } catch (e) {
         CLS_MAPS = [];
         $("#list").innerHTML =
@@ -1635,12 +1643,17 @@ async function select(el) {
   mapLoad(mapSel, true);
 }
 
-/* 怀旧服地图详情：本地只有 canvas（没有 WZJS 地图数据，渲染不了大图），
-   展示名字/街道/描述 + canvas PNG（可下载），现代库有同 id 图时可跳过去看大图 */
+/* 怀旧服地图详情：大图库（WZJS）就绪 → 走和现代库完全相同的渲染管线
+   （预览/窗口导出/小地图 HUD/怪物叠加）；没就绪才退回只看 canvas PNG */
 function clsSelect(id) {
   const m = (CLS_MAPS || []).find((x) => x.id === id);
-  const det = $("#detail");
   if (!m) return;
+  if (CLS_WZJS) {                    // 大图库就绪：渲染完整地图
+    mapSel = id;
+    mapLoad(id, true, true);
+    return;
+  }
+  const det = $("#detail");
   const url = `/preview/minimap-cls/${m.id}.png`;
   det.innerHTML = `<div class="clsmap">
     <div class="cls-row"><b>${esc(m.name || "（无名）")}</b>
@@ -3193,16 +3206,18 @@ function bindMmHud(d) {
     el.onclick = (e) => {
       e.stopPropagation();
       const tm = el.dataset.tm;
-      if (tm && +tm > 0 && +tm !== 999999999) mapLoad(String(tm).padStart(9, "0"), true);
+      // 怀旧服页名不带前导零（WZJS m_Name 就是裸数字），现代库才补齐 9 位
+      if (tm && +tm > 0 && +tm !== 999999999)
+        mapLoad(CLSMODE ? String(tm) : String(tm).padStart(9, "0"), true, CLSMODE);
     };
   });
 }
 
-async function mapLoad(id, preview) {
+async function mapLoad(id, preview, cls) {
   if (mapRef && mapRef.id !== id) VIEWPOS = null;   // 换图：窗口回地图正中
   // 显示设置（OPTS）持久化，换图不再重置；预览图永远不带怪物合成 —— 页面显示
   // 用纯前端怪物叠加层，勾「显示怪物」只是显隐，不触发服务端重渲（不闪黑）
-  mapRef = { id, preview };
+  mapRef = { id, preview, cls: !!cls };
   const det = $("#detail");
   det.innerHTML = `<div>地图 <b>${id}</b><br><span class="muted">导出 + 渲染中（大图要几秒）…</span></div>`;
   try {
@@ -3210,7 +3225,7 @@ async function mapLoad(id, preview) {
       method: "POST", headers: { "Content-Type": "application/json" },
       // 底图恒用无背景版：背景改由前端视差层现画（跟镜头走）；烤好背景的
       // 整图由后端顺带渲染，只给「点开放大查看」用
-      body: JSON.stringify({ id, preview, mobs: false, no_bg: true }),
+      body: JSON.stringify({ id, preview, mobs: false, no_bg: true, cls: !!cls }),
     });
     const nKinds = (d.life_kinds || []).length;
     // 链接图：自己的 img 是空的，客户端渲染 link 指向的那张 —— 后端已顺着导出目标图
@@ -3220,7 +3235,7 @@ async function mapLoad(id, preview) {
     const pvUrl = d.preview_url + (d.mobs ? `?v=${Date.now()}` : "");
     const nRope = (d.ladder_rope || []).filter((s) => !s[3]).length;
     const nLad = (d.ladder_rope || []).filter((s) => s[3]).length;
-    det.innerHTML = `<div class="flexline" style="position:relative"><div>地图 <b>${id}</b>${linkNote} ·
+    det.innerHTML = `<div class="flexline" style="position:relative"><div>${d.name ? `<b>${esc(d.name)}</b> · ` : ""}地图 <b>${id}</b>${linkNote} ·
       ${d.preview.w}×${d.preview.h}${preview ? "（预览）" : ""}</div>
       <div class="row">
         ${nKinds ? `<button class="mini" id="dex-btn" title="这只地图出现的怪物，带立绘的图鉴">👾 怪物图鉴（${nKinds} 种）</button>` : ""}
@@ -3357,7 +3372,8 @@ async function exportWindow() {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: mapRef.id, preview: false, mobs: OPTS.mobs,
-                             density: OPTS.density, no_bg: OPTS.nobg, view }),
+                             density: OPTS.density, no_bg: OPTS.nobg, view,
+                             cls: !!mapRef.cls }),
     });
     const w = d.window || {};
     let html = `✅ 已导出<b>当前视窗</b> <b>${w.w || 1366}×${w.h || 768}</b>（左上角世界坐标 ${w.x},${w.y}）→ <code>${d.preview_path}</code>`;
@@ -3371,12 +3387,12 @@ $("#wz-table").addEventListener("click", (e) => {
   if (t && t.id === "cn-cv-all" && (CN_MISSING.length || CN_NEED_CLS)) convert(CN_MISSING);
   if (t && t.id === "wipe-go") wipeData();
 });
-// 页面打开时若后台已在跑（转换 / 小地图索引 / 兜底生成 / 怀旧服小地图库），直接把进度条接上
+// 页面打开时若后台已在跑（转换 / 小地图索引 / 兜底生成 / 怀旧服库 / 怀旧服大图库），直接把进度条接上
 (async () => {
   try {
     const p = await api("/api/progress");
     if (p.convert.running || p.minimap.running || p.auto.running
-        || (p.cls && p.cls.running)) startProgress();
+        || (p.cls && p.cls.running) || (p.clsmap && p.clsmap.running)) startProgress();
   } catch (e) { /* 服务还没起来，忽略 */ }
 })();
 $("#q").oninput = renderList;
