@@ -1632,6 +1632,110 @@ def _cls_names() -> dict:
     return {}
 
 
+CLS_TABLES = CLS_MMIDX / "tables.json"        # 怀旧服 Mob/Skill 名单缓存（带 json 包 mtime 戳）
+_cls_tables_state: dict = {"state": None}
+
+
+def _cls_tables() -> dict:
+    """怀旧服实装名单：TextAsset「Mob」1395 只 /「Skill」737 个的 key 集合。
+
+    key 是去前导零的 id（和 Map 名字表同款约定）。给 WebUI 的「怀旧服」筛选用：
+    现代素材库是超集，按这份名单过滤出怀旧服真正有的怪/技能。同样按所有
+    json 包的最新 mtime 打戳缓存到 .cache\\minimap-cls\\tables.json。
+    """
+    empty = {"mob": [], "skill": []}
+    w = _cls_w_dir()
+    if w is None:
+        return empty
+    try:
+        stamp = max(p.stat().st_mtime for p in (w / "w").glob("json_*.bundle"))
+    except ValueError:
+        return empty
+    st = _cls_tables_state["state"]
+    if st is not None and st["stamp"] == stamp:
+        return st["tables"]
+    try:
+        raw = json.loads(CLS_TABLES.read_text(encoding="utf-8"))
+        if raw.get("stamp") == stamp:
+            tables = {"mob": raw.get("mob") or [], "skill": raw.get("skill") or []}
+            _cls_tables_state["state"] = {"stamp": stamp, "tables": tables}
+            return tables
+    except (OSError, ValueError):
+        pass
+    try:
+        import UnityPy
+    except ImportError:
+        return empty
+    found: dict[str, list[str]] = {}
+    for b in sorted((w / "w").glob("json_*.bundle")):
+        try:
+            env = UnityPy.load(str(b))
+        except Exception:                      # noqa: BLE001
+            continue
+        for o in env.objects:
+            if o.type.name != "TextAsset":
+                continue
+            try:
+                d = o.read()
+            except Exception:                  # noqa: BLE001
+                continue
+            nm = getattr(d, "m_Name", "")
+            if nm not in ("Mob", "Skill"):
+                continue
+            s = d.m_Script
+            if isinstance(s, str):
+                s = s.encode("utf-8", "surrogateescape")
+            try:
+                j = json.loads(s.decode("utf-8-sig"))
+            except (ValueError, UnicodeDecodeError):
+                continue
+            ids = sorted(k for k in j
+                         if isinstance(k, str) and k.isdigit() and len(k) >= 3)
+            if len(ids) < 50:                  # 太小的不是名单表（防同名小 TextAsset 误伤）
+                continue
+            found[nm.lower()] = ids
+        if len(found) >= 2:
+            break
+    tables = {"mob": found.get("mob", []), "skill": found.get("skill", [])}
+    try:
+        CLS_MMIDX.mkdir(parents=True, exist_ok=True)
+        tmp = CLS_TABLES.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"stamp": stamp, **tables}, ensure_ascii=False),
+                       encoding="utf-8")
+        os.replace(tmp, CLS_TABLES)
+    except OSError:
+        pass
+    _cls_tables_state["state"] = {"stamp": stamp, "tables": tables}
+    return tables
+
+
+def c_cls_maps() -> dict:
+    """怀旧服地图列表：小地图库的 523 张 canvas × 本地名表（1838 张）。
+
+    只列有 canvas 的图（没图的名字表条目对不上画面，列了也看不了）。
+    mod=同 id 在现代库里也存在（可以跳过去看渲染大图）。
+    """
+    if not _cls_ready():
+        raise CliError("怀旧服小地图库还没建好 —— 数据源面板点「⬇ 转换缺失数据」", 1)
+    idx = json.loads((CLS_MMIDX / "index.json").read_text(encoding="utf-8"))
+    names = _cls_names()
+    modern = set(c_maps()["maps"])
+    out = []
+    for mid in sorted(idx):
+        n = names.get(mid.lstrip("0") or "0") or {}
+        ent = idx[mid] or {}
+        out.append({"id": mid, "street": n.get("street", ""), "name": n.get("name", ""),
+                    "desc": n.get("desc", ""), "w": ent.get("cw"), "h": ent.get("ch"),
+                    "mod": mid in modern})
+    return {"maps": out, "names": len(names)}
+
+
+def c_cls_tables() -> dict:
+    """怀旧服 Mob/Skill 名单（前端筛选用）+ 库状态。"""
+    t = _cls_tables()
+    return {"ready": _cls_ready(), "mob": t["mob"], "skill": t["skill"]}
+
+
 def _cls_bundle_meta() -> Path | None:
     """上次用过的来源 bundle（还在且 mtime 没变就复用，免去全包探测）。"""
     try:
@@ -4091,6 +4195,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_map_imgindex)
         elif path == "/api/clsimgindex":
             self._api(c_cls_imgindex)
+        elif path == "/api/cls/maps":
+            self._api(c_cls_maps)
+        elif path == "/api/cls/tables":
+            self._api(c_cls_tables)
         elif path.startswith("/preview/"):
             self._send_file(CACHE / urllib.parse.unquote(path[len("/preview/"):]),
                             "image/png")

@@ -47,6 +47,11 @@
              padding: 4px; flex: none; }
   #mainseg button { width: 100%; justify-content: flex-start; text-align: left;
                     padding: 5px 8px; font-size: 12.5px; font-weight: 500; }
+  /* 数据模式开关（现代库/怀旧服）：与主导轨同款竖排 */
+  #datamode { display: flex; flex-direction: column; gap: 2px; width: 100%;
+              padding: 4px; flex: none; }
+  #datamode button { width: 100%; justify-content: flex-start; text-align: left;
+                     padding: 5px 8px; font-size: 12.5px; font-weight: 500; }
   .rail-hint { font-size: 11.5px; line-height: 1.45; color: var(--mut);
                padding: 2px 2px 0; }
   .step { display: inline-flex; width: 22px; height: 22px; border-radius: 50%;
@@ -137,6 +142,17 @@
   .list .it:hover { background: #161b22; }
   .list .it.on { background: #0e3b35; }
   .list .id { font: 12.5px Consolas, monospace; color: var(--acc2); }
+  /* 地图列表行里的名字（怀旧服模式：id + 中文名一行显示） */
+  .list .nm { color: var(--mut); font-size: 12.5px; overflow: hidden;
+              white-space: nowrap; text-overflow: ellipsis; }
+  .list .it.on .nm { color: #bfe6ff; }
+  /* 怀旧服 canvas 查看区：经典小地图窗口配色（深蓝描边 rgb(85,119,153)） */
+  .clsmap { max-width: 100%; }
+  .clscanvas { display: inline-block; margin: 8px 0; padding: 6px;
+               background: rgba(34,68,102,.35); border: 2px solid rgb(85,119,153);
+               border-radius: 4px; line-height: 0; }
+  .clscanvas img { image-rendering: pixelated; max-width: 100%; max-height: 62vh; }
+  .cls-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .tier { font-size: 10px; line-height: 15px; padding: 0 6px; border-radius: 999px;
           border: 1px solid currentColor; white-space: nowrap; }
   .tier.big { color: #ff6b6b; background: #ff6b6b1a; }
@@ -538,6 +554,10 @@
   <!-- 浏览 / 导出：地图 / 怪物素材 / 人物素材 三个大类在同一张卡片里切换 -->
   <div class="card grow locked" id="maincard">
     <div class="rail">
+      <div class="seg" id="datamode" title="数据模式：现代库 = 官方现代客户端全部数据；怀旧服 = 只看怀旧服实装的数据（地图列怀旧服小地图库，怪物/技能按怀旧服名单筛选）">
+        <button data-dm="mod">🌐 现代库</button>
+        <button data-dm="cls">🕹 怀旧服</button>
+      </div>
       <div class="seg" id="mainseg">
         <button class="on" data-m="map" title="地图：按 id/名字浏览，预览 1366×768 客户端画面，导出 map.json + 贴图 + 渲染图">🗺 地图</button>
         <button data-m="mob" title="怪物素材：按 id/名字浏览全部怪物，看每个动作的逐帧动画，导出逐帧 PNG（带锚点 manifest）">👾 怪物素材</button>
@@ -579,6 +599,7 @@
       <div class="md-bar">
         <div class="filters" style="margin:0">
           <button class="md-flt on" data-f="all">全部</button>
+          <button class="md-flt" data-f="cls" title="只看怀旧服实装过的怪（名单来自怀旧服客户端本地数据；素材用现代库同 id 画面）">怀旧服</button>
           <button class="md-flt" data-f="lv">有等级</button>
           <button class="md-flt" data-f="boss">BOSS</button>
           <button class="md-flt" data-f="big">大BOSS</button>
@@ -634,6 +655,10 @@
     <div class="pane" id="skdex" hidden>
       <div class="md-bar">
         <select id="sk-job" style="max-width:180px"></select>
+        <div class="filters" style="margin:0">
+          <button class="sk-flt flt on" data-f="all">全部</button>
+          <button class="sk-flt flt" data-f="cls" title="只看怀旧服实装过的技能（名单来自怀旧服客户端本地数据；特效素材用现代库同 id 画面）">怀旧服</button>
+        </div>
         <input type="text" id="sk-q" placeholder="搜索技能 id 或名字 …" />
         <span class="muted" id="sk-count"></span>
         <span style="flex:1"></span>
@@ -733,6 +758,66 @@ function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " +
 
 let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [], CN_NEED_CLS = false, CN_NEED_DMG = false;
 let MAPREADY = false, BUSY = false;   // 浏览区锁定状态：数据就绪 && 没有任务在跑
+
+/* ============ 怀旧服数据模式（全局开关） ============
+   地图 tab 切成怀旧服小地图库（523 张 canvas × 本地 1838 张名表）；
+   怪物/技能 tab 按 /api/cls/tables 的怀旧服实装名单过滤现代素材库
+   （同 id 画面基本一致）；人物素材/伤害数字的怀旧服贴图未提取，保持现代库。 */
+let CLSMODE = localStorage.getItem("wt_datamode") === "cls";
+let CLS_MAPS = null;       // [{id, street, name, desc, w, h, mod}]
+let CLS_TAB = null;        // {mob:Set, skill:Set}（去前导零 id）
+let CLS_TAB_LOAD = null;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const noZero = (s) => String(s ?? "").replace(/^0+/, "") || "0";
+
+async function clsTables() {
+  if (CLS_TAB) return CLS_TAB;
+  if (!CLS_TAB_LOAD) {
+    CLS_TAB_LOAD = api("/api/cls/tables").then((d) => {
+      // 拉失败也置成空集（不再重试），免得渲染循环里无限打接口
+      CLS_TAB = { mob: new Set(d.mob || []), skill: new Set(d.skill || []) };
+      return CLS_TAB;
+    }).catch(() => { CLS_TAB = { mob: new Set(), skill: new Set() }; return CLS_TAB; });
+  }
+  return CLS_TAB_LOAD;
+}
+
+/* 开关状态同步到 UI + 各 tab（切开关时当前 tab 立即重筛/重列） */
+function dataModeSync() {
+  $$("#datamode button").forEach((b) =>
+    b.classList.toggle("on", (b.dataset.dm === "cls") === CLSMODE));
+  $("#filters-map").hidden = CLSMODE;   // 怀旧服没有刷怪数据：有怪/无怪筛选不适用
+  MD.user = false; SK.user = false;     // 换模式：chip 的手动选择不跨模式保留
+  if (MODE === "map") {
+    $("#detail").innerHTML = CLSMODE
+      ? `<div class="muted">左侧选一张怀旧服地图：看小地图 canvas / 下载 PNG。<br><br>
+          · 共 ${ (CLS_MAPS || []).length ? CLS_MAPS.length : "—" } 张（有 canvas 的才列）<br>
+          · 地图名来自客户端本地数据（1838 张名表）<br>
+          · 完整渲染怀旧服地图需要 WZJS 数据包逆向（未实装）</div>`
+      : "";
+    loadLists();
+  } else if (MODE === "mob") setMdFilt(CLSMODE ? "cls" : "all");
+  else if (MODE === "skill") setSkFilt(CLSMODE ? "cls" : "all");
+  $("#mode-hint").textContent = modeHint(MODE);
+}
+
+$("#datamode").onclick = (e) => {
+  const b = e.target.closest("button[data-dm]");
+  if (!b) return;
+  const v = b.dataset.dm === "cls";
+  if (v === CLSMODE) return;
+  CLSMODE = v;
+  localStorage.setItem("wt_datamode", v ? "cls" : "mod");
+  dataModeSync();
+};
+
+function modeHint(m) {
+  let t = MODE_HINT[m] || "";
+  if (CLSMODE && (m === "char" || m === "dmg"))
+    t += "（怀旧服贴图未提取：本页仍是现代库数据）";
+  return t;
+}
 
 // 导入完成前把下面整块浏览区置灰不可点（数据未就绪或转换/建库正在跑）
 function refreshLock() {
@@ -1471,6 +1556,24 @@ async function tickProgress() {
 
 async function loadLists() {
   MAPS = []; LIFE = new Set();
+  if (CLSMODE) {
+    // 怀旧服模式：列表 = 小地图库 523 张 canvas × 本地名表（不走 Map.nx）。
+    // 拉空/失败（库没建好、还没选工作区）不缓存：下次 loadLists 重试
+    if (CLS_MAPS === null || !CLS_MAPS.length) {
+      try {
+        const d = await api("/api/cls/maps");
+        CLS_MAPS = d.maps;
+      } catch (e) {
+        CLS_MAPS = [];
+        $("#list").innerHTML =
+          `<div class="miss" style="padding:10px">${esc(e.message)}</div>`;
+        $("#listcount").textContent = "";
+        return;
+      }
+    }
+    renderList();
+    return;
+  }
   try {
     const d = await api("/api/maps");
     MAPS = d.maps;
@@ -1482,6 +1585,21 @@ async function loadLists() {
 function renderList() {
   const q = $("#q").value.trim().toLowerCase();
   const box = $("#list");
+  if (CLSMODE) {
+    // 怀旧服：按 id / 名字 / 街道搜，行里带中文名
+    let items = CLS_MAPS || [];
+    if (q) items = items.filter((m) => m.id.includes(q) ||
+      (m.name || "").toLowerCase().includes(q) ||
+      (m.street || "").toLowerCase().includes(q));
+    $("#listcount").textContent = `怀旧服 ${items.length} 张`;
+    const top = items.slice(0, 400);
+    box.innerHTML = top.map((m) =>
+      `<div class="it" data-id="${m.id}" title="${esc(m.street ? m.street + " · " : "")}${esc(m.desc || "")}">
+        <span class="id">${m.id}</span><span class="nm">${esc(m.name || "")}</span></div>`).join("")
+      || '<div class="muted" style="padding:10px">没有匹配</div>';
+    box.querySelectorAll(".it").forEach((el) => { el.onclick = () => select(el); });
+    return;
+  }
   let items = MAPS;
   if (MAPFILT === "mob") items = items.filter((m) => LIFE.has(m));
   else if (MAPFILT === "empty") items = items.filter((m) => !LIFE.has(m));
@@ -1504,8 +1622,41 @@ async function select(el) {
   $$("#list .it").forEach((x) => x.classList.remove("on"));
   el.classList.add("on");
   errBox.style.display = "none";
-  mapSel = el.dataset.id;
+  const id = el.dataset.id;
+  if (CLSMODE) { clsSelect(id); return; }
+  mapSel = id;
   mapLoad(mapSel, true);
+}
+
+/* 怀旧服地图详情：本地只有 canvas（没有 WZJS 地图数据，渲染不了大图），
+   展示名字/街道/描述 + canvas PNG（可下载），现代库有同 id 图时可跳过去看大图 */
+function clsSelect(id) {
+  const m = (CLS_MAPS || []).find((x) => x.id === id);
+  const det = $("#detail");
+  if (!m) return;
+  const url = `/preview/minimap-cls/${m.id}.png`;
+  det.innerHTML = `<div class="clsmap">
+    <div class="cls-row"><b>${esc(m.name || "（无名）")}</b>
+      <span class="muted">${esc(m.street || "")}</span>
+      <span class="pill">${m.id}</span></div>
+    ${m.desc ? `<div class="muted" style="margin:4px 0">${esc(m.desc)}</div>` : ""}
+    <div class="clscanvas"><img src="${url}" alt="${esc(m.name || m.id)}"
+      style="width:${m.w ? m.w * 2 : 400}px" loading="lazy"></div>
+    <div class="cls-row">
+      <span class="muted">canvas ${m.w || "?"}×${m.h || "?"}（2x 显示）</span>
+      <a class="mini" href="${url}" download="${m.id}.png">⬇ 下载 canvas PNG</a>
+      ${m.mod ? `<button class="mini" id="cls-open-mod"
+        title="现代库里有同 id 地图：切回现代库打开渲染大图">在现代库打开大图</button>` : ""}
+    </div>
+  </div>`;
+  const btn = $("#cls-open-mod");
+  if (btn) btn.onclick = () => {
+    CLSMODE = false;
+    localStorage.setItem("wt_datamode", "mod");
+    dataModeSync();
+    mapSel = m.id;
+    mapLoad(m.id, true);
+  };
 }
 
 let mapData = null;    // 当前地图的导出结果（含刷怪点 / 坐标变换）
@@ -1536,7 +1687,8 @@ async function mdOpen(kindId) {
       return;
     }
   }
-  mdRenderList();
+  // 怀旧服模式下打开怪物面板：默认套「怀旧服」筛选（用户手动换过 chip 就尊重用户）
+  if (CLSMODE && !MD.user) setMdFilt("cls"); else mdRenderList();
   if (kindId) {
     const m = MD.all.find((x) => x.id === String(kindId).replace(/^0+/, "") || x.id === String(kindId));
     if (m) mdSelect(m);
@@ -1546,12 +1698,18 @@ async function mdOpen(kindId) {
 function mdRenderList() {
   const q = ($("#md-q").value || "").trim().toLowerCase();
   let items = (MD.all || []).filter((m) => m.img_ok !== false);   // 无帧怪（只有 thumbnail）不进列表
-  if (MD.filt === "lv") items = items.filter((m) => (m.level || 0) > 0);   // 服务端实装、有等级数值的怪
+  if (MD.filt === "cls") {                                        // 怀旧服实装名单（去前导零 id 对齐）
+    if (!CLS_TAB) { clsTables().then(() => mdRenderList()); }
+    else items = items.filter((m) => CLS_TAB.mob.has(noZero(m.id)));
+  }
+  else if (MD.filt === "lv") items = items.filter((m) => (m.level || 0) > 0);   // 服务端实装、有等级数值的怪
   else if (MD.filt === "boss") items = items.filter((m) => m.tier === "big" || m.tier === "boss");
   else if (MD.filt === "big") items = items.filter((m) => m.tier === "big");
   if (q) items = items.filter((m) => m.id.includes(q) ||
                                     (m.name || "").toLowerCase().includes(q));
-  $("#md-count").textContent = `${items.length} 只`;
+  $("#md-count").textContent = MD.filt === "cls" && CLS_TAB && !CLS_TAB.mob.size
+    ? `${items.length} 只（怀旧服名单没加载：工作区选到怀旧服客户端了吗？）`
+    : `${items.length} 只`;
   const top = items.slice(0, 600);
   const el = $("#md-list");
   el.innerHTML = top.map((m) => {
@@ -1765,7 +1923,7 @@ async function mdExport(m, btn) {
    职业 → 技能列表（String 中文名）→ 特效序列（effect/ball/hit/screen/…）
    逐帧播放（按锚点对齐）→ 导出逐帧 PNG + manifest.json。 */
 const SK = { jobs: null, job: null, items: [], sel: null, data: null,
-             timer: null, gen: 0 };
+             timer: null, gen: 0, filt: "all" };
 
 async function skOpen() {
   if (SK.jobs) { skJobs(); return; }
@@ -1788,6 +1946,8 @@ function skJobs() {
     return;
   }
   sel.onchange = () => skPickJob(sel.value);
+  // 怀旧服模式下打开技能面板：默认套「怀旧服」筛选（用户手动换过 chip 就尊重用户）
+  if (CLSMODE && !SK.user) setSkFilt("cls");
   skPickJob(SK.job || sel.value);
 }
 
@@ -1808,9 +1968,15 @@ async function skPickJob(job) {
 function skRenderList() {
   const q = ($("#sk-q").value || "").trim().toLowerCase();
   let items = SK.items.filter((s) => s.effects?.length);
+  if (SK.filt === "cls") {                                        // 怀旧服实装技能名单
+    if (!CLS_TAB) { clsTables().then(() => skRenderList()); }
+    else items = items.filter((s) => CLS_TAB.skill.has(noZero(s.id)));
+  }
   if (q) items = items.filter((s) => s.id.includes(q) ||
                                   (s.name || "").toLowerCase().includes(q));
-  $("#sk-count").textContent = `${items.length} 技能`;
+  $("#sk-count").textContent = SK.filt === "cls" && CLS_TAB && !CLS_TAB.skill.size
+    ? `${items.length} 技能（怀旧服名单没加载）`
+    : `${items.length} 技能`;
   const el = $("#sk-list");
   el.innerHTML = items.slice(0, 600).map((s) => {
     const eff = (s.effects || []).slice(0, 3).join(" / ");
@@ -2548,7 +2714,7 @@ function setMode(m) {
   $("#dmgdex").hidden = m !== "dmg";
   $("#battle").hidden = m !== "battle";
   $$("#mainseg button").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
-  $("#mode-hint").textContent = MODE_HINT[m] || "";
+  $("#mode-hint").textContent = modeHint(m);
   if (m !== "map") $("#mapzoom").hidden = true;
   if (m === "mob") mdOpen(null);
   else { clearTimeout(MD.timer); MD.gen++; }
@@ -3238,13 +3404,33 @@ $("#dmg-export").onclick = (e) => dmgExport(e.currentTarget);
 $(".md-bar").onclick = (e) => {
   const b = e.target.closest(".md-flt");
   if (!b) return;
+  MD.user = true;                       // 用户手动选过：之后打开面板不再强制套怀旧服筛选
   $$(".md-flt").forEach((x) => x.classList.remove("on"));
   b.classList.add("on");
   MD.filt = b.dataset.f;
   mdRenderList();
 };
+/* 筛选状态同步（怀旧服全局开关切换时也会调用） */
+function setMdFilt(f) {
+  $$(".md-flt").forEach((x) => x.classList.toggle("on", x.dataset.f === f));
+  MD.filt = f;
+  mdRenderList();
+}
+function setSkFilt(f) {
+  $$(".sk-flt").forEach((x) => x.classList.toggle("on", x.dataset.f === f));
+  SK.filt = f;
+  skRenderList();
+}
+/* 技能面板的「怀旧服」筛选（技能栏也是 .md-bar，按容器限定只接自己的 chip） */
+$("#skdex .md-bar").onclick = (e) => {
+  const b = e.target.closest(".sk-flt");
+  if (!b) return;
+  SK.user = true;                       // 用户手动选过：之后打开面板不再强制套
+  setSkFilt(b.dataset.f);
+};
 window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); fitGameView(); });
 setMode("map");   // 初始态：地图（顺便填上左侧导轨下方的提示）
+dataModeSync();   // 恢复上次的 数据模式（现代库/怀旧服）开关状态
 boot();</script>
 </body>
 </html>
