@@ -10,6 +10,14 @@
     --mut: #8b949e; --acc: #4ee0c8; --acc2: #ffd166; --err: #ff7b72;
   }
   * { box-sizing: border-box; }
+  /* 深色细滚动条：只有内部列表/预览这类真要滚的地方才出，页面本身永不滚 */
+  * { scrollbar-width: thin; scrollbar-color: #333c48 transparent; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: #333c48; border-radius: 6px;
+                               border: 2px solid transparent; background-clip: padding-box; }
+  *::-webkit-scrollbar-thumb:hover { background: #46525f; background-clip: padding-box; }
+  *::-webkit-scrollbar-corner { background: transparent; }
   /* 整页锁一屏：wrap 自己永远不滚动（滚动条只出现在内部列表/预览里），
      第②张卡片吃掉剩余高度。标题和说明并成一行，省掉一行的上下空间。 */
   html, body { height: 100%; }
@@ -137,8 +145,13 @@
   .filters { display: flex; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
   .filters button { font-size: 12px; padding: 1px 9px; }
   .filters button.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
+  /* 地图预览格：1366×768 游戏窗口放不下时整体等比缩小（fitGameView()），
+     所以这里永远不该出现滚动条 —— 直接不给它画 */
   .detail { border: 1px solid var(--line); border-radius: 8px; padding: 10px;
-            min-height: 0; overflow: auto; background: #0b0f14; }
+            min-height: 0; overflow: auto; background: #0b0f14;
+            display: flex; flex-direction: column;
+            scrollbar-width: none; -ms-overflow-style: none; }
+  .detail::-webkit-scrollbar { width: 0; height: 0; display: none; }
   .zoombar { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
   .zoombar button { padding: 2px 10px; }
   .zoombar button.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
@@ -746,10 +759,9 @@ let VIEWPOS = null;     // 窗口左上角在整张地图里的坐标（游戏�
 let VPDRAG = null;      // 拖画布进行中
 let DRAGMOVED = 0;      // 刚拖过画布的时间戳 → 抑制那次点击（避免误开放大查看）
 
-/* 显示倍率恒为 1：窗口 CSS 尺寸固定 1366×768，屏幕上的物理大小 = 1366×系统缩放
-   （浏览器自然处理 DPI），和冒险岛客户端窗口在屏幕上的实际大小一致，不再额外放大。
-   留作常量：HUD 拖动等坐标换算统一除以 GVS。 */
-const GVS = 1;
+/* 显示倍率：预览格比 1366×768 小时整体等比缩小（fitGameView()），1:1 时恒为 1。
+    拖拽 / 滚轮 / HUD 拖动这些屏幕坐标换算统一除以 GVS，缩放下手感才跟手。 */
+let GVS = 1;
 
 /* 窗口固定不动，整张地图反向平移 —— 就是游戏里人物走动时画布横向滚动的效果 */
 function applyView() {
@@ -771,6 +783,35 @@ function vpClamp() {
   applyView();
 }
 function vpPlace() { vpClamp(); }   // 摆视角：缺省居中，换图后夹在地图范围内
+
+/* 预览格放不下 1366×768 游戏窗口时整块等比缩小（只缩不放），这样预览格
+   永远不出滚动条、整个窗口（含小地图 HUD / 取景框）始终完整可见。
+   量尺寸前先把 zoom 清掉，量到的才是 1:1 的原始盒子。 */
+function fitGameView() {
+  const box = $("#gvbox"), host = $("#detail");
+  if (!box || !host) return;
+  box.style.zoom = "";
+  const hr = host.getBoundingClientRect();
+  const br = box.getBoundingClientRect();
+  if (br.width < 2 || br.height < 2) return;      // 面板隐藏中
+  const cs = getComputedStyle(host);
+  const availW = hr.width - (br.left - hr.left) - (parseFloat(cs.paddingRight) || 0) - 2;
+  const availH = hr.height - (br.top - hr.top) - (parseFloat(cs.paddingBottom) || 0) - 2;
+  const s = Math.min(1, availW / br.width, availH / br.height);
+  const z = s >= 0.995 ? 1 : Math.max(0.3, Math.floor(s * 100) / 100);
+  GVS = z;
+  box.style.zoom = z === 1 ? "" : String(z);
+  // 标注是给眼睛看的、不是游戏画面的一部分 —— 反缩放回去，缩到 40% 也还看得清
+  const tag = box.querySelector(".vp-tag");
+  if (tag) {
+    tag.style.zoom = z === 1 ? "" : String(1 / z);
+    tag.textContent = z === 1
+      ? "游戏窗口 1366×768 · 拖动画布"
+      : `游戏窗口 1366×768 · 缩放 ${Math.round(z * 100)}% · 拖动画布`;
+  }
+  const vf = box.querySelector("#vpframe");
+  if (vf) vf.style.borderWidth = z === 1 ? "" : (1 / z).toFixed(2) + "px";
+}
 
 /* 拖动 / 滚轮平移画布（只能拖，不能缩放）：小地图 HUD 的拖动自己处理，这里不抢 */
 function bindGvDrag() {
@@ -2486,6 +2527,7 @@ function setMode(m) {
   if (m === "dmg") dmgOpen();
   if (m === "battle") btOpen();
   else btPause();
+  if (m === "map") requestAnimationFrame(fitGameView);   // 回到地图：预览格按当前尺寸重新适配
 }
 
 /* ---------------- 人物素材（角色）：选装 → 实时合成 → 导出 ---------------- */
@@ -3021,8 +3063,9 @@ async function mapLoad(id, preview) {
     bindGvDrag();            // 画布拖动 / 滚轮平移
     vpPlace();
     buildBacks(d);           // 背景视差层（跟镜头走）
+    fitGameView();           // 预览格放不下 1366×768 就等比缩小（不出滚动条）
     const img = $("#mapsel img.mapimg");
-    if (img && !img.complete) img.onload = () => vpPlace();   // 图加载完再按真实尺寸夹一次
+    if (img && !img.complete) img.onload = () => { vpPlace(); fitGameView(); };
     renderLifeDots();          // 显示设置默认勾选：首屏就把刷怪点/怪物叠加层画上
     const ob = $("#opt-btn"), op = $("#opt-pop");
     if (ob && op) ob.onclick = (e) => { e.stopPropagation(); op.hidden = !op.hidden; };
@@ -3167,7 +3210,7 @@ $(".md-bar").onclick = (e) => {
   MD.filt = b.dataset.f;
   mdRenderList();
 };
-window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); });
+window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); fitGameView(); });
 setMode("map");   // 初始态：地图（顺便填上左侧导轨下方的提示）
 boot();</script>
 </body>
