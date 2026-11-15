@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import gzip
 import hashlib
 import importlib.util
 import json
@@ -1709,17 +1710,156 @@ def _cls_tables() -> dict:
     return tables
 
 
-def c_cls_maps() -> dict:
-    """怀旧服地图列表：小地图库的 523 张 canvas × 本地名表（1838 张）。
+# ── 怀旧服 WZJS 大图库（1750 张地图 → 可渲染 map_dir）────────────────────
+# json_573635e1*.bundle 的 WZJS 地图对象 + Obj/Tile/Back 分类页，配上
+# spritesheet 注册表，由 vendor/clsmap.py 转成 .cache\wzjs-map\<id>\
+# （map.json + img\），与 nxmap 产物同构 —— 预览/窗口导出/小地图 HUD/
+# 怪物叠加全链路复用。数据正确性已对照经典服务端 XML 验证：非新手岛
+# 样本 foothold/portal 100% 一致（000000000/10000/20000 差异是重制版
+# 重设计教程岛，多出 tutorial*/adviceMap portal）。
+WZJS_MAP = CACHE / "wzjs-map"
+WZJS_REG = WZJS_MAP / "registry.json.gz"     # spritesheet 注册表（带来源戳）
+WZJS_BUILT = WZJS_MAP / "built.json"         # {stamp, ids, errs}（断点续跑）
+_wzjsjob: dict = {"running": False, "error": "", "done": 0, "total": 0, "stage": ""}
+_wzjs_lock = threading.Lock()
 
-    只列有 canvas 的图（没图的名字表条目对不上画面，列了也看不了）。
-    mod=同 id 在现代库里也存在（可以跳过去看渲染大图）。
+
+def _wzjs_stamp(w: Path) -> str:
+    """来源戳：json 地图包 + 全部 spritesheet 包的 名字/mtime/size。"""
+    parts = []
+    for pat in ("json_573635e1*", "spritesheet_*"):
+        for p in sorted((w / "w").glob(pat)):
+            st = p.stat()
+            parts.append(f"{p.name}:{st.st_mtime:.0f}:{st.st_size}")
+    return "|".join(parts)
+
+
+def _wzjs_ready() -> bool:
+    """大图库建好且来源包没变（客户端更新自动过期，下次导入重建）。"""
+    w = _cls_w_dir()
+    if w is None:
+        return False
+    try:
+        b = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
+        return bool(b.get("ids")) and b.get("stamp") == _wzjs_stamp(w)
+    except (OSError, ValueError):
+        return False
+
+
+def _wzjs_build(log=None) -> None:
+    """后台任务：注册表 + 1750 张 WZJS 地图 → .cache\\wzjs-map\\<id>\\。
+
+    断点续跑：每转完一张就把进度写进 built.json（中断重跑只补缺的图）；
+    单张失败不中断（记进 errs，最后汇总）。解码 atlas 按 FIFO 限内存
+    （BundleTex.MAX_BYTES），全库转换摸到几百张贴图不会把 RAM 撑爆。
     """
+    if not _wzjs_lock.acquire(blocking=False):
+        return
+    try:
+        w = _cls_w_dir()
+        if w is None:
+            raise CliError("找不到怀旧服数据（…\\mxdclassic\\Maplestory_Classic_Data\\"
+                           "StreamingAssets\\aa）—— 工作区选 mxdclassic 或安装根目录", 1)
+        try:
+            import UnityPy  # noqa: F401
+        except ImportError:
+            raise CliError("缺 UnityPy —— 先跑 python scripts\\deps.py（依赖装在 .pylibs\\）", 1)
+        _wzjsjob.update(running=True, error="", done=0, total=0,
+                        stage="扫描 spritesheet 注册表")
+        stamp = _wzjs_stamp(w)
+        reg = None
+        try:
+            with gzip.open(WZJS_REG, "rt", encoding="utf-8") as f:
+                raw = json.load(f)
+            if raw.get("stamp") == stamp:
+                reg = raw.get("reg")
+        except (OSError, ValueError):
+            pass
+        if reg is None:
+            from vendor.clssprite import build_registry
+            # build_registry 期望 aa\w 子目录（bundle 都在那层）
+            reg = build_registry(w / "w",
+                                 progress=lambda s, d, t: _wzjsjob.update(stage=s))
+            try:
+                WZJS_MAP.mkdir(parents=True, exist_ok=True)
+                tmp = WZJS_REG.with_suffix(".tmp")
+                with gzip.open(tmp, "wt", encoding="utf-8") as f:
+                    json.dump({"stamp": stamp, "reg": reg}, f, ensure_ascii=False)
+                os.replace(tmp, WZJS_REG)
+            except OSError:
+                pass
+        if not reg:
+            raise CliError("spritesheet 注册表是空的（12 个包一个描述符都没解到）"
+                           "—— 客户端结构变了？", 1)
+        built: dict = {"stamp": stamp, "ids": [], "errs": {}}
+        try:
+            old = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
+            if old.get("stamp") == stamp:
+                built = {"stamp": stamp, "ids": list(old.get("ids") or []),
+                         "errs": dict(old.get("errs") or {})}
+        except (OSError, ValueError):
+            pass
+        from vendor.clsmap import BundleTex, ClsMapSource
+        src = ClsMapSource(w, reg)
+        tex = BundleTex(w)
+        names = _cls_names()
+        done = set(built["ids"])
+        todo = [i for i in src.map_ids() if i not in done]
+        _wzjsjob.update(total=len(done) + len(todo), done=len(done),
+                        stage="解析 WZJS 地图")
+        for mid in todo:
+            try:
+                src.convert(mid, WZJS_MAP / mid, tex, names)
+                built["ids"].append(mid)
+            except Exception as e:              # noqa: BLE001
+                built["errs"][mid] = f"{type(e).__name__}: {str(e)[:200]}"
+            _wzjsjob["done"] += 1
+            try:
+                tmp = WZJS_BUILT.with_suffix(".tmp")
+                tmp.write_text(json.dumps(built, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, WZJS_BUILT)
+            except OSError:
+                pass
+        if not built["ids"]:
+            first = next(iter(built["errs"].values()), "")
+            raise CliError(f"WZJS 地图全转失败（{len(built['errs'])} 张）：{first}", 1)
+        msg = (f"怀旧服大图库完成：{len(built['ids'])} 张"
+               + (f"（{len(built['errs'])} 张失败，明细 {WZJS_BUILT}）"
+                  if built["errs"] else ""))
+        if log:
+            log(msg)
+        _wzjsjob["stage"] = msg
+    except Exception as exc:                    # noqa: BLE001
+        _wzjsjob["error"] = str(exc)
+    finally:
+        _wzjsjob["running"] = False
+        _wzjs_lock.release()
+
+
+def c_cls_maps() -> dict:
+    """怀旧服地图列表：优先 WZJS 大图库（1750 张，可渲染大图），
+    没建好再退回小地图库的 523 张 canvas × 本地名表（1838 张）。
+
+    WZJS 模式的行可以直接渲染完整地图（/api/map/export 带 cls=1）；
+    canvas 模式只有小图可看。mod=同 id 在现代库里也存在（可以跳过去看）。
+    """
+    names = _cls_names()
+    try:
+        modern = set(c_maps()["maps"])
+    except Exception:                              # noqa: BLE001
+        modern = set()
+    if _wzjs_ready():
+        built = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
+        out = []
+        for mid in sorted(built.get("ids") or []):
+            n = names.get(mid.lstrip("0") or "0") or {}
+            out.append({"id": mid, "street": n.get("street", ""),
+                        "name": n.get("name", ""), "desc": n.get("desc", ""),
+                        "mod": mid.zfill(9) in modern})
+        return {"maps": out, "names": len(names), "wzjs": True}
     if not _cls_ready():
         raise CliError("怀旧服小地图库还没建好 —— 数据源面板点「⬇ 转换缺失数据」", 1)
     idx = json.loads((CLS_MMIDX / "index.json").read_text(encoding="utf-8"))
-    names = _cls_names()
-    modern = set(c_maps()["maps"])
     out = []
     for mid in sorted(idx):
         n = names.get(mid.lstrip("0") or "0") or {}
@@ -1727,7 +1867,7 @@ def c_cls_maps() -> dict:
         out.append({"id": mid, "street": n.get("street", ""), "name": n.get("name", ""),
                     "desc": n.get("desc", ""), "w": ent.get("cw"), "h": ent.get("ch"),
                     "mod": mid in modern})
-    return {"maps": out, "names": len(names)}
+    return {"maps": out, "names": len(names), "wzjs": False}
 
 
 def c_cls_tables() -> dict:
@@ -3367,12 +3507,25 @@ def _map_cache_stamp(outdir: Path) -> None:
         pass
 
 
+def _res_url(p: Path) -> str:
+    """缓存/导出目录里的文件 → 静态路由 URL。怀旧服大图库在 .cache\\wzjs-map
+    下（窗口导出也写在那），统一按 /preview/ 走，和 preview 模式一致。"""
+    try:
+        return "/preview/" + p.relative_to(CACHE).as_posix()
+    except ValueError:
+        return "/exports/" + p.relative_to(EXPORTS).as_posix()
+
+
 def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
                  density: int = 1, view: tuple | None = None,
                  seed: str | None = None,
                  _visited: set | None = None,
-                 no_bg: bool = False) -> dict:
+                 no_bg: bool = False,
+                 cls: bool = False) -> dict:
     """导出一张地图：map.json（life/foothold/ladderRope）+ 全部贴图 + 渲染预览图。
+
+    cls=True 走怀旧服 WZJS 大图库（.cache\\wzjs-map\\<id>\\，导入时已建好），
+    map_dir 与 nxmap 同构，下游渲染全部复用；id 是不带前导零的页名。
 
     链接图（info/link，自己的 img 是空的）自动顺链导出目标图，返回带 link 字段。
     mobs=True 时预览图把怪随机画到地面上（preview_mobs.png，沿 rx 巡逻区间散布、
@@ -3385,6 +3538,9 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     """
     ws = _need_ws()
     mid = str(mid).strip()
+    if cls:
+        return _cls_map_export(mid, preview, mobs, density, view, seed,
+                               _visited if _visited is not None else set(), no_bg)
     if not re.fullmatch(r"\d{9}", mid):
         raise CliError("地图 id 应该是 9 位数字", 2)
     visited = _visited if _visited is not None else set()
@@ -3413,6 +3569,35 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
         d["link"] = {"from": mid, "to": link}
         return d
 
+    return _map_export_inner(ws, mid, preview, mobs, density, view, visited,
+                             seed=seed, outdir=outdir, mj=mj, no_bg=no_bg)
+
+
+def _cls_map_export(mid: str, preview: bool, mobs: bool, density: int,
+                    view: tuple | None, seed: str | None,
+                    visited: set, no_bg: bool) -> dict:
+    """怀旧服 WZJS 大图导出：map_dir 已在导入时建好（.cache\\wzjs-map\\<id>），
+    这里只负责读 map.json + 复用渲染管线。id 是不带前导零的页名（如 101040000
+    也可能像 20000 这样短），链接图语义与国服相同（顺链渲染目标图）。"""
+    ws = _need_ws()
+    if not re.fullmatch(r"\d{1,9}", mid):
+        raise CliError("地图 id 应该是数字（WZJS 页名）", 2)
+    if mid in visited:
+        raise CliError(f"link 成环了：{' → '.join(sorted(visited))} → {mid}", 1)
+    visited.add(mid)
+    if not _wzjs_ready():
+        raise CliError("怀旧服大图库还没建好 —— 数据源面板点「⬇ 转换缺失数据」", 1)
+    outdir = WZJS_MAP / mid
+    if not (outdir / "map.json").exists():
+        raise CliError(f"怀旧服大图库里没有 {mid}（可能个别图转换失败，"
+                       f"明细见 {WZJS_BUILT}）", 1)
+    mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
+    link = str(mj.get("info", {}).get("link") or "").strip()
+    if link and link != mid and re.fullmatch(r"\d{1,9}", link):
+        d = _cls_map_export(link, preview, mobs, density, view, seed,
+                            visited, no_bg)
+        d["link"] = {"from": mid, "to": link}
+        return d
     return _map_export_inner(ws, mid, preview, mobs, density, view, visited,
                              seed=seed, outdir=outdir, mj=mj, no_bg=no_bg)
 
@@ -3652,6 +3837,12 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     root = CACHE if preview else EXPORTS
     if outdir is None:
         outdir = (root / "map" / mid) if preview else (EXPORTS / "maps" / mid)
+    else:
+        try:                  # cls 大图库在 .cache 下：URL/小地图按目录真实归属算
+            outdir.relative_to(CACHE)
+            root = CACHE
+        except ValueError:
+            root = EXPORTS
     if mj is None:
         mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
     # 无背景版单独一个文件名：预览图是按文件是否存在来复用的，
@@ -3710,8 +3901,7 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     result = {"dir": str(outdir), "preview": size,
               "no_bg": bool(no_bg),
               "preview_path": str(png),
-              "preview_url": (f"/preview/{png.relative_to(CACHE).as_posix()}" if preview
-                              else f"/exports/{png.relative_to(EXPORTS).as_posix()}"),
+              "preview_url": _res_url(png),
               "life_count": len(life),
               "life_kinds": [{"id": k,
                               "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
@@ -3738,13 +3928,9 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                               for lr in mj.get("ladderRope", [])]}
     # 背景层元数据：前端按客户端视差公式把 back 画成屏幕空间层（跟镜头走）。
     # 图片文件在导出目录 img/ 下，直接用 /preview/ 或 /exports/ 静态路由取
-    try:
-        img_prefix = (f"/preview/{outdir.relative_to(CACHE).as_posix()}" if preview
-                      else f"/exports/{outdir.relative_to(EXPORTS).as_posix()}")
-        result["back"] = [{**b, "url": f"{img_prefix}/img/{b['img']}"}
-                          for b in mj.get("back", []) if b.get("img")]
-    except ValueError:
-        result["back"] = []
+    img_prefix = _res_url(outdir / "img")
+    result["back"] = [{**b, "url": f"{img_prefix}/{b['img']}"}
+                      for b in mj.get("back", []) if b.get("img")]
     # 导出图带怪物：把怪沿地面随机散布合成进预览图（preview_mobs.png）
     use_seed = str(seed) if seed else f"{mid}:{random.randrange(1 << 30):x}"
     places: list[dict] = []
@@ -3760,10 +3946,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                                           density=max(1, min(10, int(density or 1))),
                                           no_bg=mob_nobg)
         if mob_png is not None:
-            rel = (mob_png.relative_to(CACHE) if preview else mob_png.relative_to(EXPORTS))
             result["preview_path"] = str(mob_png)
-            result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview
-                                     else f"/exports/{rel.as_posix()}")
+            result["preview_url"] = _res_url(mob_png)
             result["mobs"] = True
     # 导出 = 客户端那个固定 1366×768 的画面窗口（预览模式输出整张 1:1 地图，供页面叠窗口用）
     if not preview:
@@ -3795,11 +3979,9 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                               vx + VIEW_W / 2, vy + VIEW_H / 2, VIEW_W, VIEW_H, front=1)
         out_png = outdir / ("window_nobg.png" if no_bg else "window.png")
         canvas.convert("RGBA" if no_bg else "RGB").save(out_png)
-        rel = (out_png.relative_to(CACHE) if preview else out_png.relative_to(EXPORTS))
         result["preview"] = {"w": VIEW_W, "h": VIEW_H}
         result["preview_path"] = str(out_png)
-        result["preview_url"] = (f"/preview/{rel.as_posix()}" if preview
-                                 else f"/exports/{rel.as_posix()}")
+        result["preview_url"] = _res_url(out_png)
         result["window"] = {"x": vx, "y": vy, "w": VIEW_W, "h": VIEW_H,
                             "px": {"x": left, "y": top}}
         # 叠加层坐标系改成以窗口左上角为原点，圆点/立绘在窗口图上照样对准
@@ -4267,7 +4449,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       bool(b.get("preview")), bool(b.get("mobs")),
                       int(b.get("density") or 1), view,
                       str(b["seed"]) if b.get("seed") else None,
-                      no_bg=bool(b.get("no_bg")))
+                      no_bg=bool(b.get("no_bg")),
+                      cls=bool(b.get("cls")))
         elif path == "/api/map/imgsearch":
             img = b.get("image")
             if not img:
@@ -4306,6 +4489,9 @@ def _web_convert(names: list[str], force: bool) -> dict:
                       if (not names or n in names) and not paths[n].exists()]
         # 怀旧服小地图库（mxdclassic）没建好 → 并进这次任务，转完自动建
         cls_todo = _cls_w_dir() is not None and not _cls_ready() and not _clsjob["running"]
+        # 怀旧服 WZJS 大图库（1750 张可渲染地图）没建好 → 同样并进这次任务
+        wzjs_todo = (_cls_w_dir() is not None and not _wzjs_ready()
+                     and not _wzjsjob["running"])
         # 伤害数字库（Effect/BasicEff 的 No* 数字集）没建好 → 一样并进这次任务
         dmg_todo = _dmg_effect_dir() is not None and not _dmg_ready()
         # 全库出图没跑完 → 同样并进这次任务：转换完自动把每张图的预览缓存
@@ -4314,7 +4500,8 @@ def _web_convert(names: list[str], force: bool) -> dict:
             mapall_todo = bool(_map_all_pending())
         else:
             mapall_todo = "Map.nx" in todo_names     # 本次会转出 Map.nx → 全量必跑
-        if not todo_names and not cls_todo and not dmg_todo and not mapall_todo:
+        if not todo_names and not cls_todo and not wzjs_todo \
+                and not dmg_todo and not mapall_todo:
             return {"started": False, "message": "国服数据已转换完成（.cache\\cn）"}
         cn_todo = todo_names
     else:
@@ -4327,6 +4514,8 @@ def _web_convert(names: list[str], force: bool) -> dict:
     total = len(cn_todo) if cn_todo is not None else len(todo)
     if cls_todo:
         total += 1                      # 小地图库算一项，进度条能走满
+    if wzjs_todo:
+        total += 1                      # WZJS 大图库同上
     if dmg_todo:
         total += 1                      # 伤害数字库同上
     if mapall_todo:
@@ -4348,6 +4537,14 @@ def _web_convert(names: list[str], force: bool) -> dict:
                 if cls_todo:
                     _job["log"].append("转换完成，接着构建怀旧服小地图库…")
                     _cls_build()
+                    _job["done"] += 1
+                if wzjs_todo:
+                    _job["log"].append(
+                        "接着构建怀旧服大图库（WZJS 1750 张地图 → 可渲染缓存，"
+                        "已转过的自动跳过）…")
+                    _wzjs_build(log=lambda s: _job["log"].append(s))
+                    if _wzjsjob["error"]:
+                        _job["log"].append(f"怀旧服大图库出错：{_wzjsjob['error']}")
                     _job["done"] += 1
                 if dmg_todo:
                     _job["log"].append("接着提取伤害数字库（Effect/BasicEff）…")
@@ -4407,6 +4604,9 @@ def c_progress() -> dict:
         "cls": {"running": _clsjob["running"], "done": _clsjob.get("done", 0),
                 "total": _clsjob.get("total", 0), "stage": _clsjob.get("stage", ""),
                 "error": _clsjob["error"], "ready": _cls_ready()},
+        "clsmap": {"running": _wzjsjob["running"], "done": _wzjsjob.get("done", 0),
+                   "total": _wzjsjob.get("total", 0), "stage": _wzjsjob.get("stage", ""),
+                   "error": _wzjsjob["error"], "ready": _wzjs_ready()},
         "ready": ready,
     }
 
