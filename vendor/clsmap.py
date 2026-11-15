@@ -83,12 +83,20 @@ class BundleTex:
         return im
 
     def frame(self, entry: dict):
-        """注册表条目 → 裁好的帧（PIL RGBA）；缺图/越界返回 None。"""
+        """注册表条目 → 裁好的帧（PIL RGBA）；缺图/越界返回 None。
+
+        **描述符的帧 y 是 Unity 底部原点**（Unity 贴图/精灵矩形约定），落盘
+        的 image 是自上而下的，必须换算 y_top = H - y - h 再裁。直接用 y 裁
+        会取到镜像位置的另一块图——tile 的草皮跑到砖底、obj 整块错位。
+        实测判据：bottom 裁法 vs 经典 NX 素材同像素率 33~51%，top 裁法 0~5%。
+        """
         im = self.sheet(entry["b"], entry["t"], entry.get("p"))
         if im is None:
             return None
-        x, y = entry["x"], entry["y"]
-        w, h = entry["w"], entry["h"]
+        x, w, h = entry["x"], entry["w"], entry["h"]
+        y = im.height - entry["y"] - h
+        if y < 0:                       # 帧比贴图还高：按顶部对齐兜底
+            y = 0
         x2, y2 = min(x + w, im.width), min(y + h, im.height)
         if x2 <= x or y2 <= y:
             return None

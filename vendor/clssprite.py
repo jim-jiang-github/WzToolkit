@@ -15,7 +15,8 @@
     u32 帧数
     每帧: [u32 子路径长度][子路径][对齐]
           7 个值: atlas_idx, x, y, W, H, pivX, pivY
-          （x,y 为贴图上区域左上角；piv 为归一化轴心，0.5=中心，可越界）
+          （x 为区域左边界；**y 是 Unity 底部原点**，自上而下裁时要换成
+          H - y - h；piv 为归一化轴心，0.5=中心，可越界）
     尾部 12 字节保留
 
 注册表键 = WZ 路径 + "/" + 帧子路径（与 WZJS type18 节点 full path 一致，
@@ -126,7 +127,11 @@ def build_registry(w_dir: Path, progress=None) -> dict:
                 for _, _, x, y, w, h, _, _ in frames:
                     if x + w > tw or y + h > th:
                         continue
-                    box = im.crop((x, y, x + w, y + h))
+                    # 帧 y 是 Unity 底部原点（见 clsmap.BundleTex.frame）
+                    yy = th - y - h
+                    if yy < 0:
+                        continue
+                    box = im.crop((x, yy, x + w, yy + h))
                     if box.getchannel("A").getextrema()[1] > 8:
                         good += 1
                 return good
