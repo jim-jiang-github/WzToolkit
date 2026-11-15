@@ -212,6 +212,28 @@ class ClsMapSource:
                 ox, oy = c.value
         return ox, oy
 
+    @staticmethod
+    def _tile_z(tpg: dict, canvas, entry_props: dict):
+        """瓦片绘制层级：优先瓦片图节点的 z → zM → 地图条目的 zM → 0。
+
+        客户端 Gameplay/MapleMap/Tile.cpp 的写法是 z = dsrc["z"]，为 0 再取
+        dsrc["zM"]（dsrc = Map/Tile/<tS>/<u>/<no> 画布节点）。经典地图条目
+        里的 zM 几乎恒 0（如 101030110 的 169 块墙砖），用条目排序会让墙体
+        永远画在 obj 之上，整间屋子只剩墙砖格。
+        """
+        if canvas is not None:
+            props = {tpg["nodes"][ci].name: tpg["nodes"][ci].value
+                     for ci in canvas.children}
+            for k in ("z", "zM"):
+                v = props.get(k)
+                if isinstance(v, (int, float)) and v:
+                    return int(v)
+        for k in ("zM", "z"):
+            v = entry_props.get(k)
+            if isinstance(v, (int, float)) and v:
+                return int(v)
+        return 0
+
     def _texture(self, page: dict, canvas, tex: BundleTex,
                  outdir: Path, key: str | None = None,
                  overwrite: bool = False):
@@ -336,7 +358,10 @@ class ClsMapSource:
                         layer["tile"].append({
                             "u": u, "no": no,
                             "x": self._get(p, "x", 0), "y": self._get(p, "y", 0),
-                            "z": self._get(p, "zM", self._get(p, "z", 0)),
+                            # z 取**瓦片图节点**的 z/zM（客户端 Tile.cpp: z =
+                            # dsrc["z"]，为 0 再取 zM）——地图条目的 zM 恒 0，
+                            # 拿它排序会把所有地面瓦片排到最低层、盖住同层 obj
+                            "z": self._tile_z(tpg, canvas, p),
                             "ox": ox, "oy": oy, "img": img})
                 ob = self._child(page, lay, "obj")
                 if ob is not None:

@@ -314,27 +314,26 @@ def render_map(map_json: dict, img_dirs: list[str], opts: RenderOpts | None = No
                 _blit(canvas, tex, x0, y0, x0 + wd, y0 + ht)
 
     # --- 8 层 ---
-    # 顺序照客户端 TilesObjs::draw（mxd_client_source Gameplay/MapleMap）：
-    # 每层先画 obj（z 升序，multimap 等键保持原顺序），再画 tile（zM 升序）。
-    # 也就是 tile（地面）永远盖在同层 obj 上面——obj 底边插进地面才和游戏一致。
+    # 同层内 tile 与 obj 按 z **归并**绘制（z 升序）。tile 的 z 来自瓦片图节点
+    # （客户端 Tile.cpp: z = dsrc["z"]，为 0 再取 zM），obj 的 z 来自地图条目。
+    # 早期版本照 Journey 系客户端 TilesObjs::draw 分开画（obj 全画完再画 tile），
+    # 结果 z=0 的地面/墙瓦片盖住 z=9+ 的物件——101030110 第1军营整屏只剩墙砖格
+    # 就是这个原因。经典地图 tile 条目的 zM 恒 0，必须靠图节点的 z 才能排对。
     layers = map_json.get("layers", [])
     for li in range(8):
         L = layers[li] if li < len(layers) else {}
-        objs = sorted(L.get("obj", []), key=lambda o: int(o.get("z", 0)))
-        for o in objs:
-            tex = store.get(o.get("img", ""))
+        items = [(int(t.get("z", 0)), 0, t) for t in L.get("tile", [])]
+        items += [(int(o.get("z", 0)), 1, o) for o in L.get("obj", [])]
+        items.sort(key=lambda it: (it[0], it[1]))   # 同 z 时 tile 先（等同 WZ 里 tile 节点在前）
+        for _z, kind, e in items:
+            tex = store.get(e.get("img", ""))
             if tex is None:
                 continue
             im = tex
-            if int(o.get("f", 0)) == 1:
+            if kind == 1 and int(e.get("f", 0)) == 1:
                 im = im.transpose(Image.FLIP_LEFT_RIGHT)
-            place(im, float(o["x"]) - o.get("ox", 0), float(o["y"]) - o.get("oy", 0), int(o.get("a", 255)))
-        tiles = sorted(L.get("tile", []), key=lambda t: int(t.get("z", 0)))
-        for t in tiles:
-            tex = store.get(t.get("img", ""))
-            if tex is None:
-                continue
-            place(tex, float(t["x"]) - t.get("ox", 0), float(t["y"]) - t.get("oy", 0), int(t.get("a", 255)))
+            place(im, float(e["x"]) - e.get("ox", 0), float(e["y"]) - e.get("oy", 0),
+                  int(e.get("a", 255)))
 
     # --- 前景背景（front=1）---
     for b in ([] if opts.no_bg else map_json.get("back", [])):
