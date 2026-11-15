@@ -880,14 +880,14 @@ function updateBacks() {
     const ay = BK_MOB_V.has(ty) ? b.y + (b.ry / 16) * 60 * t + VPH / 2
                                 : b.y + (b.ry / 100) * fy + VPH / 2;
     if (L.el.tagName === "DIV") {
-      // 平铺层：一个 div 用 background-repeat 原生铺满，锚点 = 砖缝边界
-      // （和预览渲染同款：步长 cx 比图宽就拉伸补缝 —— background-size 实现）。
-      // f=1：整层平面镜像（scaleX(-1)），background-position 反算补偿相位
-      const bx2 = b.f ? VPW - ax - L.cw
-                      : (L.tileX ? ax - Math.floor(ax / L.cw) * L.cw : ax);
-      const by2 = L.tileY ? ay - Math.floor(ay / L.ch) * L.ch : ay;
-      L.el.style.backgroundPosition =
-        `${bx2.toFixed(2)}px ${by2.toFixed(2)}px`;
+      // 平铺层：瓦片里贴图居中（锚点 = 图中心）→ 瓦片网格偏移 = 相位 - 步长/2。
+      // f=1：客户端只翻 sprite 内容、锚点格子不动；CSS 用整个 div 的 scaleX(-1)
+      // 会连相位一起镜像，所以水平相位按 VPW-ax 反算补偿
+      const mod = (v, m) => ((v % m) + m) % m;
+      const px = b.f ? mod(VPW - ax - L.cw / 2, L.cw)
+                     : (L.tileX ? mod(ax - L.cw / 2, L.cw) : ax - L.w / 2);
+      const py = L.tileY ? mod(ay - L.ch / 2, L.ch) : ay - L.h / 2;
+      L.el.style.backgroundPosition = `${px.toFixed(2)}px ${py.toFixed(2)}px`;
     } else {
       // 单张层（type 0）：锚点 = 图中心
       L.el.style.transform =
@@ -947,12 +947,21 @@ function buildBacks(d) {
     const im = new Image();
     im.onload = () => {
       L.w = im.naturalWidth; L.h = im.naturalHeight;
-      // 步长 cx/cy 比贴图大 = 拉伸补缝（预览渲染同款），小 = 重叠（数据里没有）
+      // 平铺步长 cx/cy（0 = 贴图尺寸）—— 客户端 MapBackgrounds.cpp:147-152 按贴图
+      // 原始尺寸摆、每 cx 一步：cx>图宽留空隙、cx<图宽重叠。CSS background-repeat
+      // 只会按 background-size 紧密重复，所以生成一张 cw×ch 的瓦片（贴图居中画进去），
+      // 空隙/重叠语义就和客户端一致了
       L.cw = tileX ? (b.cx > 0 ? b.cx : L.w) : L.w;
       L.ch = tileY ? (b.cy > 0 ? b.cy : L.h) : L.h;
       if (L.el.tagName === "DIV") {
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, L.cw); c.height = Math.max(1, L.ch);
+        c.getContext("2d").drawImage(im, Math.round((L.cw - L.w) / 2),
+                                     Math.round((L.ch - L.h) / 2));
+        L.el.style.backgroundImage = `url(${c.toDataURL()})`;
         L.el.style.backgroundSize = `${L.cw}px ${L.ch}px`;
         L.el.style.opacity = (b.a == null ? 255 : b.a) / 255;
+        if (b.f) L.el.style.transform = "scaleX(-1)";   // 相位已在 updateBacks 里补偿
       }
       L.ready = true;
       updateBacks();

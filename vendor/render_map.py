@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 
@@ -97,6 +98,81 @@ def draw_back(canvas, b, tex, origin, bounds, parallax=1.0):
     x0 = bx - ((bx - minx) // sx) * sx if sx < 10 ** 8 else bx
     y0 = by - ((by - miny) // sy) * sy if sy < 10 ** 8 else by
     _paste_tiled(canvas, tex, x0 - minx, y0 - miny, sx, sy, bw + sx, bh + sy, a, bounds)
+
+
+# ---------------------------------------------------------------- 摄像机视窗背景（客户端视差公式）
+
+# type 4/6 横向自动滚动、5/7 纵向自动滚动：rx/ry 是滚动速度（rx/16 px/帧@60fps），
+# 层钉在屏幕上只随时间漂移；0-3 才是视差系数（rx/100 × 相机焦点）。
+BACK_MOBILE_H = {4, 6}
+BACK_MOBILE_V = {5, 7}
+
+
+def _paste_clip(canvas, im, left, top):
+    """带裁剪的贴图：负坐标/越界部分裁掉（PIL alpha_composite 不接受负目标点）。"""
+    x0, y0 = int(round(left)), int(round(top))
+    x1, y1 = x0 + im.width, y0 + im.height
+    cx0, cy0 = max(0, x0), max(0, y0)
+    cx1, cy1 = min(canvas.width, x1), min(canvas.height, y1)
+    if cx1 <= cx0 or cy1 <= cy0:
+        return
+    canvas.alpha_composite(im.crop((cx0 - x0, cy0 - y0, cx1 - x0, cy1 - y0)), (cx0, cy0))
+
+
+def draw_backs_view(canvas, backs, store, fx, fy, vw, vh, front=None, t=0.0):
+    """把 back 层画进一个 vw×vh 的「摄像机视窗」画布 —— 与客户端
+    Gameplay/MapleMap/MapBackgrounds.cpp 的 draw() 同一套公式。
+
+    fx/fy = 视窗中心的世界坐标（相机焦点）。背景是屏幕空间层：
+      静止型(0-3)：screen = (b.x + rx*fx/100 + vw/2, b.y + ry*fy/100 + vh/2)
+        rx/ry 是视差系数：0 = 钉死在屏幕上（天幕），100 = 跟世界一起动；
+      滚动型(4-7)：rx/ry 变成滚动速度（rx/16 px/帧@60fps），层钉在屏幕上随时间漂移；
+      锚点 = 贴图中心；平铺步长 cx/cy（0 = 贴图尺寸），相位照客户端折进 [-步长, 0)；
+      f 水平翻转；a 透明度(0-255)。
+    front=None 画全部；0 只画背景层（世界内容之下）；1 只画前景层（世界内容之上）。
+    """
+    for b in backs:
+        if front is not None and int(b.get("front", 0)) != front:
+            continue
+        tex = store.get(b.get("img", ""))
+        if tex is None:
+            continue
+        ty = int(b.get("type", 0))
+        a = int(b.get("a", 255))
+        im = tex.transpose(Image.FLIP_LEFT_RIGHT) if int(b.get("f", 0)) == 1 else tex
+        if a < 255:
+            im = im.copy()
+            im.putalpha(im.getchannel("A").point(lambda v: v * a // 255))
+        w, h = im.size
+        cx = int(b.get("cx", 0)) or w
+        cy = int(b.get("cy", 0)) or h
+        rx = float(b.get("rx", 0))
+        ry = float(b.get("ry", 0))
+        if ty in BACK_MOBILE_H:
+            x = float(b.get("x", 0)) + rx / 16 * 60 * t + vw / 2
+        else:
+            x = float(b.get("x", 0)) + rx * fx / 100 + vw / 2
+        if ty in BACK_MOBILE_V:
+            y = float(b.get("y", 0)) + ry / 16 * 60 * t + vh / 2
+        else:
+            y = float(b.get("y", 0)) + ry * fy / 100 + vh / 2
+        tile_x = ty in BACK_TILE_X and cx > 0
+        tile_y = ty in BACK_TILE_Y and cy > 0
+
+        def anchors(v, step, size, span):
+            """客户端同款：锚点折进 [-step, 0)，再向右铺到盖满 [0, span)。
+            step<=0 → 不平铺，单份原样返回。"""
+            if step <= 0:
+                return [v]
+            v0 = v % step - step
+            n = max(1, math.ceil((span + size / 2 - v0) / step))
+            return [v0 + i * step for i in range(n)]
+
+        axs = anchors(x, cx if tile_x else 0, w, vw)
+        ays = anchors(y, cy if tile_y else 0, h, vh)
+        for ax in axs:
+            for ay in ays:
+                _paste_clip(canvas, im, ax - w / 2, ay - h / 2)
 
 
 # ---------------------------------------------------------------- 主流程

@@ -3509,6 +3509,10 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     # 两种版本共用一个名字会互相命中缓存
     png = outdir / ("preview_nobg.png" if no_bg else "preview.png")
     size = _render_preview(outdir, png, no_bg=no_bg)
+    if preview and no_bg:
+        # 前端底图恒用无背景版（背景由视差层现画）；「点开放大查看」整图
+        # 仍是烤好背景的版本 → 两个版本都渲染（都有缓存，只有首次慢）
+        _render_preview(outdir, outdir / "preview.png", no_bg=False)
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
     kinds = sorted({str(l.get("id", "")).lstrip("0") for l in life})
     mobnx = _nx_dir() / "Mob.nx"
@@ -3548,13 +3552,29 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
               # 绳梯段 [x,y1,y2,l]：l=1 梯子 / 0 绳子（都是垂直的，x 单值）
               "ladder_rope": [[lr["x"], lr["y1"], lr["y2"], lr.get("l", 0)]
                               for lr in mj.get("ladderRope", [])]}
+    # 背景层元数据：前端按客户端视差公式把 back 画成屏幕空间层（跟镜头走）。
+    # 图片文件在导出目录 img/ 下，直接用 /preview/ 或 /exports/ 静态路由取
+    try:
+        img_prefix = (f"/preview/{outdir.relative_to(CACHE).as_posix()}" if preview
+                      else f"/exports/{outdir.relative_to(EXPORTS).as_posix()}")
+        result["back"] = [{**b, "url": f"{img_prefix}/img/{b['img']}"}
+                          for b in mj.get("back", []) if b.get("img")]
+    except ValueError:
+        result["back"] = []
     # 导出图带怪物：把怪沿地面随机散布合成进预览图（preview_mobs.png）
     use_seed = str(seed) if seed else f"{mid}:{random.randrange(1 << 30):x}"
     places: list[dict] = []
     if mobs and life:
-        mob_png, places = _composite_mobs(ws, outdir, mj, png, use_seed,
+        mob_base, mob_nobg = png, no_bg
+        if not preview and not no_bg:
+            # 窗口导出的背景由视差公式现画（下面）：怪物必须合成在没烤背景的
+            # nobg 底图上，否则烤死的背景会跟现画的视差层叠成两层
+            mob_base = outdir / "preview_nobg.png"
+            _render_preview(outdir, mob_base, no_bg=True)
+            mob_nobg = True
+        mob_png, places = _composite_mobs(ws, outdir, mj, mob_base, use_seed,
                                           density=max(1, min(10, int(density or 1))),
-                                          no_bg=no_bg)
+                                          no_bg=mob_nobg)
         if mob_png is not None:
             rel = (mob_png.relative_to(CACHE) if preview else mob_png.relative_to(EXPORTS))
             result["preview_path"] = str(mob_png)
@@ -3564,17 +3584,31 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     # 导出 = 客户端那个固定 1366×768 的画面窗口（预览模式输出整张 1:1 地图，供页面叠窗口用）
     if not preview:
         from PIL import Image
-        src = Image.open(Path(result["preview_path"])).convert("RGBA")
         vx, vy = _view_origin(view, minx, miny, bw, bh)
         left, top = round(vx - minx), round(vy - miny)
         canvas = Image.new("RGBA", (VIEW_W, VIEW_H),
                            (0, 0, 0, 0) if no_bg else (16, 18, 24, 255))
+        base_png = outdir / "preview_nobg.png"
+        if not no_bg:
+            # 背景照客户端 MapBackgrounds::draw 现画：焦点 = 视窗中心的世界坐标。
+            # 背景是屏幕空间层跟镜头走，不能再从烤死背景的全图上裁
+            _render_preview(outdir, base_png, no_bg=True)
+            R.draw_backs_view(canvas, mj.get("back", []), R.TexStore([str(outdir / "img")]),
+                              vx + VIEW_W / 2, vy + VIEW_H / 2, VIEW_W, VIEW_H, front=0)
+        # 窗口底图：带怪用合成结果（已在 nobg 底图上），否则就是 nobg 底图
+        src_path = Path(result["preview_path"]) if result.get("mobs") else base_png
+        src = Image.open(src_path).convert("RGBA")
         # 窗口可以超出地图边界（小图/边缘），只贴交集，其余留空
         sx0, sy0 = max(0, left), max(0, top)
         sx1 = min(src.width, left + VIEW_W)
         sy1 = min(src.height, top + VIEW_H)
         if sx1 > sx0 and sy1 > sy0:
-            canvas.paste(src.crop((sx0, sy0, sx1, sy1)), (sx0 - left, sy0 - top))
+            # 必须 alpha_composite：底图是无背景版，透明区域不能把下面
+            # 现画的视差背景层擦掉（paste 会连 alpha 一起覆盖成透明黑）
+            canvas.alpha_composite(src.crop((sx0, sy0, sx1, sy1)), (sx0 - left, sy0 - top))
+        if not no_bg:
+            R.draw_backs_view(canvas, mj.get("back", []), R.TexStore([str(outdir / "img")]),
+                              vx + VIEW_W / 2, vy + VIEW_H / 2, VIEW_W, VIEW_H, front=1)
         out_png = outdir / ("window_nobg.png" if no_bg else "window.png")
         canvas.convert("RGBA" if no_bg else "RGB").save(out_png)
         rel = (out_png.relative_to(CACHE) if preview else out_png.relative_to(EXPORTS))
