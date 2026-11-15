@@ -229,13 +229,13 @@ def render_map(map_json: dict, img_dirs: list[str], opts: RenderOpts | None = No
             j0 = j1 = 0
         for j in range(j0, j1 + 1):
             for i in range(i0, i1 + 1):
+                # 客户端 MapBackgrounds::draw 同款：按贴图原始尺寸一份份摆，
+                # 步长 cx 比图宽就留空隙（露出下面的层），比图窄就重叠（后画盖前画）。
+                # 以前这里把图拉伸到步长补缝 —— 500 宽的云被拉成 2000 宽，
+                # 预览图上的米黄色横带 / 天空断裂就是它。
                 x0 = int(round(bx + i * sx))
                 y0 = int(round(by + j * sy))
-                # 平铺方向上一直画到下一份的起始边界：步长比图大就拉满补缝，
-                # 步长比图小就按原尺寸重叠（重叠处后贴的盖住前面的，和客户端一致）。
-                x1 = max(x0 + wd, int(round(bx + (i + 1) * sx)) if tiled_x else x0 + wd)
-                y1 = max(y0 + ht, int(round(by + (j + 1) * sy)) if tiled_y else y0 + ht)
-                _blit(canvas, tex, x0, y0, x1, y1)
+                _blit(canvas, tex, x0, y0, x0 + wd, y0 + ht)
 
     # --- 8 层 ---
     # 顺序照客户端 TilesObjs::draw（mxd_client_source Gameplay/MapleMap）：
