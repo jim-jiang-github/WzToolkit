@@ -10,19 +10,37 @@
     --mut: #8b949e; --acc: #4ee0c8; --acc2: #ffd166; --err: #ff7b72;
   }
   * { box-sizing: border-box; }
-  /* 整页撑满浏览器：wrap 锁 100vh，第②张卡片吃掉剩余高度（窗口太小时 wrap 自己滚动） */
-  html { height: 100%; }
-  body { margin: 0; background: var(--bg); color: var(--fg);
-         font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; min-height: 100%; }
-  .wrap { max-width: none; width: 100%; height: 100vh; overflow: auto;
-          padding: 12px 16px 12px; display: flex; flex-direction: column; }
-  h1 { font-size: 20px; margin: 0 0 2px; }
+  /* 整页锁一屏：wrap 自己永远不滚动（滚动条只出现在内部列表/预览里），
+     第②张卡片吃掉剩余高度。标题和说明并成一行，省掉一行的上下空间。 */
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--fg); overflow: hidden;
+         font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: none; width: 100%; height: 100%; overflow: hidden;
+          padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+  h1 { font-size: 18px; margin: 0; flex: none; }
   h1 b { color: var(--acc); }
-  .sub { color: var(--mut); font-size: 12.5px; margin-bottom: 12px; }
+  .sub { color: var(--mut); font-size: 12px; margin: 0; flex: 1; min-width: 0;
+         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .card { background: var(--panel); border: 1px solid var(--line);
-          border-radius: 10px; padding: 16px; margin-bottom: 14px; }
-  .card.grow { flex: 1; min-height: 420px; display: flex; flex-direction: column; }
-  .card h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+          border-radius: 10px; padding: 10px 12px; margin: 0; }
+  .card.grow { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .card h2 { font-size: 15px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+
+  /* ② 卡片：模式切换改成左侧竖排导轨（不再占一整行标题），
+     右侧同一格里叠放各面板（隐藏的 display:none，可见的撑满格） */
+  #maincard { display: grid; grid-template-columns: 118px minmax(0, 1fr);
+              grid-template-rows: auto minmax(0, 1fr); column-gap: 10px;
+              min-height: 0; }
+  #maincard > .rail { grid-column: 1; grid-row: 1 / -1; display: flex;
+                      flex-direction: column; gap: 6px; min-height: 0; }
+  #maincard > #lock-hint { grid-column: 2; grid-row: 1; }
+  #maincard > .cols, #maincard > .pane { grid-column: 2; grid-row: 2; }
+  #mainseg { display: flex; flex-direction: column; gap: 2px; width: 100%;
+             padding: 4px; flex: none; }
+  #mainseg button { width: 100%; justify-content: flex-start; text-align: left;
+                    padding: 5px 8px; font-size: 12.5px; font-weight: 500; }
+  .rail-hint { font-size: 11.5px; line-height: 1.45; color: var(--mut);
+               padding: 2px 2px 0; }
   .step { display: inline-flex; width: 22px; height: 22px; border-radius: 50%;
           background: var(--acc); color: #04211c; font-weight: 700; font-size: 13px;
           align-items: center; justify-content: center; flex: none; }
@@ -71,13 +89,25 @@
   .wsbar > * { position: relative; z-index: 1; }
   #ws-prog-text { font-size: 12px; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; max-width: 60%; }
-  /* 工作区整条栏可点：手型光标 + hover 提示 */
+  /* 数据源整条栏可点：手型光标 + hover 提示 */
   .wsbar { cursor: pointer; border-radius: 7px; padding: 4px 6px; margin: -4px -6px 0; }
   .wsbar:hover { background: rgba(255, 255, 255, .06); }
+  /* 栏内：标题 / 说明 / 状态胶囊 / 可点小提示（提示自己不触发「展开面板」） */
+  .wsbar h1.brand { font-size: 17px; }
+  .wsbar .ws-tag { flex: none; font-size: 11.5px; color: var(--mut);
+                   border: 1px solid var(--line); border-radius: 999px;
+                   padding: 0 8px; line-height: 18px; }
+  .wsbar .lnk { flex: none; background: none; border: 0; padding: 1px 3px;
+                font-size: 12px; color: var(--acc); cursor: pointer;
+                text-decoration: underline dotted; text-underline-offset: 3px; }
+  .wsbar .lnk:hover { background: #0e3b35; border-radius: 5px; color: var(--acc); }
+  .wsbar .lnk[hidden] { display: none; }
+  .wsbar .lnk:disabled { opacity: .45; cursor: not-allowed; }
   /* 数据未就绪 / 正在导入：下面的浏览区整体置灰、不可点击 */
   .card.locked .seg, .card.locked .cols, .card.locked .pane {
     opacity: .38; pointer-events: none; filter: grayscale(.7); }
-  #lock-hint { margin: 2px 0 10px; font-size: 12.5px; color: #e0b44a; }  .prog-head { display: flex; justify-content: space-between; align-items: baseline;
+  #lock-hint { margin: 0 0 6px; font-size: 12.5px; color: #e0b44a; }
+  .prog-head { display: flex; justify-content: space-between; align-items: baseline;
                gap: 10px; font-size: 12.5px; }
   .prog-head b { font-weight: 600; color: #cfe0ff; }
   .prog-bar { position: relative; height: 8px; margin-top: 6px; border-radius: 5px;
@@ -89,12 +119,12 @@
   @keyframes progs { from { left: -35%; width: 35%; } to { left: 100%; width: 35%; } }
   .prog-sub { font-size: 11.5px; margin-top: 5px; }
   .rc-btn { font-size: 12px; padding: 2px 9px; }
-  .cols { display: grid; grid-template-columns: 300px 1fr; gap: 14px;
+  .cols { display: grid; grid-template-columns: 300px 1fr; gap: 10px;
           flex: 1; min-height: 0; }
   .col-left { display: flex; flex-direction: column; min-height: 0; }
   .list { border: 1px solid var(--line); border-radius: 8px; flex: 1; min-height: 0;
           overflow: auto; background: #0b0f14; }
-  .list .it { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid #1c2128;
+  .list .it { padding: 5px 10px; cursor: pointer; border-bottom: 1px solid #1c2128;
               display: flex; gap: 8px; align-items: baseline; }
   .list .it:hover { background: #161b22; }
   .list .it.on { background: #0e3b35; }
@@ -104,10 +134,10 @@
   .tier.big { color: #ff6b6b; background: #ff6b6b1a; }
   .tier.boss { color: #ffb454; background: #ffb4541a; }
   .list .it { cursor: pointer; }
-  .filters { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
+  .filters { display: flex; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
   .filters button { font-size: 12px; padding: 1px 9px; }
   .filters button.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
-  .detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+  .detail { border: 1px solid var(--line); border-radius: 8px; padding: 10px;
             min-height: 0; overflow: auto; background: #0b0f14; }
   .zoombar { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
   .zoombar button { padding: 2px 10px; }
@@ -197,7 +227,8 @@
   #battle[hidden] { display: none; }
 
   /* 🎲 随机战斗舞台 */
-  .btstage { position: relative; height: 430px; border: 1px solid var(--line);
+  .btstage { position: relative; flex: 1; min-height: 200px; max-height: 480px;
+    border: 1px solid var(--line);
     border-radius: 10px; overflow: hidden; margin-top: 8px;
     background: linear-gradient(#28304a 0%, #1c2233 90%, #171c29 90%, #10141d 100%); }
   .btground { position: absolute; left: 0; right: 0; top: 90%; height: 2px;
@@ -221,12 +252,12 @@
   .dmgscale { position: relative; display: inline-block;
               transform: scale(2); transform-origin: 0 0;
               image-rendering: pixelated; }
-  .md-bar { padding: 8px 14px; display: flex; gap: 10px; align-items: center;
+  .md-bar { padding: 6px 10px; display: flex; gap: 10px; align-items: center;
                     flex-wrap: wrap; background: var(--panel);
                     border-bottom: 1px solid var(--line); }
   .md-bar input[type=text] { min-width: 240px; padding: 5px 10px; }
   .md-body { flex: 1; min-height: 0; display: grid;
-                     grid-template-columns: 290px 1fr; gap: 12px; padding: 12px 14px; }
+                     grid-template-columns: 290px 1fr; gap: 10px; padding: 8px 10px; }
   .md-list { border: 1px solid var(--line); border-radius: 8px; overflow: auto;
                      background: #0b0f14; }
   .md-list .it { padding: 5px 10px; cursor: pointer;
@@ -272,12 +303,12 @@
                     background: #3b82f6; box-shadow: 0 0 0 1px #0008; }
   /* 人物素材（角色）：左边部位+素材列表，右边按选装实时合成动画 */
   #chardex[hidden] { display: none; }
-  #chardex .cd-bar { padding: 8px 14px; display: flex; gap: 10px; align-items: center;
+  #chardex .cd-bar { padding: 6px 10px; display: flex; gap: 10px; align-items: center;
                      flex-wrap: wrap; background: var(--panel);
                      border-bottom: 1px solid var(--line); }
   #chardex .cd-bar input[type=text] { min-width: 200px; padding: 5px 10px; }
   #chardex .cd-body { flex: 1; min-height: 0; display: grid;
-                      grid-template-columns: 340px 1fr; gap: 12px; padding: 12px 14px; }
+                      grid-template-columns: 340px 1fr; gap: 10px; padding: 8px 10px; }
   #chardex .cd-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
   #chardex .cd-slots { display: flex; flex-wrap: wrap; gap: 4px; }
   #chardex .cd-slots button { font-size: 12px; padding: 3px 9px; }
@@ -318,8 +349,19 @@
               overflow: hidden; background: #0b0f14;
               cursor: grab; touch-action: none; }
   .gameview.dragging { cursor: grabbing; }
+  /* 背景视差层：back(front=0) 垫在地图画布下、front=1 盖在世界内容上 ——
+     都是屏幕空间层（跟镜头走，不随 #mapsel 平移），updateBacks() 按客户端
+     MapBackgrounds::draw 公式摆位。地图片本身 z-index 1 夹在中间 */
+  .bk-layer { position: absolute; left: 0; top: 0; width: 1366px; height: 768px;
+              overflow: hidden; pointer-events: none; }
+  #bk-back { z-index: 0; }
+  #bk-front { z-index: 2; }
+  .bk-layer img { position: absolute; left: 0; top: 0; will-change: transform;
+                  image-rendering: pixelated; }
+  .bk-layer > div { position: absolute; inset: 0;
+                    will-change: background-position; }
   .mapwrap { position: absolute; left: 0; top: 0; display: inline-block;
-             will-change: transform; }
+             will-change: transform; z-index: 1; }
   .expthumb { display: block; max-width: 340px; max-height: 200px; margin-top: 4px;
               border: 1px solid var(--line); border-radius: 4px; image-rendering: pixelated; }
   /* 窗口边框（不拦截鼠标，拖拽交给 .gameview）。渲染图里地图外的深色填充
@@ -439,16 +481,18 @@
 </head>
 <body>
 <div class="wrap">
-  <h1><b>Wz</b>Toolkit <span style="font-size:14px;color:var(--acc)">CLI</span></h1>
-  <div class="sub">wztool web —— 由 wztool 命令行工具驱动（导出功能可全部用 CLI 子命令调用，本页面只是可视化）</div>
   <div class="banner" id="err"></div>
 
-  <!-- ① 工作区（收进弹窗，点整条工作区栏展开/收起） -->
-  <div class="card" style="position:relative; padding-bottom:10px">
-    <div class="flexline wsbar" id="ws-bar" title="点击展开 / 收起工作区面板">
+  <!-- 数据源：标题 + 说明 + 可点的小提示全挤在这一行（不再单占一个页头，也不分第几步） -->
+  <div class="card" style="position:relative; padding:8px 12px">
+    <div class="flexline wsbar" id="ws-bar" title="点击展开 / 收起数据源面板">
       <i id="ws-prog" aria-hidden="true"></i>
-      <h2 style="margin:0"><span class="step">1</span> 工作区 <span class="muted" id="ws-mini" style="font-weight:400"></span></h2>
-      <span style="flex:1"></span>
+      <h1 class="brand"><b>Wz</b>Toolkit <span style="font-size:13px;color:var(--acc)">CLI</span></h1>
+      <div class="sub">wztool web —— 由 wztool 命令行工具驱动（导出功能可全部用 CLI 子命令调用，本页面只是可视化）</div>
+      <span class="ws-tag" id="ws-mini"></span>
+      <button class="lnk" id="ws-pick" title="更换游戏安装目录（…\冒险岛online\mxdclassic）">📁 更换目录</button>
+      <button class="lnk" id="ws-cv" hidden
+              title="把缺失的 nx 一次性排队转换；怀旧服小地图库 / 伤害数字库没建好也会接着自动建">⬇ 转换缺失数据</button>
       <span class="muted" id="ws-prog-text"></span>
     </div>
     <div class="optpop wspop" id="ws-pop" hidden>
@@ -475,10 +519,9 @@
     </div>
   </div>
 
-  <!-- ② 浏览 / 导出：地图 / 怪物素材 / 人物素材 三个大类在同一张卡片里切换 -->
+  <!-- 浏览 / 导出：地图 / 怪物素材 / 人物素材 三个大类在同一张卡片里切换 -->
   <div class="card grow locked" id="maincard">
-    <h2>
-      <span class="step">2</span>
+    <div class="rail">
       <div class="seg" id="mainseg">
         <button class="on" data-m="map" title="地图：按 id/名字浏览，预览 1366×768 客户端画面，导出 map.json + 贴图 + 渲染图">🗺 地图</button>
         <button data-m="mob" title="怪物素材：按 id/名字浏览全部怪物，看每个动作的逐帧动画，导出逐帧 PNG（带锚点 manifest）">👾 怪物素材</button>
@@ -487,10 +530,9 @@
         <button data-m="dmg" title="伤害数字：Effect/BasicEff 里的全部伤害数字样式（红/蓝/暴击…），输入数字实时预览，导出逐帧 PNG">🔢 伤害数字</button>
         <button data-m="battle" title="随机战斗：人物 / 技能 / 怪物 / 伤害数字随机组合——换一批重新抽，自动播放攻击和伤害">🎲 随机战斗</button>
       </div>
-      <span style="flex:1"></span>
-      <span class="muted" id="mode-hint"></span>
-    </h2>
-    <div id="lock-hint">⚠ 数据还没准备好：先在上方选好工作区，点「⬇ 转换缺失数据」——导入完成前这块不能操作，完成后自动解锁。</div>
+      <div class="rail-hint" id="mode-hint"></div>
+    </div>
+    <div id="lock-hint">⚠ 数据还没准备好：先在上面选好游戏目录，点「⬇ 转换缺失数据」——导入完成前这块不能操作，完成后自动解锁。</div>
     <div class="cols" id="pane-map">
       <div class="col-left">
         <div style="position:relative;display:flex;gap:6px;margin-bottom:8px">
@@ -629,7 +671,7 @@
     </div>
   </div>
 
-  <div class="muted">工具链：NoLifeWzToNx（wz→nx 转换）· nxmap / nxscan（地图导出）· render_map（地图渲染）。</div>
+  <div class="muted" style="display:none">工具链：NoLifeWzToNx（wz→nx 转换）· nxmap / nxscan（地图导出）· render_map（地图渲染）。</div>
 </div>
 
 <div id="mapzoom" hidden>
@@ -714,6 +756,7 @@ function applyView() {
   const sel = $("#mapsel");
   if (!sel || !VIEWPOS) return;
   sel.style.transform = `translate3d(${-VIEWPOS.x}px, ${-VIEWPOS.y}px, 0)`;
+  updateBacks();   // 背景是屏幕空间层：镜头动了就按新焦点重算位置
 }
 function vpClamp() {
   const sel = $("#mapsel");
@@ -766,6 +809,140 @@ window.addEventListener("mouseup", () => {
   const gv = $("#gameview");
   if (gv) gv.classList.remove("dragging");
 });
+
+/* ---- 背景视差层：客户端 Gameplay/MapleMap/MapBackgrounds.cpp draw() 同款 ----
+   背景是屏幕空间层，跟镜头（= 1366×768 视窗）走：
+     静止型(0-3)  screen = x + rx×焦点/100 + 半屏   rx=0 钉死屏幕，100 跟世界 1:1
+     滚动型(4-7)  rx/ry 是速度（rx/16 px/帧@60fps），层钉在屏幕上随时间漂移
+   平铺步长 cx/cy，相位折进 [-步长,0)；f 水平翻转；a 透明度。底图恒用无背景版。 */
+const BK_TILE_X = new Set([1, 2, 3, 4, 5, 6]);
+const BK_TILE_Y = new Set([2, 3, 5, 6]);
+const BK_MOB_H = new Set([4, 6]);
+const BK_MOB_V = new Set([5, 7]);
+let BK = null;          // 当前地图的背景层 [{el,b,w,h,tileX,tileY,nx,ny,pool}]
+let BK_RAF = 0;
+let BK_T0 = 0;          // 滚动型的时间起点（换图重置）
+
+function updateBacks() {
+  if (!BK || !mapData || !VIEWPOS) return;
+  const ov = mapData.overlay;
+  const fx = ov.minx + VIEWPOS.x + VPW / 2;   // 相机焦点 = 视窗中心的世界坐标
+  const fy = ov.miny + VIEWPOS.y + VPH / 2;
+  const t = (performance.now() - BK_T0) / 1000;
+  for (const L of BK) {
+    if (!L.ready) continue;                    // 贴图没加载完，onload 里再摆
+    const b = L.b, ty = b.type | 0;
+    // 滚动型(4-7)：rx/ry 是速度（rx/16 px/帧@60fps），层钉在屏幕上随时间漂移；
+    // 静止型：screen = x + r×焦点/100 + 半屏（rx=0 钉死屏幕，100 跟世界 1:1）
+    const ax = BK_MOB_H.has(ty) ? b.x + (b.rx / 16) * 60 * t + VPW / 2
+                                : b.x + (b.rx / 100) * fx + VPW / 2;
+    const ay = BK_MOB_V.has(ty) ? b.y + (b.ry / 16) * 60 * t + VPH / 2
+                                : b.y + (b.ry / 100) * fy + VPH / 2;
+    if (L.el.tagName === "DIV") {
+      // 平铺层：一个 div 用 background-repeat 原生铺满，锚点 = 砖缝边界
+      // （和预览渲染同款：步长 cx 比图宽就拉伸补缝 —— background-size 实现）。
+      // f=1：整层平面镜像（scaleX(-1)），background-position 反算补偿相位
+      const bx2 = b.f ? VPW - ax - L.cw
+                      : (L.tileX ? ax - Math.floor(ax / L.cw) * L.cw : ax);
+      const by2 = L.tileY ? ay - Math.floor(ay / L.ch) * L.ch : ay;
+      L.el.style.backgroundPosition =
+        `${bx2.toFixed(2)}px ${by2.toFixed(2)}px`;
+    } else {
+      // 单张层（type 0）：锚点 = 图中心
+      L.el.style.transform =
+        `translate3d(${ax - L.w / 2}px, ${ay - L.h / 2}px, 0)` + (b.f ? " scaleX(-1)" : "");
+    }
+  }
+}
+
+function bkLoop() {
+  if (!BK || OPTS.nobg) { BK_RAF = 0; return; }
+  updateBacks();
+  BK_RAF = requestAnimationFrame(bkLoop);
+}
+
+/* 生成视差层：底衬渐变（客户端天幕只铺一部分屏幕，其余露引擎底色 —— 和
+   预览渲染同款的「首层贴图横向平均竖条拉伸」兜底）+ 每层一个元素
+   （平铺层 = div + background-repeat 原生铺满，单张层 = img） */
+function buildBacks(d) {
+  const backBox = $("#bk-back"), frontBox = $("#bk-front");
+  if (BK_RAF) { cancelAnimationFrame(BK_RAF); BK_RAF = 0; }
+  BK = null;
+  if (!backBox || !frontBox) return;
+  backBox.innerHTML = ""; frontBox.innerHTML = "";
+  backBox.style.background = "";
+  const backs = d.back || [];
+  const first = backs.find((b) => b.img);
+  if (first) {
+    const im = new Image();
+    im.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = 1; c.height = 64;
+      c.getContext("2d").drawImage(im, 0, 0, 1, 64);   // 横向平均成一竖条
+      backBox.style.background = `url(${c.toDataURL()}) 0 0 / 100% 100% no-repeat`;
+    };
+    im.src = first.url;
+  }
+  const list = [];
+  for (const b of backs) {
+    if (!b.img) continue;
+    const box = b.front == 1 ? frontBox : backBox;
+    const tileX = BK_TILE_X.has(b.type | 0), tileY = BK_TILE_Y.has(b.type | 0);
+    const L = { b, w: 0, h: 0, cw: 0, ch: 0, tileX, tileY, ready: false };
+    if (tileX || tileY) {
+      const el = document.createElement("div");
+      el.style.backgroundImage = `url(${b.url})`;
+      el.style.backgroundRepeat = `${tileX ? "repeat" : "no-repeat"} ${tileY ? "repeat" : "no-repeat"}`;
+      box.appendChild(el);
+      L.el = el;
+    } else {
+      const el = document.createElement("img");
+      el.src = b.url;
+      el.alt = "";
+      el.style.opacity = (b.a == null ? 255 : b.a) / 255;
+      box.appendChild(el);
+      L.el = el;
+    }
+    const im = new Image();
+    im.onload = () => {
+      L.w = im.naturalWidth; L.h = im.naturalHeight;
+      // 步长 cx/cy 比贴图大 = 拉伸补缝（预览渲染同款），小 = 重叠（数据里没有）
+      L.cw = tileX ? (b.cx > 0 ? b.cx : L.w) : L.w;
+      L.ch = tileY ? (b.cy > 0 ? b.cy : L.h) : L.h;
+      if (L.el.tagName === "DIV") {
+        L.el.style.backgroundSize = `${L.cw}px ${L.ch}px`;
+        L.el.style.opacity = (b.a == null ? 255 : b.a) / 255;
+      }
+      L.ready = true;
+      updateBacks();
+    };
+    im.src = b.url;
+    list.push(L);
+  }
+  BK = list;
+  BK_T0 = performance.now();
+  syncBkVisible();
+  updateBacks();
+}
+
+/* 「不显示背景」= 纯显隐开关（底图本来就是无背景版，不需要换图）；
+   放大查看的整图链接也跟着换：显示背景 → 烤好背景版，不显示 → 透明版 */
+function syncBkVisible() {
+  const on = !OPTS.nobg;
+  for (const id of ["bk-back", "bk-front"]) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = on ? "" : "none";
+  }
+  const mo = $("#mz-open");
+  if (mo && mapData) mo.href = bkZoomUrl();
+  if (on && BK && !BK_RAF &&
+      BK.some((L) => BK_MOB_H.has(L.b.type | 0) || BK_MOB_V.has(L.b.type | 0))) bkLoop();
+}
+
+function bkZoomUrl() {
+  const u = (mapData && mapData.preview_url) || "";
+  return OPTS.nobg ? u : u.replace("preview_nobg.png", "preview.png");
+}
 /* 点弹窗外面 = 关闭（「显示设置」「选择工作区」「怪物图鉴」「图片找图」通用；按钮自己的 onclick 已 stopPropagation） */
 document.addEventListener("click", (e) => {
   for (const id of ["opt-pop", "ws-pop", "dex-pop", "img-pop"]) {
@@ -955,13 +1132,19 @@ async function pickDir() {
     if (d.path) { $("#ws-path").value = d.path; scan(); }
   } catch (e) { fail(e); }
 }
-/* 工作区：点整条栏展开/收起面板（stopPropagation 防止被全局"点外面关闭"立刻关掉；
-   面板内点击也不冒泡）；选目录点面板里的路径框 */
+/* 数据源栏：点整条栏展开/收起面板（stopPropagation 防止被全局"点外面关闭"立刻关掉；
+   面板内点击也不冒泡）。栏里两个小提示自己处理点击，不再触发展开。 */
 $("#ws-bar").onclick = (e) => {
   e.stopPropagation();
   $("#ws-pop").hidden = !$("#ws-pop").hidden;
 };
 $("#ws-pop").onclick = (e) => e.stopPropagation();
+$("#ws-pick").onclick = (e) => { e.stopPropagation(); pickDir(); };
+$("#ws-cv").onclick = (e) => {
+  e.stopPropagation();
+  if (CN_MISSING.length) convert(CN_MISSING);
+  else $("#ws-pop").hidden = false;   // 只有小地图库/伤害数字库缺 → 展开面板看明细
+};
 $("#ws-path").onclick = pickDir;
 let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 
@@ -1017,6 +1200,9 @@ async function scan() {
       CN_MISSING = missing;
       CN_NEED_CLS = !!(cls && cls.dir && !cls.ready && !cls.building);
       CN_NEED_DMG = !!(dmg && dmg.dir && !dmg.ready);
+      // 栏里的小提示：缺东西时才出现（没什么可转就不用占地方）
+      const hcv = $("#ws-cv");
+      if (hcv) hcv.hidden = !(missing.length || CN_NEED_CLS || CN_NEED_DMG);
       const clsRow = cls && cls.dir ? `
         <tr><td>怀旧服小地图库（mxdclassic 的 canvas 素材，怀旧服找图用）</td>
             <td>${cls.ready ? `<span class="ok">已建好（${cls.count} 张）</span>`
@@ -1028,8 +1214,8 @@ async function scan() {
                 : '<span class="miss">未建（点「转换缺失数据」会自动建）</span>'}</td>
             <td></td></tr>` : "";
       $("#ws-state").innerHTML =
-        `工作区：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
-      $("#ws-mini").textContent = `：国服官方 · ${cn.map_nx ? "已转换" : "待转换"}`;
+        `数据源：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
+      $("#ws-mini").textContent = `国服官方 · ${cn.map_nx ? "已转换" : "待转换"}`;
       $("#wz-table").innerHTML = `
         <table><tr><th>数据源</th><th>状态</th><th style="text-align:right">${(missing.length || CN_NEED_CLS || CN_NEED_DMG)
             ? `<button class="mini" id="cn-cv-all"
@@ -1064,8 +1250,9 @@ async function scan() {
       loadLists();
       return;
     }
-    $("#ws-state").innerHTML = `工作区：<b>${WS}</b> · ${d.wz.length} 个 .wz`;
-    $("#ws-mini").textContent = `：${WS.split(/[\\/]/).pop()} · ${d.wz.length} 个 .wz`;
+    $("#ws-state").innerHTML = `数据源：<b>${WS}</b> · ${d.wz.length} 个 .wz`;
+    const hcv2 = $("#ws-cv"); if (hcv2) hcv2.hidden = true;
+    $("#ws-mini").textContent = `${WS.split(/[\\/]/).pop()} · ${d.wz.length} 个 .wz`;
     const rows = d.wz.map((f) => `
       <tr>
         <td>${f.name}</td>
@@ -1168,6 +1355,7 @@ async function tickProgress() {
   if (busy !== BUSY) { BUSY = busy; refreshLock(); }   // 导入中锁住下方浏览区
   const cvb = $("#cn-cv-all"); if (cvb) cvb.disabled = busy;
   const wpb = $("#wipe-go"); if (wpb) wpb.disabled = busy;
+  const hcv = $("#ws-cv"); if (hcv) hcv.disabled = busy;
   // 工作区栏背景进度条：导入时整条栏后面涌起半透明进度
   const wf = $("#ws-prog"), wt = $("#ws-prog-text");
   if (wf && wt) {
@@ -2773,7 +2961,9 @@ async function mapLoad(id, preview) {
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, preview, mobs: false, no_bg: OPTS.nobg }),
+      // 底图恒用无背景版：背景改由前端视差层现画（跟镜头走）；烤好背景的
+      // 整图由后端顺带渲染，只给「点开放大查看」用
+      body: JSON.stringify({ id, preview, mobs: false, no_bg: true }),
     });
     const nKinds = (d.life_kinds || []).length;
     // 链接图：自己的 img 是空的，客户端渲染 link 指向的那张 —— 后端已顺着导出目标图
@@ -2811,12 +3001,14 @@ async function mapLoad(id, preview) {
       <div class="muted" style="margin:2px 0 6px">刷怪 ${d.life_count} 个 · 地面 ${d.footholds} 段 · 绳梯 ${d.ladders} 段 · ${d.dir}</div>
       <div class="gvbox" id="gvbox">
         <div class="gameview" id="gameview">
+          <div class="bk-layer" id="bk-back"></div>
           <span class="mapwrap" id="mapsel">
             <a href="${pvUrl}" title="点开放大查看（怪物/刷怪点叠加同样显示）" id="mz-open">
               <img class="mapimg" src="${pvUrl}" loading="lazy">
             </a>
             <span class="lifedots" id="lifedots"></span>
           </span>
+          <div class="bk-layer" id="bk-front"></div>
           <div id="vpframe"><span class="vp-tag">游戏窗口 1366×768 · 拖动画布</span>
             ${d.minimap ? mmHudHTML(d) : ""}
           </div>
@@ -2828,6 +3020,7 @@ async function mapLoad(id, preview) {
     bindMmHud(d);
     bindGvDrag();            // 画布拖动 / 滚轮平移
     vpPlace();
+    buildBacks(d);           // 背景视差层（跟镜头走）
     const img = $("#mapsel img.mapimg");
     if (img && !img.complete) img.onload = () => vpPlace();   // 图加载完再按真实尺寸夹一次
     renderLifeDots();          // 显示设置默认勾选：首屏就把刷怪点/怪物叠加层画上
@@ -2881,7 +3074,7 @@ async function mapLoad(id, preview) {
     const fh = $("#fh-toggle");
     if (fh) fh.onchange = () => { OPTS.fh = fh.checked; saveOpts(); renderLifeDots(); };
     const nb2 = $("#nobg-toggle");
-    if (nb2) nb2.onchange = () => { OPTS.nobg = nb2.checked; saveOpts(); swapMapBase(); };
+    if (nb2) nb2.onchange = () => { OPTS.nobg = nb2.checked; saveOpts(); syncBkVisible(); };
     const ds = $("#density");
     if (ds) {
       ds.oninput = () => $("#density-val").textContent = ds.value;
@@ -2902,31 +3095,6 @@ async function mapLoad(id, preview) {
       el.onmouseleave = () => box.classList.remove("exp-hint");
     }
   } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
-}
-
-/* 「不显示背景」切换：后台请求另一版底图，新图加载完成后原地替换 <img> ——
-   面板不重建、画布不闪黑；怪物叠加层与刷怪点不受影响（换的是底图）。 */
-let _swapSeq = 0;
-async function swapMapBase() {
-  if (!mapRef) return;
-  const seq = ++_swapSeq;
-  try {
-    const d = await api("/api/map/export", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: mapRef.id, preview: mapRef.preview, mobs: false, no_bg: OPTS.nobg }),
-    });
-    if (seq !== _swapSeq || !mapRef) return;   // 连续切换/换图 → 旧结果作废
-    const pre = new Image();
-    pre.onload = () => {
-      if (seq !== _swapSeq) return;
-      const img = $("#mapsel img.mapimg"), open = $("#mz-open");
-      if (img) img.src = pre.src;
-      if (open) open.href = pre.src;
-    };
-    pre.src = d.preview_url;
-    mapData = d;
-    renderLifeDots();
-  } catch (e) { console.warn("换底图失败：", e); }
 }
 
 /* 把游戏窗口导出成 1366×768（就是页面上看到的这块画面） */
@@ -3000,8 +3168,7 @@ $(".md-bar").onclick = (e) => {
   mdRenderList();
 };
 window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); });
-setMode("map");   // 初始态：地图（顺便填上标题右侧的提示）
-boot();
-</script>
+setMode("map");   // 初始态：地图（顺便填上左侧导轨下方的提示）
+boot();</script>
 </body>
 </html>
