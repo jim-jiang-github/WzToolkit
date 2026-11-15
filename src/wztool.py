@@ -1718,8 +1718,9 @@ def _cls_tables() -> dict:
 # 样本 foothold/portal 100% 一致（000000000/10000/20000 差异是重制版
 # 重设计教程岛，多出 tutorial*/adviceMap portal）。
 WZJS_MAP = CACHE / "wzjs-map"
+WZJS_VER = 2                             # 图库格式版本（2 = atlas_idx 裸 int + inlink 表）
 WZJS_REG = WZJS_MAP / "registry.json.gz"     # spritesheet 注册表（带来源戳）
-WZJS_BUILT = WZJS_MAP / "built.json"         # {stamp, ids, errs}（断点续跑）
+WZJS_BUILT = WZJS_MAP / "built.json"         # {stamp, ver, ids, errs}（断点续跑）
 _wzjsjob: dict = {"running": False, "error": "", "done": 0, "total": 0, "stage": ""}
 _wzjs_lock = threading.Lock()
 
@@ -1741,7 +1742,8 @@ def _wzjs_ready() -> bool:
         return False
     try:
         b = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
-        return bool(b.get("ids")) and b.get("stamp") == _wzjs_stamp(w)
+        return (bool(b.get("ids")) and b.get("ver") == WZJS_VER
+                and b.get("stamp") == _wzjs_stamp(w))
     except (OSError, ValueError):
         return False
 
@@ -1771,7 +1773,7 @@ def _wzjs_build(log=None) -> None:
         try:
             with gzip.open(WZJS_REG, "rt", encoding="utf-8") as f:
                 raw = json.load(f)
-            if raw.get("stamp") == stamp:
+            if raw.get("stamp") == stamp and raw.get("ver") == WZJS_VER:
                 reg = raw.get("reg")
         except (OSError, ValueError):
             pass
@@ -1779,24 +1781,30 @@ def _wzjs_build(log=None) -> None:
             from vendor.clssprite import build_registry
             # build_registry 期望 aa\w 子目录（bundle 都在那层）
             reg = build_registry(w / "w",
-                                 progress=lambda s, d, t: _wzjsjob.update(stage=s))
+                                 progress=lambda s, d, t: _wzjsjob.update(stage=s),
+                                 inlink_prefixes=("Map/",))
             try:
                 WZJS_MAP.mkdir(parents=True, exist_ok=True)
                 tmp = WZJS_REG.with_suffix(".tmp")
                 with gzip.open(tmp, "wt", encoding="utf-8") as f:
-                    json.dump({"stamp": stamp, "reg": reg}, f, ensure_ascii=False)
+                    json.dump({"stamp": stamp, "ver": WZJS_VER, "reg": reg},
+                             f, ensure_ascii=False)
                 os.replace(tmp, WZJS_REG)
             except OSError:
                 pass
         if not reg:
             raise CliError("spritesheet 注册表是空的（12 个包一个描述符都没解到）"
                            "—— 客户端结构变了？", 1)
-        built: dict = {"stamp": stamp, "ids": [], "errs": {}}
+        built: dict = {"stamp": stamp, "ver": WZJS_VER, "ids": [], "errs": {}}
+        stale = False                     # 旧版图库：img/ 里的 PNG 是按错的 atlas 裁的
         try:
             old = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
-            if old.get("stamp") == stamp:
-                built = {"stamp": stamp, "ids": list(old.get("ids") or []),
+            if old.get("stamp") == stamp and old.get("ver") == WZJS_VER:
+                built = {"stamp": stamp, "ver": WZJS_VER,
+                         "ids": list(old.get("ids") or []),
                          "errs": dict(old.get("errs") or {})}
+            elif old.get("stamp") == stamp:
+                stale = True
         except (OSError, ValueError):
             pass
         from vendor.clsmap import BundleTex, ClsMapSource
@@ -1809,7 +1817,7 @@ def _wzjs_build(log=None) -> None:
                         stage="解析 WZJS 地图")
         for mid in todo:
             try:
-                src.convert(mid, WZJS_MAP / mid, tex, names)
+                src.convert(mid, WZJS_MAP / mid, tex, names, overwrite=stale)
                 built["ids"].append(mid)
             except Exception as e:              # noqa: BLE001
                 built["errs"][mid] = f"{type(e).__name__}: {str(e)[:200]}"

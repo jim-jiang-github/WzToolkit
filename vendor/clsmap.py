@@ -213,8 +213,13 @@ class ClsMapSource:
         return ox, oy
 
     def _texture(self, page: dict, canvas, tex: BundleTex,
-                 outdir: Path, key: str | None = None):
-        """canvas 节点 → 裁帧并落盘 outdir/img/<safe>.png；返回文件名（空=失败）。"""
+                 outdir: Path, key: str | None = None,
+                 overwrite: bool = False):
+        """canvas 节点 → 裁帧并落盘 outdir/img/<safe>.png；返回文件名（空=失败）。
+
+        overwrite=True 时强制重写（注册表/atlas 语义修正后的重建必需——
+        img/ 里缓存的旧 PNG 是按错的 atlas 裁的，不重写会一直错下去）。
+        """
         if canvas is None:
             return ""
         full = f"{page['root_path']}/{canvas.path}" if key is None else key
@@ -231,14 +236,14 @@ class ClsMapSource:
             return ""
         fname = safe_name(full)
         p = outdir / "img" / fname
-        if not p.exists():
+        if overwrite or not p.exists():
             p.parent.mkdir(parents=True, exist_ok=True)
             im.save(p)
         return fname
 
     # ---- 主转换 ----
     def convert(self, mid: str, outdir: Path, tex: BundleTex,
-                names: dict | None = None) -> dict:
+                names: dict | None = None, overwrite: bool = False) -> dict:
         """mid（地图 id，如 101040000）→ map.json（并写 img/ 贴图）。"""
         from vendor.wzjs import TYPE_CANVAS, TYPE_SUB
         outdir.mkdir(parents=True, exist_ok=True)
@@ -286,7 +291,7 @@ class ClsMapSource:
                         if node is not None:
                             canvas = (node if node.type == TYPE_CANVAS
                                       else self._canvas(bpg, node, via_ani=(sub == "ani")))
-                img = self._texture(bpg, canvas, tex, outdir) if canvas is not None else ""
+                img = self._texture(bpg, canvas, tex, outdir, overwrite=overwrite) if canvas is not None else ""
                 m["back"].append({
                     "bS": bs, "no": no,
                     "x": self._get(p, "x", 0), "y": self._get(p, "y", 0),
@@ -326,7 +331,7 @@ class ClsMapSource:
                                     canvas = self._canvas(tpg, canvas)
                         ox, oy = (self._origin_z(tpg, canvas)
                                    if canvas is not None else (0, 0))
-                        img = self._texture(tpg, canvas, tex, outdir) \
+                        img = self._texture(tpg, canvas, tex, outdir, overwrite=overwrite) \
                             if canvas is not None else ""
                         layer["tile"].append({
                             "u": u, "no": no,
@@ -355,7 +360,7 @@ class ClsMapSource:
                                 if node is not None else None
                         ox, oy = self._origin_z(opg, canvas) \
                             if canvas is not None else (0, 0)
-                        img = self._texture(opg, canvas, tex, outdir) \
+                        img = self._texture(opg, canvas, tex, outdir, overwrite=overwrite) \
                             if canvas is not None else ""
                         layer["obj"].append({
                             "oS": oS, "l0": l0, "l1": l1, "l2": l2, "no": 0,
@@ -412,7 +417,8 @@ class ClsMapSource:
         if mm is not None:
             canvas = next((nodes[ci] for ci in mm.children
                            if nodes[ci].type == TYPE_CANVAS), None)
-            img = self._texture(page, canvas, tex, outdir, key=None) \
+            img = self._texture(page, canvas, tex, outdir, key=None,
+                                overwrite=overwrite) \
                 if canvas is not None else ""
             if img:
                 im = (outdir / "img" / img)
