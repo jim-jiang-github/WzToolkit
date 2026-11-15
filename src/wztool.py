@@ -3692,7 +3692,10 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                "tier": meta.get(k, {}).get("tier", "normal")}
               for l in life]
     # 可视范围：客户端 MapInfo.cpp 读 info 的 VRLeft/Right/Top/Bottom，相机永远
-    # 钳在里面（Camera.cpp:58-66）；没配 VR 就用 foothold 包围盒兜底（客户端同款）
+    # 钳在里面（Camera.cpp:58-66）；没配 VR 时的兜底不是裸 foothold 包围盒——
+    # 客户端 Footholdtree.cpp:91-92 是 walls=(左+25,右-25)、
+    # borders=(顶-300,底+100)：地面贴图在最低 foothold 下面还有约 100px 厚度，
+    # 不加余量窗口底边正好钳在 foothold 线上，地面边缘被切掉（玩家实测 102020200）
     info = mj.get("info") or {}
     vr = None
     try:
@@ -3702,7 +3705,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
         if mj.get("foothold"):
             xs = [v for f in mj["foothold"] for v in (f["x1"], f["x2"])]
             ys = [v for f in mj["foothold"] for v in (f["y1"], f["y2"])]
-            vr = {"left": min(xs), "right": max(xs), "top": min(ys), "bottom": max(ys)}
+            vr = {"left": min(xs) + 25, "right": max(xs) - 25,
+                  "top": min(ys) - 300, "bottom": max(ys) + 100}
     result = {"dir": str(outdir), "preview": size,
               "no_bg": bool(no_bg),
               "preview_path": str(png),
