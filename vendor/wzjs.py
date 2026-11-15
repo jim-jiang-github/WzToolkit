@@ -122,9 +122,9 @@ def parse_blob(raw: bytes) -> dict:
         return struct.unpack_from("<f", blob, flt_off + 4 * i)[0]
 
     def vec(i: int) -> tuple[int, int]:
-        # 值区按 (x,y) 对打包；col2 是对索引
-        return (struct.unpack_from("<i", blob, vec_off + 8 * i)[0],
-                struct.unpack_from("<i", blob, vec_off + 8 * i + 4)[0])
+        # 值区按 (x,y) 对打包，分量是 float 不是 int（enV0 origin=17.0f 实证）
+        return (round(struct.unpack_from("<f", blob, vec_off + 8 * i)[0]),
+                round(struct.unpack_from("<f", blob, vec_off + 8 * i + 4)[0]))
 
     root_path = ""
     nodes: list[Node] = []
