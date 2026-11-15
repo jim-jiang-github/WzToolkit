@@ -236,9 +236,10 @@ def _render_preview(map_dir: Path, out_png: Path, no_bg: bool = False) -> dict:
     """
     from PIL import Image
     # v2 = 渲染器改成客户端顺序（同层 obj 先画、tile 后画）；
-    # v3 = 背景平铺去掉「拉伸补缝」，对齐客户端 MapBackgrounds 的原始尺寸平铺
+    # v3 = 背景平铺去掉「拉伸补缝」，对齐客户端 MapBackgrounds 的原始尺寸平铺；
+    # v4 = 同层 tile/obj 按 z 归并（tile 的 z 改从瓦片图节点取）
     meta = out_png.with_suffix(".meta")
-    stamp = f"native-1x-v3 no_bg={int(bool(no_bg))}\n"
+    stamp = f"native-1x-v4 no_bg={int(bool(no_bg))}\n"
     fresh = out_png.exists() and meta.exists() and meta.read_text() == stamp
     if not fresh:
         import tempfile
