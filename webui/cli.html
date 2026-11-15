@@ -287,6 +287,9 @@
   .md-list .it.boss { background: linear-gradient(90deg, #2e1c05, #171008 70%); }
   .md-list .it.boss .id { color: #d9a441; }
   .md-list .it.boss .nm { color: #ffb454; }
+  .md-list .lvchip { font: 10.5px/1 Consolas, monospace; color: #7fb4e8;
+                     background: #1c2a3a; border-radius: 4px; padding: 2px 4px;
+                     margin-left: 6px; flex: none; }
   .md-list .it.big.on { background: #521019; }
   .md-list .it.boss.on { background: #4a2f08; }
   .md-detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
@@ -576,6 +579,7 @@
       <div class="md-bar">
         <div class="filters" style="margin:0">
           <button class="md-flt on" data-f="all">全部</button>
+          <button class="md-flt" data-f="lv">有等级</button>
           <button class="md-flt" data-f="boss">BOSS</button>
           <button class="md-flt" data-f="big">大BOSS</button>
         </div>
@@ -1542,7 +1546,8 @@ async function mdOpen(kindId) {
 function mdRenderList() {
   const q = ($("#md-q").value || "").trim().toLowerCase();
   let items = (MD.all || []).filter((m) => m.img_ok !== false);   // 无帧怪（只有 thumbnail）不进列表
-  if (MD.filt === "boss") items = items.filter((m) => m.tier === "big" || m.tier === "boss");
+  if (MD.filt === "lv") items = items.filter((m) => (m.level || 0) > 0);   // 服务端实装、有等级数值的怪
+  else if (MD.filt === "boss") items = items.filter((m) => m.tier === "big" || m.tier === "boss");
   else if (MD.filt === "big") items = items.filter((m) => m.tier === "big");
   if (q) items = items.filter((m) => m.id.includes(q) ||
                                     (m.name || "").toLowerCase().includes(q));
@@ -1552,8 +1557,9 @@ function mdRenderList() {
   el.innerHTML = top.map((m) => {
     const badge = m.tier === "big" ? '<span class="tier big">大BOSS</span>'
       : m.tier === "boss" ? '<span class="tier boss">BOSS</span>' : "";
+    const lv = (m.level || 0) > 0 ? `<span class="lvchip" title="怪物等级（服务端数值）">Lv.${m.level}</span>` : "";
     return `<div class="it ${m.tier}" data-id="${m.id}" title="Lv ${m.level} · HP ${Number(m.hp || 0).toLocaleString()}">
-       <span class="id">${m.id}</span><span class="nm">${m.name || ""}</span>${badge}</div>`;
+       <span class="id">${m.id}</span><span class="nm">${m.name || ""}</span>${lv}${badge}</div>`;
   }).join("") || '<div class="muted" style="padding:10px">没有匹配（或还没转换 Mob.wz）</div>';
   el.querySelectorAll(".it").forEach((it) => {
     const m = (MD.all || []).find((x) => x.id === it.dataset.id);
