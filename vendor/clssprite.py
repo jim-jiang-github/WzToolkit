@@ -72,8 +72,13 @@ def parse_desc(raw: bytes) -> dict:
 def build_registry(w_dir: Path, progress=None) -> dict:
     """扫描全部 spritesheet_*.bundle，建立注册表。
 
+    贴图解析要点：bundle 里贴图对象名是 ``<m_Name>_<atlas_idx>``，但**会重名**
+    （Map/Back/dryRock 与 Map/Tile/dryRock 各有一张 dryRock_0，内容完全不同，
+    全库共 62 组）。所以注册表给每个条目记下贴图的 pathID（``p``）：重名时按
+    「帧区域全部落在贴图内 + 区域实际有像素」逐个候选解码打分，选出正确的那张。
+
     progress: 可选回调 (stage_str, done, total)。
-    返回 {"<wzpath/framesub>": {b: bundle 文件名, t: 贴图对象名, x, y, w, h, px, py}}
+    返回 {"<wzpath/framesub>": {b, t, p, x, y, w, h, px, py}}
     """
     import UnityPy                              # 延迟导入：只有建库时才需要
 
@@ -85,6 +90,49 @@ def build_registry(w_dir: Path, progress=None) -> dict:
         if progress:
             progress(f"spritesheet {bi + 1}/{len(bundles)}：{bpath.name[12:22]}…", bi, len(bundles))
         env = UnityPy.load(str(bpath))
+        # 贴图名 → [(pathID, w, h, obj)]
+        texs: dict[str, list] = {}
+        for o in env.objects:
+            if o.type.name != "Texture2D":
+                continue
+            d = o.read()
+            texs.setdefault(d.m_Name, []).append((o.path_id, d.m_Width, d.m_Height, o))
+        chosen: dict[tuple, int] = {}           # (name, atlas_idx, 帧签名) → pathID 缓存
+        img_cache: dict[int, object] = {}
+
+        def pick(tex_name: str, frames: list):
+            """在同名候选里选正确贴图：先按区域越界筛，再按内容覆盖率。"""
+            cands = texs.get(tex_name) or []
+            if not cands:
+                return None
+            if len(cands) == 1:
+                return cands[0]
+            fit = [c for c in cands
+                   if all(c[1] >= x + w and c[2] >= y + h
+                          for _, _, x, y, w, h, _, _ in frames)]
+            pool = fit or cands
+            if len(pool) == 1:
+                return pool[0]
+
+            def score(c):
+                pid, tw, th, obj = c
+                try:
+                    if pid not in img_cache:
+                        img_cache[pid] = obj.read().image.convert("RGBA")
+                    im = img_cache[pid]
+                except Exception:               # noqa: BLE001
+                    return -1
+                good = 0
+                for _, _, x, y, w, h, _, _ in frames:
+                    if x + w > tw or y + h > th:
+                        continue
+                    box = im.crop((x, y, x + w, y + h))
+                    if box.getchannel("A").getextrema()[1] > 8:
+                        good += 1
+                return good
+
+            return max(pool, key=score)
+
         for o in env.objects:
             if o.type.name != "MonoBehaviour":
                 continue
@@ -95,11 +143,23 @@ def build_registry(w_dir: Path, progress=None) -> dict:
                 d = parse_desc(raw)
             except ValueError:
                 continue
+            by_atlas: dict[int, list] = {}
+            for fr in d["frames"]:
+                by_atlas.setdefault(fr[0], []).append(fr)
+            resolved: dict[int, tuple] = {}
+            for idx, frames in by_atlas.items():
+                tex_name = f"{d['name']}_{idx}"
+                c = pick(tex_name, frames)
+                if c is not None:
+                    resolved[idx] = c
             for atlas_idx, sub, x, y, w, h, px, py in d["frames"]:
+                c = resolved.get(atlas_idx)
+                if c is None:
+                    continue                        # 贴图不存在：跳过该帧
                 key = f"{d['wzpath']}/{sub}" if sub else d["wzpath"]
                 entry = {"b": bpath.name, "t": f"{d['name']}_{atlas_idx}",
-                         "x": x, "y": y, "w": w, "h": h, "px": round(px, 4),
-                         "py": round(py, 4)}
+                         "p": c[0], "x": x, "y": y, "w": w, "h": h,
+                         "px": round(px, 4), "py": round(py, 4)}
                 if key in reg and reg[key] != entry:
                     dup += 1
                 reg[key] = entry
