@@ -1719,6 +1719,10 @@ def _cls_tables() -> dict:
 # 重设计教程岛，多出 tutorial*/adviceMap portal）。
 WZJS_MAP = CACHE / "wzjs-map"
 WZJS_VER = 2                             # 图库格式版本（2 = atlas_idx 裸 int + inlink 表）
+# map.json 语义版本（与贴图无关，只升级它时全库重转 map.json、贴图保持不动）：
+#   2 = tile 的 z 取瓦片图节点（客户端 Tile.cpp: z = dsrc["z"] → zM），
+#       同层 tile/obj 按 z 归并绘制（原来 tile z 恒 0 且后画，地面盖住物件）
+WZJS_MVER = 2
 WZJS_REG = WZJS_MAP / "registry.json.gz"     # spritesheet 注册表（带来源戳）
 WZJS_BUILT = WZJS_MAP / "built.json"         # {stamp, ver, ids, errs}（断点续跑）
 _wzjsjob: dict = {"running": False, "error": "", "done": 0, "total": 0, "stage": ""}
@@ -1743,6 +1747,7 @@ def _wzjs_ready() -> bool:
     try:
         b = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
         return (bool(b.get("ids")) and b.get("ver") == WZJS_VER
+                and b.get("mver") == WZJS_MVER
                 and b.get("stamp") == _wzjs_stamp(w))
     except (OSError, ValueError):
         return False
@@ -1795,16 +1800,22 @@ def _wzjs_build(log=None) -> None:
         if not reg:
             raise CliError("spritesheet 注册表是空的（12 个包一个描述符都没解到）"
                            "—— 客户端结构变了？", 1)
-        built: dict = {"stamp": stamp, "ver": WZJS_VER, "ids": [], "errs": {}}
+        built: dict = {"stamp": stamp, "ver": WZJS_VER, "mver": WZJS_MVER,
+                       "ids": [], "errs": {}}
         stale = False                     # 旧版图库：img/ 里的 PNG 是按错的 atlas 裁的
+        remap = False                     # map.json 语义过期：重转条目，贴图保留
         try:
             old = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
             if old.get("stamp") == stamp and old.get("ver") == WZJS_VER:
-                built = {"stamp": stamp, "ver": WZJS_VER,
+                built = {"stamp": stamp, "ver": WZJS_VER, "mver": WZJS_MVER,
                          "ids": list(old.get("ids") or []),
                          "errs": dict(old.get("errs") or {})}
+                if old.get("mver") != WZJS_MVER:
+                    remap = True
+                    built["ids"] = []
             elif old.get("stamp") == stamp:
                 stale = True
+                remap = True
         except (OSError, ValueError):
             pass
         from vendor.clsmap import BundleTex, ClsMapSource

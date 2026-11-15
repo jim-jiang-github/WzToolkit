@@ -253,14 +253,18 @@ class ClsMapSource:
                 entry = self.reg[cands[0]]
         if entry is None:
             return ""
+        fname = safe_name(full)
+        p = outdir / "img" / fname
+        if not overwrite and p.exists():
+            # 贴图已在（overwrite=False 时旧 PNG 本来也信任）——直接返回，
+            # 不必再解 atlas 裁一遍。全库重转 map.json（改 z 语义）时这是
+            # 数量级的差别：1750 张图 × 每张几十张贴图，全靠这一步省下来。
+            return fname
         im = tex.frame(entry)
         if im is None:
             return ""
-        fname = safe_name(full)
-        p = outdir / "img" / fname
-        if overwrite or not p.exists():
-            p.parent.mkdir(parents=True, exist_ok=True)
-            im.save(p)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        im.save(p)
         return fname
 
     # ---- 主转换 ----
