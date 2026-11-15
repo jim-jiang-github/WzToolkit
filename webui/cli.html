@@ -754,10 +754,15 @@ function api(path, opts) {
     return r.json();
   });
 }
-function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + e.message; }
+function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + (e?.stack || e?.message || String(e)); }
 
 let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [], CN_NEED_CLS = false, CN_NEED_DMG = false;
 let MAPREADY = false, BUSY = false;   // 浏览区锁定状态：数据就绪 && 没有任务在跑
+let EXPDIR = "";   // 导出目录（boot 时由 /api/state 填）
+/* 地图详情区的默认内容（含 #exp-dir 导出目录标签）——必须在此刻先存一份：
+   dataModeSync() 切现代库时会重写 #detail，boot() 要往 #exp-dir 写字，
+   若这里被清成 "" 会导致 boot() 抛 null 崩溃、scan() 不跑、页面永远锁定 */
+const DETAIL_DEFAULT = $("#detail").innerHTML;
 
 /* ============ 怀旧服数据模式（全局开关） ============
    地图 tab 切成怀旧服小地图库（523 张 canvas × 本地 1838 张名表）；
@@ -795,7 +800,8 @@ function dataModeSync() {
           · 共 ${ (CLS_MAPS || []).length ? CLS_MAPS.length : "—" } 张（有 canvas 的才列）<br>
           · 地图名来自客户端本地数据（1838 张名表）<br>
           · 完整渲染怀旧服地图需要 WZJS 数据包逆向（未实装）</div>`
-      : "";
+      : DETAIL_DEFAULT;
+    if (!CLSMODE && $("#exp-dir")) $("#exp-dir").textContent = EXPDIR;
     loadLists();
   } else if (MODE === "mob") setMdFilt(CLSMODE ? "cls" : "all");
   else if (MODE === "skill") setSkFilt(CLSMODE ? "cls" : "all");
@@ -1303,7 +1309,8 @@ let LIFE = new Set();  // 有怪（life 里有 mob）的地图 id
 async function boot() {
   try {
     const st = await api("/api/state");
-    $("#exp-dir").textContent = st.exports || ".exports/";
+    EXPDIR = st.exports || ".exports/";
+    $("#exp-dir").textContent = EXPDIR;
     if (st.workspace) { $("#ws-path").value = st.workspace; await scan(); }
     if (!st.tools_ok) {
       errBox.style.display = "block";
