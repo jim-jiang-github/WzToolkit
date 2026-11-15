@@ -3532,6 +3532,18 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
                "tier": meta.get(k, {}).get("tier", "normal")}
               for l in life]
+    # 可视范围：客户端 MapInfo.cpp 读 info 的 VRLeft/Right/Top/Bottom，相机永远
+    # 钳在里面（Camera.cpp:58-66）；没配 VR 就用 foothold 包围盒兜底（客户端同款）
+    info = mj.get("info") or {}
+    vr = None
+    try:
+        vr = {"left": int(info["VRLeft"]), "right": int(info["VRRight"]),
+              "top": int(info["VRTop"]), "bottom": int(info["VRBottom"])}
+    except (KeyError, TypeError, ValueError):
+        if mj.get("foothold"):
+            xs = [v for f in mj["foothold"] for v in (f["x1"], f["x2"])]
+            ys = [v for f in mj["foothold"] for v in (f["y1"], f["y2"])]
+            vr = {"left": min(xs), "right": max(xs), "top": min(ys), "bottom": max(ys)}
     result = {"dir": str(outdir), "preview": size,
               "no_bg": bool(no_bg),
               "preview_path": str(png),
@@ -3545,6 +3557,7 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
               "ladders": len(mj.get("ladderRope", [])),
               "overlay": {"minx": minx, "miny": miny, "s": s,
                           "w": round(bw * s), "h": round(bh * s)},
+              "vr": vr,
               "life_points": points,
               # 全部地面段 [x1,y1,x2,y2]：前端随机摆怪时做贴地插值
               "foothold_segs": [[f["x1"], f["y1"], f["x2"], f["y2"]]
