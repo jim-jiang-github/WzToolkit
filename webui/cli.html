@@ -789,6 +789,19 @@ async function clsTables() {
   return CLS_TAB_LOAD;
 }
 
+/* 怀旧服地图 tab 的默认提示（列表/大图库状态就绪后用 clsHintSync 刷新） */
+function clsHintHTML() {
+  return `<div class="muted">左侧选一张怀旧服地图：渲染完整大图（WZJS 地图数据，与现代库同款渲染管线）。<br><br>
+    · 共 ${ (CLS_MAPS || []).length ? CLS_MAPS.length : "—" } 张<br>
+    · 地图名来自客户端本地数据（1838 张名表）<br>
+    · ${CLS_WZJS ? "大图库就绪，可窗口导出 / 找图" : "大图库没建好：数据源面板点「⬇ 转换缺失数据」"}</div>`;
+}
+/* 提示文案是 dataModeSync 打的，那时列表还没拉回来（字数/就绪状态都是旧值）——
+   列表到了再刷一次；已经打开某张地图（有 #mapsel）就别动，免得冲掉画面 */
+function clsHintSync() {
+  if (CLSMODE && MODE === "map" && !$("#mapsel")) $("#detail").innerHTML = clsHintHTML();
+}
+
 /* 开关状态同步到 UI + 各 tab（切开关时当前 tab 立即重筛/重列） */
 function dataModeSync() {
   $$("#datamode button").forEach((b) =>
@@ -796,12 +809,7 @@ function dataModeSync() {
   $("#filters-map").hidden = CLSMODE;   // 怀旧服没有刷怪数据：有怪/无怪筛选不适用
   MD.user = false; SK.user = false;     // 换模式：chip 的手动选择不跨模式保留
   if (MODE === "map") {
-    $("#detail").innerHTML = CLSMODE
-      ? `<div class="muted">左侧选一张怀旧服地图：渲染完整大图（WZJS 地图数据，与现代库同款渲染管线）。<br><br>
-          · 共 ${ (CLS_MAPS || []).length ? CLS_MAPS.length : "—" } 张<br>
-          · 地图名来自客户端本地数据（1838 张名表）<br>
-          · ${CLS_WZJS ? "大图库就绪，可窗口导出 / 找图" : "大图库没建好：数据源面板点「⬇ 转换缺失数据」"}</div>`
-      : DETAIL_DEFAULT;
+    $("#detail").innerHTML = CLSMODE ? clsHintHTML() : DETAIL_DEFAULT;
     if (!CLSMODE && $("#exp-dir")) $("#exp-dir").textContent = EXPDIR;
     loadLists();
   } else if (MODE === "mob") setMdFilt(CLSMODE ? "cls" : "all");
@@ -1311,7 +1319,10 @@ async function boot() {
   try {
     const st = await api("/api/state");
     EXPDIR = st.exports || ".exports/";
-    $("#exp-dir").textContent = EXPDIR;
+    // 怀旧服模式下 #detail 被提示文案替换、里面没有 #exp-dir —— 别硬写
+    // （同一类坑见 dataModeSync 注释：往 null 写 textContent 会让 boot 整个崩掉，
+    //  scan() 不跑，页面永远锁在「数据还没准备好」）
+    const ed = $("#exp-dir"); if (ed) ed.textContent = EXPDIR;
     if (st.workspace) { $("#ws-path").value = st.workspace; await scan(); }
     if (!st.tools_ok) {
       errBox.style.display = "block";
@@ -1587,6 +1598,7 @@ async function loadLists() {
       }
     }
     renderList();
+    clsHintSync();     // 列表/大图库状态到位：把「共 N 张 / 是否就绪」刷新掉
     return;
   }
   try {
