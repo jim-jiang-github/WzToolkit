@@ -683,9 +683,21 @@ function refreshLock() {
 }
 let mapSel = null;
 let MAPFILT = "all";   // all | mob | empty
-let EXPORTMOBS = false; // =「显示怪物」开关：勾选后页面与导出图都把怪物合成进去
-let NOBG = false;       // 预览/导出不画背景（back 层全跳过，画布透明）
-let DENSITY = 1;        // 怪物密度倍数（页面叠加与导出合成共用）
+/* 显示设置：持久化到 localStorage，换图/重开页面都保留（不再每次换图强制重置）。
+   默认值 = 用户 2026-11-15 定：只勾 显示怪物/显示绳索/显示梯子/传送门/NPC，
+   刷怪点/地面/不显示背景默认不勾。 */
+const OPTS = Object.assign({
+  dots: false,  // 显示刷怪点
+  mobs: true,   // 显示怪物（页面 = 纯前端叠加层；导出图按此开关合成）
+  fh: false,    // 显示地面
+  nobg: false,  // 不显示背景（切换时原地换图，不闪黑）
+  rope: true,   // 显示绳索
+  lad: true,    // 显示梯子
+  mmp: true,    // 小地图 HUD：传送门
+  mmn: true,    // 小地图 HUD：NPC
+  density: 1,   // 怪物密度倍数
+}, JSON.parse(localStorage.getItem("wt_mapopts") || "{}"));
+function saveOpts() { localStorage.setItem("wt_mapopts", JSON.stringify(OPTS)); }
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
 const VPW = 1366, VPH = 768;   // 游戏窗口（= 客户端画面）= 唯一导出尺寸
 let VIEWPOS = null;     // 窗口左上角在整张地图里的坐标（游戏像素）；null = 居中
@@ -2524,7 +2536,7 @@ async function lifeOverlayHTML() {
     await Promise.all(kinds.map(async (k) => { icons[k.id] = await mobIcon(k.id); }));
     const usable = kinds.filter((k) => icons[k.id]);
     if (usable.length) {
-      const den = Math.max(1, Math.min(10, DENSITY | 0));
+      const den = Math.max(1, Math.min(10, OPTS.density | 0));
       // 动作抽取权重（与后端 ACT_WEIGHTS 同款）：站/走/飞多，攻击次之，
       // 受击/死亡/跳跃少；动作内再随机抽一帧
       const W = [["stand",3],["move",3],["walk",3],["fly",3],
@@ -2623,15 +2635,14 @@ function mzClose() { $("#mapzoom").hidden = true; }
    标记坐标 = (世界坐标 + centerX/centerY) / 2^mag（后端已换算成 canvas 像素）。
    传送门只画 pt=2 的（update_static_markers 同款），点击直接跳目标图。
    小地图只以 HUD 形式叠在预览图上，不再单独出卡片。 */
-const MMSHOW = { p: true, n: true };            // 标记开关（HUD 用，换图后重置回默认）
 function bindMinimap(d) {
   if (!d.minimap) return;
-  for (const [id, key] of [["mm-p", "p"], ["mm-n", "n"]]) {
+  for (const [id, key, dk] of [["mm-p", "mmp", "p"], ["mm-n", "mmn", "n"]]) {
     const el = $("#" + id);
     if (el) el.onchange = () => {
-      MMSHOW[key] = el.checked;
+      OPTS[key] = el.checked; saveOpts();
       const hud = $("#mm-hud");
-      if (hud) hud.dataset[key] = el.checked ? "on" : "off";
+      if (hud) hud.dataset[dk] = el.checked ? "on" : "off";
     };
   }
 }
@@ -2754,18 +2765,15 @@ function bindMmHud(d) {
 
 async function mapLoad(id, preview) {
   if (mapRef && mapRef.id !== id) VIEWPOS = null;   // 换图：窗口回地图正中
-  // 换图时配置全部回到默认（不延续上一张图的设置）
-  if (!mapRef || mapRef.id !== id) {
-    NOBG = false; EXPORTMOBS = false; DENSITY = 1;
-    MMSHOW.p = true; MMSHOW.n = true;
-  }
+  // 显示设置（OPTS）持久化，换图不再重置；预览图永远不带怪物合成 —— 页面显示
+  // 用纯前端怪物叠加层，勾「显示怪物」只是显隐，不触发服务端重渲（不闪黑）
   mapRef = { id, preview };
   const det = $("#detail");
   det.innerHTML = `<div>地图 <b>${id}</b><br><span class="muted">导出 + 渲染中（大图要几秒）…</span></div>`;
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, preview, mobs: EXPORTMOBS, density: DENSITY, no_bg: NOBG }),
+      body: JSON.stringify({ id, preview, mobs: false, no_bg: OPTS.nobg }),
     });
     const nKinds = (d.life_kinds || []).length;
     // 链接图：自己的 img 是空的，客户端渲染 link 指向的那张 —— 后端已顺着导出目标图
@@ -2784,19 +2792,19 @@ async function mapLoad(id, preview) {
       </div>
       <div class="optpop" id="opt-pop" hidden>
         <div class="optgrp">叠加显示（只影响画面标注，不影响导出图）</div>
-        ${d.life_count ? `        <label title="红点=每只怪的刷新位置（大BOSS品红、BOSS橙）。勾选「显示怪物」后页面与导出图都会把怪物合成进去（是否带怪物跟着这个开关走）"><input type="checkbox" id="life-toggle" /> 显示刷怪点（${d.life_count}）</label>
-        <label title="把怪物按巡逻区间随机摆进画面（与导出合成同款规则）：页面上这样显示，导出图里也同样带怪物"><input type="checkbox" id="mob-toggle" ${EXPORTMOBS ? "checked" : ""} /> 显示怪物</label>` : ""}
-        ${d.footholds ? `<label title="青色线=每一段可站立的地面（foothold，含斜坡）；看人物能走哪、哪里会掉下去、怎么跳到下个平台"><input type="checkbox" id="fh-toggle" /> 显示地面（${d.footholds}）</label>` : ""}
-        <label title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上"><input type="checkbox" id="nobg-toggle" ${NOBG ? "checked" : ""} /> 不显示背景</label>
-        ${nRope ? `<label title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" /> 显示绳索（${nRope}）</label>` : ""}
-        ${nLad ? `<label title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" /> 显示梯子（${nLad}）</label>` : ""}
+        ${d.life_count ? `        <label title="红点=每只怪的刷新位置（大BOSS品红、BOSS橙）"><input type="checkbox" id="life-toggle" ${OPTS.dots ? "checked" : ""} /> 显示刷怪点（${d.life_count}）</label>
+        <label title="把怪物按巡逻区间随机摆进画面（纯页面叠加层，与导出合成同款规则；开关即时生效不重渲染）。导出图是否带怪物同样由这个开关决定"><input type="checkbox" id="mob-toggle" ${OPTS.mobs ? "checked" : ""} /> 显示怪物</label>` : ""}
+        ${d.footholds ? `<label title="青色线=每一段可站立的地面（foothold，含斜坡）；看人物能走哪、哪里会掉下去、怎么跳到下个平台"><input type="checkbox" id="fh-toggle" ${OPTS.fh ? "checked" : ""} /> 显示地面（${d.footholds}）</label>` : ""}
+        <label title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上；切换时原地换图，画面不闪黑"><input type="checkbox" id="nobg-toggle" ${OPTS.nobg ? "checked" : ""} /> 不显示背景</label>
+        ${nRope ? `<label title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" ${OPTS.rope ? "checked" : ""} /> 显示绳索（${nRope}）</label>` : ""}
+        ${nLad ? `<label title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" ${OPTS.lad ? "checked" : ""} /> 显示梯子（${nLad}）</label>` : ""}
         ${d.minimap ? `<div class="optgrp">小地图 HUD 标记</div>
-        <label title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${MMSHOW.p ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
-        <label><input type="checkbox" id="mm-n" ${MMSHOW.n ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>` : ""}
+        <label title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${OPTS.mmp ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
+        <label><input type="checkbox" id="mm-n" ${OPTS.mmn ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>` : ""}
         ${d.life_count ? `<div class="optgrp">导出选项</div>
         <label title="怪物密度倍数：影响页面叠加与导出合成的怪物数量；是否带怪物由上面的「显示怪物」开关决定" style="cursor:default">密度
-          <input type="range" id="density" min="1" max="5" step="1" value="${DENSITY}" style="vertical-align:middle;width:110px" />
-          ×<b id="density-val">${DENSITY}</b></label>` : ""}
+          <input type="range" id="density" min="1" max="5" step="1" value="${OPTS.density}" style="vertical-align:middle;width:110px" />
+          ×<b id="density-val">${OPTS.density}</b></label>` : ""}
       </div>
       ${nKinds ? `<div class="dexpop" id="dex-pop" hidden></div>` : ""}
       </div>
@@ -2822,6 +2830,7 @@ async function mapLoad(id, preview) {
     vpPlace();
     const img = $("#mapsel img.mapimg");
     if (img && !img.complete) img.onload = () => vpPlace();   // 图加载完再按真实尺寸夹一次
+    renderLifeDots();          // 显示设置默认勾选：首屏就把刷怪点/怪物叠加层画上
     const ob = $("#opt-btn"), op = $("#opt-pop");
     if (ob && op) ob.onclick = (e) => { e.stopPropagation(); op.hidden = !op.hidden; };
     const db = $("#dex-btn"), dp = $("#dex-pop");
@@ -2858,29 +2867,28 @@ async function mapLoad(id, preview) {
       mzOpen();
     };
     const lt = $("#life-toggle");
-    if (lt) lt.onchange = renderLifeDots;
+    if (lt) lt.onchange = () => { OPTS.dots = lt.checked; saveOpts(); renderLifeDots(); };
     const mt = $("#mob-toggle");
     if (mt) mt.onchange = () => {
-      // 显示怪物 = 导出带怪物：勾选后直接服务端合成（页面所见 = 导出所得，同 seed）
-      EXPORTMOBS = mt.checked;
-      mapLoad(mapRef.id, mapRef.preview);
+      // 显示怪物 = 纯前端叠加层显隐（瞬时生效，不重渲染、不闪黑）；
+      // 导出窗口时才由服务端按这个开关把怪物合成进图（所见即所得）
+      OPTS.mobs = mt.checked; saveOpts(); renderLifeDots();
     };
     const rr = $("#rope-rope");
-    if (rr) rr.onchange = renderLifeDots;
+    if (rr) rr.onchange = () => { OPTS.rope = rr.checked; saveOpts(); renderLifeDots(); };
     const rl = $("#rope-lad");
-    if (rl) rl.onchange = renderLifeDots;
+    if (rl) rl.onchange = () => { OPTS.lad = rl.checked; saveOpts(); renderLifeDots(); };
     const fh = $("#fh-toggle");
-    if (fh) fh.onchange = renderLifeDots;
+    if (fh) fh.onchange = () => { OPTS.fh = fh.checked; saveOpts(); renderLifeDots(); };
     const nb2 = $("#nobg-toggle");
-    if (nb2) nb2.onchange = () => { NOBG = nb2.checked; mapLoad(mapRef.id, mapRef.preview); };
+    if (nb2) nb2.onchange = () => { OPTS.nobg = nb2.checked; saveOpts(); swapMapBase(); };
     const ds = $("#density");
     if (ds) {
       ds.oninput = () => $("#density-val").textContent = ds.value;
       ds.onchange = () => {
-        DENSITY = Number(ds.value);
-        // 勾了显示怪物（图里已合成怪）→ 重新合成图（按 seed 稳定复现）；否则只重画页面叠加层
-        if (EXPORTMOBS) mapLoad(mapRef.id, mapRef.preview);
-        else renderLifeDots();
+        OPTS.density = Number(ds.value); saveOpts();
+        // 密度只影响页面叠加层与导出合成；显示怪物开着就重画叠加层（瞬时，无重渲染）
+        if (OPTS.mobs) renderLifeDots();
       };
     }
     // 导出 = 游戏窗口里的 1366×768 画面（不重建面板，结果展示在 #export-out）
@@ -2896,6 +2904,31 @@ async function mapLoad(id, preview) {
   } catch (e) { det.innerHTML = `<span class="miss">导出失败：${e.message}</span>`; }
 }
 
+/* 「不显示背景」切换：后台请求另一版底图，新图加载完成后原地替换 <img> ——
+   面板不重建、画布不闪黑；怪物叠加层与刷怪点不受影响（换的是底图）。 */
+let _swapSeq = 0;
+async function swapMapBase() {
+  if (!mapRef) return;
+  const seq = ++_swapSeq;
+  try {
+    const d = await api("/api/map/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: mapRef.id, preview: mapRef.preview, mobs: false, no_bg: OPTS.nobg }),
+    });
+    if (seq !== _swapSeq || !mapRef) return;   // 连续切换/换图 → 旧结果作废
+    const pre = new Image();
+    pre.onload = () => {
+      if (seq !== _swapSeq) return;
+      const img = $("#mapsel img.mapimg"), open = $("#mz-open");
+      if (img) img.src = pre.src;
+      if (open) open.href = pre.src;
+    };
+    pre.src = d.preview_url;
+    mapData = d;
+    renderLifeDots();
+  } catch (e) { console.warn("换底图失败：", e); }
+}
+
 /* 把游戏窗口导出成 1366×768（就是页面上看到的这块画面） */
 async function exportWindow() {
   if (!mapData || !mapRef) return;
@@ -2906,8 +2939,8 @@ async function exportWindow() {
   try {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: mapRef.id, preview: false, mobs: EXPORTMOBS,
-                             density: DENSITY, no_bg: NOBG, view }),
+      body: JSON.stringify({ id: mapRef.id, preview: false, mobs: OPTS.mobs,
+                             density: OPTS.density, no_bg: OPTS.nobg, view }),
     });
     const w = d.window || {};
     let html = `✅ 已导出<b>当前视窗</b> <b>${w.w || 1366}×${w.h || 768}</b>（左上角世界坐标 ${w.x},${w.y}）→ <code>${d.preview_path}</code>`;
