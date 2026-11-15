@@ -104,6 +104,7 @@ _job: dict = {"id": 0, "running": False, "log": [], "done": 0, "total": 0,
              "error": "", "stage": ""}
 _lists: dict = {}                              # mobs / maps / life 缓存（键: 文件 mtime）
 _BOSS_REF: dict | None = None                  # boss 参照表懒加载
+_MOB_STATS: dict | None = None                 # 服务端怪物数值表懒加载
 _UNSET = object()                              # 国服探测哨兵：None=确认不是，对象=还没探测
 _cn_data: Path | None | object = _UNSET
 
@@ -835,19 +836,62 @@ def _boss_ref() -> dict:
     return _BOSS_REF
 
 
-def _apply_boss_ref(items: list[dict]) -> None:
-    """数据源完全读不到数值（全部 hp<=0）时，用参照表补 boss 档位/血量/等级。"""
-    if any(it.get("hp", 0) is not None and it.get("hp", -1) > 0 for it in items):
-        return                      # 数据源自带数值（国际服等），不动
-    ref = _boss_ref()
+def _mob_stat_table() -> dict[str, list]:
+    """服务端怪物数值表 vendor/mobstats.json：id → [level, hp, exp, boss]。
+
+    国服客户端 NX 里 Mob 只有贴图，等级/血量/经验全在服务端
+    （MapleLifeFactory.java:142 从 wz/<id>/info 读 level）。
+    scripts/gen-mobstats.py 从服务端 Odin imgdir XML 提取生成，随仓库分发。
+    """
+    global _MOB_STATS
+    if _MOB_STATS is None:
+        _MOB_STATS = {}
+        try:
+            _MOB_STATS = json.loads((VENDOR / "mobstats.json").read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return _MOB_STATS
+
+
+def _apply_mob_stats(items: list[dict]) -> None:
+    """用服务端数值表补齐 nxmob 读不到的 level/hp/exp/boss（比 boss 参照表全）。"""
+    st = _mob_stat_table()
+    if not st:
+        return
     for it in items:
+        row = st.get(it["id"])
+        if not row:
+            continue
+        lv, hp, exp, boss = row
+        if lv > 0 and (it.get("level") or 0) <= 0:
+            it["level"] = lv
+        if hp > 0 and (it.get("hp") or 0) <= 0:
+            it["hp"] = hp
+        if exp > 0 and (it.get("exp") or 0) <= 0:
+            it["exp"] = exp
+        if boss and not it.get("boss"):
+            it["boss"] = 1
+        it["tier"] = _mob_tier(it["raw"], it["name"], it["boss"], it["hp"])
+
+
+def _apply_boss_ref(items: list[dict]) -> None:
+    """数据源读不到数值（hp<=0）的怪，按国际服参照表补 boss 档位/血量/等级。
+
+    mobstats 表（服务端数值）已先补过一轮，这里只兜底表外的怪；
+    已有数值的怪（数据源自带或 mobstats 已补）一律不动。
+    """
+    ref = _boss_ref()
+    if not ref:
+        return
+    for it in items:
+        if (it.get("hp") or 0) > 0:
+            continue                      # 已有数值，不动
         hit = ref.get(it["id"])
         if not hit:
             continue
         it["boss"] = 1
-        if it.get("hp", -1) is None or it.get("hp", -1) <= 0:
-            it["hp"] = hit[0]
-        if it.get("level", -1) is None or it.get("level", -1) <= 0:
+        it["hp"] = hit[0]
+        if (it.get("level") or 0) <= 0:
             it["level"] = hit[1]
         it["tier"] = _mob_tier(it["raw"], it["name"], it["boss"], it["hp"])
 
@@ -886,8 +930,9 @@ def mob_meta(mobnx: Path) -> list[dict]:
             cache.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
-    # 参照表回退放在缓存之后：缓存里存的是原始值，boss 补丁每次都生效
-    _apply_boss_ref(items)
+    # 参照表回退放在缓存之后：缓存里存的是原始值，补丁每次都生效
+    _apply_mob_stats(items)   # 服务端数值表（level/hp/exp/boss，最全）
+    _apply_boss_ref(items)    # 表外的 boss 再按国际服参照表兜底
     items.sort(key=lambda x: int(x["id"]))
     return items
 
@@ -3517,6 +3562,15 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     kinds = sorted({str(l.get("id", "")).lstrip("0") for l in life})
     mobnx = _nx_dir() / "Mob.nx"
     meta = {m["id"]: m for m in mob_meta(mobnx)} if mobnx.exists() else {}
+    # 怪物等级（推荐等级用）：meta 已被 mobstats/boss 参照表补齐；不在 Mob.nx 里的
+    # 怪再直接查服务端数值表
+    _st = _mob_stat_table()
+
+    def _kind_lv(k: str) -> int:
+        lv = meta.get(k, {}).get("level") or 0
+        if lv <= 0 and k in _st:
+            lv = _st[k][0]
+        return lv
     # 刷怪点叠加：overlay 必须和渲染实际用的一致（render_file pad=40、1:1 不缩放）
     R = _render_mod()
     minx, miny, bw, bh = R.map_bounds(mj)
@@ -3530,6 +3584,7 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                "rx0": (float(l["rx0"]) if l.get("rx0") is not None else None),
                "rx1": (float(l["rx1"]) if l.get("rx1") is not None else None),
                "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
+               "lv": _kind_lv(k),
                "tier": meta.get(k, {}).get("tier", "normal")}
               for l in life]
     # 可视范围：客户端 MapInfo.cpp 读 info 的 VRLeft/Right/Top/Bottom，相机永远
@@ -3552,7 +3607,15 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
               "life_count": len(life),
               "life_kinds": [{"id": k,
                               "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
+                              "lv": _kind_lv(k),
+                              "hp": (meta.get(k, {}).get("hp")
+                                     if (meta.get(k, {}).get("hp") or 0) > 0
+                                     else (_st[k][1] if k in _st else 0)),
                               "tier": meta.get(k, {}).get("tier", "normal")} for k in kinds],
+              # 推荐等级 = 本图自然刷新怪的等级区间（数值来自服务端表；
+              # 后期版本图服务端没实装，取不到就为 null，前端不显示）
+              "mob_lv": ([min(lvs), max(lvs)]
+                         if (lvs := [v for v in map(_kind_lv, kinds) if v > 0]) else None),
               "footholds": len(mj.get("foothold", [])),
               "ladders": len(mj.get("ladderRope", [])),
               "overlay": {"minx": minx, "miny": miny, "s": s,
@@ -3843,6 +3906,14 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
     mobnx = _nx_dir() / "Mob.nx"
     meta = {m["id"]: m for m in mob_meta(mobnx)} if mobnx.exists() else {}
     kinds = sorted({str(l.get("id", "")).lstrip("0") for l in life})
+    _st = _mob_stat_table()
+
+    def _kind_lv(k: str) -> int:
+        lv = meta.get(k, {}).get("level") or 0
+        if lv <= 0 and k in _st:
+            lv = _st[k][0]
+        return lv
+
     return {"id": mid,
             "bounds": {"x": cx, "y": cy, "w": cw, "h": chh},
             "world": {"x": minx, "y": miny, "w": bw, "h": bh},
@@ -3851,7 +3922,10 @@ def c_map_info(mid: str, _visited: set | None = None) -> dict:
             "life_count": len(life),
             "life_kinds": [{"id": k,
                             "name": meta.get(k, {}).get("name") or mob_names().get(k) or "",
+                            "lv": _kind_lv(k),
                             "tier": meta.get(k, {}).get("tier", "normal")} for k in kinds],
+            "mob_lv": ([min(lvs), max(lvs)]
+                       if (lvs := [v for v in map(_kind_lv, kinds) if v > 0]) else None),
             "footholds": len(mj.get("foothold", [])),
             "ladders": len(mj.get("ladderRope", [])),
             # 地面段 [x1,y1,x2,y2]：可站立区域（含斜坡），导航/跳跃规划用
