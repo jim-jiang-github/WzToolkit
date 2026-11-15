@@ -1754,6 +1754,38 @@ def _wzjs_ready() -> bool:
         return False
 
 
+def _wzjs_mob_ids() -> list:
+    """有自然刷怪（life 里 type=m）的地图 id —— 列表页「有怪/无怪」筛选用。
+
+    正路是建库时顺手记进 built.json 的 mobs；老缓存没这个字段就扫一遍
+    map.json（只看 life 有没有 type=m，文本查比重解析快一个数量级），
+    结果回写 built.json，之后零成本。建库进行中不写，免得被后台任务覆盖。
+    """
+    try:
+        b = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if isinstance(b.get("mobs"), list):
+        return b["mobs"]
+    ids = []
+    for mid in b.get("ids") or []:
+        try:
+            txt = (WZJS_MAP / mid / "map.json").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if '"type": "m"' in txt:
+            ids.append(mid)
+    if not _wzjsjob["running"]:
+        b["mobs"] = ids
+        try:
+            tmp = WZJS_BUILT.with_suffix(".tmp")
+            tmp.write_text(json.dumps(b, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, WZJS_BUILT)
+        except OSError:
+            pass
+    return ids
+
+
 def _wzjs_build(log=None) -> None:
     """后台任务：注册表 + 1750 张 WZJS 地图 → .cache\\wzjs-map\\<id>\\。
 
@@ -1802,7 +1834,7 @@ def _wzjs_build(log=None) -> None:
             raise CliError("spritesheet 注册表是空的（12 个包一个描述符都没解到）"
                            "—— 客户端结构变了？", 1)
         built: dict = {"stamp": stamp, "ver": WZJS_VER, "mver": WZJS_MVER,
-                       "ids": [], "errs": {}}
+                       "ids": [], "errs": {}, "mobs": []}
         stale = False                     # 旧版图库：img/ 里的 PNG 是按错的 atlas 裁的
         remap = False                     # map.json 语义过期：重转条目，贴图保留
         try:
@@ -1810,10 +1842,12 @@ def _wzjs_build(log=None) -> None:
             if old.get("stamp") == stamp and old.get("ver") == WZJS_VER:
                 built = {"stamp": stamp, "ver": WZJS_VER, "mver": WZJS_MVER,
                          "ids": list(old.get("ids") or []),
-                         "errs": dict(old.get("errs") or {})}
+                         "errs": dict(old.get("errs") or {}),
+                         "mobs": list(old.get("mobs") or [])}
                 if old.get("mver") != WZJS_MVER:
                     remap = True
                     built["ids"] = []
+                    built["mobs"] = []
             elif old.get("stamp") == stamp:
                 stale = True
                 remap = True
@@ -1829,8 +1863,10 @@ def _wzjs_build(log=None) -> None:
                         stage="解析 WZJS 地图")
         for mid in todo:
             try:
-                src.convert(mid, WZJS_MAP / mid, tex, names, overwrite=stale)
+                mm = src.convert(mid, WZJS_MAP / mid, tex, names, overwrite=stale)
                 built["ids"].append(mid)
+                if any((l or {}).get("type") == "m" for l in mm.get("life") or []):
+                    built["mobs"].append(mid)
             except Exception as e:              # noqa: BLE001
                 built["errs"][mid] = f"{type(e).__name__}: {str(e)[:200]}"
             _wzjsjob["done"] += 1
@@ -1870,13 +1906,16 @@ def c_cls_maps() -> dict:
         modern = set()
     if _wzjs_ready():
         built = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
+        mobs = set(_wzjs_mob_ids())
         out = []
         for mid in sorted(built.get("ids") or []):
             n = names.get(mid.lstrip("0") or "0") or {}
             out.append({"id": mid, "street": n.get("street", ""),
                         "name": n.get("name", ""), "desc": n.get("desc", ""),
+                        "mob": mid in mobs,
                         "mod": mid.zfill(9) in modern})
-        return {"maps": out, "names": len(names), "wzjs": True}
+        return {"maps": out, "names": len(names), "wzjs": True,
+                "life_maps": sorted(mobs)}
     if not _cls_ready():
         raise CliError("怀旧服小地图库还没建好 —— 数据源面板点「⬇ 转换缺失数据」", 1)
     idx = json.loads((CLS_MMIDX / "index.json").read_text(encoding="utf-8"))

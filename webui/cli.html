@@ -771,6 +771,7 @@ const DETAIL_DEFAULT = $("#detail").innerHTML;
 let CLSMODE = localStorage.getItem("wt_datamode") === "cls";
 let CLS_MAPS = null;       // [{id, street, name, desc, w, h, mod}]
 let CLS_WZJS = false;      // 大图库（WZJS 1750 张）就绪 → 点行渲染完整地图
+let CLS_LIFE = null;       // Set(id)：有自然刷怪的地图（「有怪/无怪」筛选；null=未加载）
 let CLS_TAB = null;        // {mob:Set, skill:Set}（去前导零 id）
 let CLS_TAB_LOAD = null;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -806,7 +807,10 @@ function clsHintSync() {
 function dataModeSync() {
   $$("#datamode button").forEach((b) =>
     b.classList.toggle("on", (b.dataset.dm === "cls") === CLSMODE));
-  $("#filters-map").hidden = CLSMODE;   // 怀旧服没有刷怪数据：有怪/无怪筛选不适用
+  // 「有怪/无怪」两种模式都支持：怀旧服的刷怪名单由 /api/cls/maps 的
+  // life_maps 下发（canvas 回退模式没有 → 点了只提示「刷怪数据未加载」）。
+  // 以前这里是 $("#filters-map").hidden = CLSMODE，但 .filters{display:flex}
+  // 会盖掉 [hidden]，按钮照样显示却不生效 —— 用户点了没反应就是这个。
   MD.user = false; SK.user = false;     // 换模式：chip 的手动选择不跨模式保留
   if (MODE === "map") {
     $("#detail").innerHTML = CLSMODE ? clsHintHTML() : DETAIL_DEFAULT;
@@ -1589,6 +1593,8 @@ async function loadLists() {
         const d = await api("/api/cls/maps");
         CLS_MAPS = d.maps;
         CLS_WZJS = !!d.wzjs;   // 大图库就绪 → 点行渲染完整地图；否则只看 canvas
+        // 有怪名单：大图库才有（canvas 模式没刷怪数据 → 保持 null，筛选按钮不生效）
+        CLS_LIFE = Array.isArray(d.life_maps) ? new Set(d.life_maps) : null;
       } catch (e) {
         CLS_MAPS = [];
         $("#list").innerHTML =
@@ -1613,12 +1619,20 @@ function renderList() {
   const q = $("#q").value.trim().toLowerCase();
   const box = $("#list");
   if (CLSMODE) {
-    // 怀旧服：按 id / 名字 / 街道搜，行里带中文名
+    // 怀旧服：按 id / 名字 / 街道搜，行里带中文名；有怪/无怪按 CLS_LIFE 筛
     let items = CLS_MAPS || [];
     if (q) items = items.filter((m) => m.id.includes(q) ||
       (m.name || "").toLowerCase().includes(q) ||
       (m.street || "").toLowerCase().includes(q));
-    $("#listcount").textContent = `怀旧服 ${items.length} 张`;
+    // 刷怪名单没到（canvas 模式 / 老服务进程）时不能当「全都没怪」：
+    // 那样点「无怪」会把整库列出来、点「有怪」反而空，容易误判
+    const noLife = !CLS_LIFE;
+    if (!noLife && MAPFILT === "mob") items = items.filter((m) => CLS_LIFE.has(m.id));
+    else if (!noLife && MAPFILT === "empty") items = items.filter((m) => !CLS_LIFE.has(m.id));
+    $("#listcount").textContent =
+      (MAPFILT !== "all" && noLife && (CLS_MAPS || []).length)
+        ? `怀旧服 ${items.length} 张 · 刷怪数据未加载 —— 重启服务后刷新页面`
+        : `怀旧服 ${items.length} 张`;
     const top = items.slice(0, 400);
     box.innerHTML = top.map((m) =>
       `<div class="it" data-id="${m.id}" title="${esc(m.street ? m.street + " · " : "")}${esc(m.desc || "")}">
