@@ -3487,19 +3487,8 @@ function pathSummary() {
     + `　<span class="muted">（黄=走 橙弧=跳/抓 紫点=爬绳 蓝虚=落）</span>`;
 }
 
-/* 叠加层缓存：怪物/玩家/掉落的随机摆位只在「换图或开关变动」时重抽，
-   寻路选点只重画路线，不会让怪物跳来跳去（用户 2026-11-16 要求） */
-let LIFE_CACHE = { key: "", html: null };
-function lifeKey() {
-  return JSON.stringify([mapRef && mapRef.id, mapData && mapData.overlay && mapData.overlay.w,
-                         OPTS.dots, OPTS.mobs, OPTS.drops, OPTS.players,
-                         OPTS.rope, OPTS.lad, OPTS.fh, OPTS.density]);
-}
 async function renderLifeDots() {
-  const key = lifeKey();
-  if (LIFE_CACHE.key !== key || LIFE_CACHE.html === null)
-    LIFE_CACHE = { key, html: await lifeOverlayHTML() };
-  const html = LIFE_CACHE.html + pathSvgHtml();
+  const html = (await lifeOverlayHTML()) + pathSvgHtml();
   const box = $("#lifedots");
   if (box) box.innerHTML = html;
   const mz = $("#mz-dots");
