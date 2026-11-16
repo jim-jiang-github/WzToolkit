@@ -135,6 +135,11 @@
   .yl-body { padding: 12px 16px; display: flex; flex-direction: column;
              gap: 10px; overflow: auto; min-height: 0; }
   #yl-scope button { padding: 4px 10px; font-size: 12px; }
+  /* 左右结构：左=地图选择栏，右=相机窗口编辑器/进度（用户 2026-11-16） */
+  .yl-cols { display: flex; gap: 16px; align-items: stretch; min-height: 0; }
+  .yl-left { width: 272px; flex: none; display: flex; flex-direction: column; gap: 8px; }
+  .yl-left #yl-mlist { flex: 1; min-height: 360px; max-height: none; }
+  .yl-right { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
   .yl-man { border-top: 1px dashed rgba(128,128,128,.3); padding-top: 10px; }
   .yl-edit { display: flex; gap: 14px; margin-top: 8px; align-items: flex-start; }
   .yl-mapwrap { position: relative; flex: 1; min-width: 0; max-width: 100%; align-self: flex-start; }
@@ -835,47 +840,51 @@
           <label class="muted" style="display:flex;gap:4px;align-items:center" title="网格窗口铺满每张地图的完整画面（右/下贴边自动补齐，不留死角），忽略「每图窗口」和手动精调窗口；分辨率用上面选的（不随机）。配「全部地图」= 把整个地图空间一张不漏搬进训练集"><input type="checkbox" id="yl-cover"> 铺满整图</label>
           <span class="muted" id="yl-count"></span>
         </div>
-        <div class="row">
-          <input type="text" id="yl-q" placeholder="搜索 id 或名字 → 点行选进精调…" style="flex:1;min-width:0" autocomplete="off">
-          <div class="filters" id="yl-flt" style="flex:none">
-            <button class="flt on" data-f="all">全部</button>
-            <button class="flt" data-f="mob">有怪</button>
-            <button class="flt" data-f="empty">无怪</button>
-          </div>
-        </div>
-        <div class="list" id="yl-mlist" style="max-height:180px;flex:none"></div>
-        <div class="row" style="margin:2px 0"><span class="muted" id="yl-picked"></span></div>
-        <div class="progbox" id="yl-prog" hidden>
-          <div class="prog-head"><b id="yl-stage">准备中…</b><span class="muted" id="yl-pct"></span></div>
-          <div class="prog-bar"><i id="yl-fill"></i></div>
-          <div class="prog-sub muted" id="yl-sub"></div>
-        </div>
-        <div class="muted" id="yl-msg"></div>
-        <div class="yl-man" id="yl-man" hidden>
-          <div class="row">
-            <b>相机窗口（拖/微调，每格导一张）</b>
-            <button class="mini" id="yl-resamp" title="按「每图窗口」数重新自动采样一版（foothold 站位 → 相机公式 → VR 钳制），作为微调起点">🎲 自动采样</button>
-            <button class="mini" id="yl-addwin" title="以当前选中窗口的位置为底，在旁边加一个新窗口（或没选中时加在地图中央）">＋ 加窗口</button>
-            <button class="mini" id="yl-delwin" title="删掉选中的那个窗口">🗑 删选中</button>
-            <span class="muted" id="yl-wins"></span>
-          </div>
-          <div class="yl-edit">
-            <div class="yl-mapwrap" id="yl-mapwrap">
-              <img id="yl-mapimg" alt="整图（窗口框叠在这张图上拖）">
-              <div id="yl-winboxes"></div>
+        <div class="yl-cols">
+          <div class="yl-left">
+            <input type="text" id="yl-q" placeholder="搜索 id 或名字 → 点行选进精调…" style="width:100%;box-sizing:border-box" autocomplete="off">
+            <div class="filters" id="yl-flt">
+              <button class="flt on" data-f="all">全部</button>
+              <button class="flt" data-f="mob">有怪</button>
+              <button class="flt" data-f="empty">无怪</button>
             </div>
-            <div class="yl-side">
-              <div class="yl-view" id="yl-view"></div>
-              <div class="muted" id="yl-wininfo"></div>
-              <div class="muted" style="font-size:11.5px">
-                点框选中 → 图上直接拖，或 <b>方向键 1px / Shift+方向键 10px</b>；点空白处把选中窗口移过去（没选中就新开一个）；红虚线=相机合法范围（VR），出界的框导出时会按图边钳回。
+            <div class="list" id="yl-mlist"></div>
+            <div class="muted" id="yl-picked" style="font-size:11.5px"></div>
+          </div>
+          <div class="yl-right">
+            <div class="progbox" id="yl-prog" hidden>
+              <div class="prog-head"><b id="yl-stage">准备中…</b><span class="muted" id="yl-pct"></span></div>
+              <div class="prog-bar"><i id="yl-fill"></i></div>
+              <div class="prog-sub muted" id="yl-sub"></div>
+            </div>
+            <div class="muted" id="yl-msg"></div>
+            <div class="yl-man" id="yl-man" hidden>
+              <div class="row">
+                <b>相机窗口（拖/微调，每格导一张）</b>
+                <button class="mini" id="yl-resamp" title="按「每图窗口」数重新自动采样一版（foothold 站位 → 相机公式 → VR 钳制），作为微调起点">🎲 自动采样</button>
+                <button class="mini" id="yl-addwin" title="以当前选中窗口的位置为底，在旁边加一个新窗口（或没选中时加在地图中央）">＋ 加窗口</button>
+                <button class="mini" id="yl-delwin" title="删掉选中的那个窗口">🗑 删选中</button>
+                <span class="muted" id="yl-wins"></span>
+              </div>
+              <div class="yl-edit">
+                <div class="yl-mapwrap" id="yl-mapwrap">
+                  <img id="yl-mapimg" alt="整图（窗口框叠在这张图上拖）">
+                  <div id="yl-winboxes"></div>
+                </div>
+                <div class="yl-side">
+                  <div class="yl-view" id="yl-view"></div>
+                  <div class="muted" id="yl-wininfo"></div>
+                  <div class="muted" style="font-size:11.5px">
+                    点框选中 → 图上直接拖，或 <b>方向键 1px / Shift+方向键 10px</b>；点空白处把选中窗口移过去（没选中就新开一个）；红虚线=相机合法范围（VR），出界的框导出时会按图边钳回。
+                  </div>
+                </div>
               </div>
             </div>
+            <img id="yl-img" hidden alt="" style="max-width:100%;max-height:520px;border-radius:10px"
+                 title="抽检拼图：随机 16 张导出图画上标注框 —— 先看这里确认框贴合，再拿去训练">
+            <div class="muted" id="yl-out"></div>
           </div>
         </div>
-        <img id="yl-img" hidden alt="" style="max-width:100%;max-height:520px;border-radius:10px"
-             title="抽检拼图：随机 16 张导出图画上标注框 —— 先看这里确认框贴合，再拿去训练">
-        <div class="muted" id="yl-out"></div>
       </div>
     </div>
   </div>
