@@ -813,11 +813,6 @@
           <button id="yl-imgsearch-btn" title="粘贴截图找地图：截一张游戏里的小地图（或整窗截图），Ctrl+V 粘贴进来直接搜">🖼 找图</button>
           <div class="optpop imgpop" id="yl-img-pop" hidden></div>
         </div>
-        <div class="filters" id="yl-flt">
-          <button class="flt on" data-f="all">全部</button>
-          <button class="flt" data-f="mob">有怪</button>
-          <button class="flt" data-f="empty">无怪</button>
-        </div>
         <div class="row" style="margin:2px 0 6px"><span class="muted" id="yl-count"></span></div>
         <div class="list" id="yl-mlist"></div>
       </div>
@@ -844,6 +839,7 @@
               <div class="row">
                 <b>相机窗口（拖/微调，每格导一张）</b>
                 <button class="mini" id="yl-resamp" title="按「每图窗口」数重新自动采样一版（foothold 站位 → 相机公式 → VR 钳制），作为微调起点">🎲 自动采样</button>
+                <button class="mini" id="yl-reroll" title="换一批随机布局：怪物/掉落/玩家位置全部重抽（实时画面和导出画面同款合成规则）">🎲 换一批</button>
                 <button class="mini" id="yl-addwin" title="以当前选中窗口的位置为底，在旁边加一个新窗口（或没选中时加在地图中央）">＋ 加窗口</button>
                 <button class="mini" id="yl-delwin" title="删掉选中的那个窗口">🗑 删选中</button>
                 <span class="muted" id="yl-wins"></span>
@@ -4006,7 +4002,9 @@ window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); fitGam
 
 /* ---------------- YOLO 训练集导出 ---------------- */
 let YLTIMER = 0;
-const YL = { scope: "mob", win: [], sel: -1, vr: null, iw: 0, ih: 0, mapid: "", loading: false, filt: "all" };
+const YL = { scope: "mob", win: [], pp: [], comp: null, seed: "",
+             sel: -1, vr: null, iw: 0, ih: 0, mapid: "", loading: false };
+// pp[i] = 第 i 个窗口的玩家站位（预览图坐标，VR 钳边时≠窗口中心）；comp = 合成图（mobs+drops+玩家）
 // 范围/类别选择行已删（用户 2026-11-16：左侧已有地图搜索）——
 // scope 固定起步「全部有怪」(mob)，左侧点选某张图时 yoloPickMap 自动切「当前地图」(cur)；
 // 类别（怪物/BOSS/掉落/玩家）固定全开，见 yoloStart。
@@ -4036,33 +4034,30 @@ function yoloOpen() {
   }
 }
 
-/* 本页地图选择器：和地图页 renderList 完全同款（搜索 + 全部/有怪/无怪 + 计数行 + 列表行带名字/Lv），
-   唯一差别：点行进 YOLO 精调而不是地图预览；当前精调的图在列表里高亮 */
+/* 本页地图选择器：和地图页 renderList 完全同款（搜索 + 计数行 + 列表行带名字/Lv），
+   两处差别：点行进 YOLO 精调；列表固定只显示有怪的地图（用户 2026-11-16，筛选按钮已删） */
 function ylMapList() {
   const q = ($("#yl-q").value || "").trim().toLowerCase();
   const box = $("#yl-mlist");
   if (!box) return;
   let items, noLife;
   if (CLSMODE) {
-    // 怀旧服：按 id / 名字 / 街道搜，行里带中文名；有怪/无怪按 CLS_LIFE 筛
+    // 怀旧服：按 id / 名字 / 街道搜，行里带中文名；有怪按 CLS_LIFE 筛
     items = CLS_MAPS || [];
     if (q) items = items.filter((m) => String(m.id).includes(q) ||
       ((m.name || "").toLowerCase().includes(q) ||
        (m.street || "").toLowerCase().includes(q)));
     noLife = !CLS_LIFE;
-    if (!noLife && YL.filt === "mob") items = items.filter((m) => CLS_LIFE.has(m.id));
-    else if (!noLife && YL.filt === "empty") items = items.filter((m) => !CLS_LIFE.has(m.id));
+    if (!noLife) items = items.filter((m) => CLS_LIFE.has(m.id));
   } else {
     items = MAPS.map((s) => ({ id: s }));
-    if (YL.filt === "mob") items = items.filter((m) => LIFE.has(String(m.id)));
-    else if (YL.filt === "empty") items = items.filter((m) => !LIFE.has(String(m.id)));
     if (q) items = items.filter((m) => String(m.id).includes(q));
     noLife = !LIFE.size;
+    if (!noLife) items = items.filter((m) => LIFE.has(String(m.id)));
   }
   $("#yl-count").textContent =
     (CLSMODE ? "怀旧服 " : "") + `${items.length} 张`
-    + (YL.filt !== "all" && noLife && items.length
-      ? " · 刷怪数据未加载 —— 重启服务后刷新页面" : "");
+    + (noLife && items.length ? " · 刷怪数据未加载 —— 重启服务后刷新页面" : "");
   const top = items.slice(0, 400);
   const cur = mapRef ? String(mapRef.id) : "";
   box.innerHTML = top.map((m) => CLSMODE
@@ -4078,7 +4073,7 @@ function ylMapList() {
 
 async function yoloPickMap(id) {
   YL.scope = "cur";                                   // 点了某张图 = 进入这张图的精调
-  YL.win = []; YL.mapid = ""; YL.sel = -1;          // 换图：清掉旧窗口
+  YL.win = []; YL.pp = []; YL.comp = null; YL.mapid = ""; YL.sel = -1;   // 换图：清掉旧窗口/合成图
   ylMapList();                                        // 立刻把选中行高亮刷出来
   $("#yl-msg").textContent = `地图 ${id} 渲染中（整图，大图要几秒）…`;
   try {
@@ -4092,6 +4087,7 @@ async function yoloPickMap(id) {
     return;
   }
   $("#yl-msg").textContent = "";
+  ylCompositeLoad();                                // 整图合成（怪+掉落+玩家）异步拉
   yoloOpen();                                       // 数据好了 → 采样出框
 }
 
@@ -4106,6 +4102,7 @@ async function yoloResample() {
     const d = await api(`/api/yolo/windows?id=${id}&n=${n}&cls=${CLSMODE ? 1 : 0}`);
     YL.mapid = id;
     YL.win = d.views.map((v) => v.slice());
+    YL.pp = d.pps || [];
     YL.vr = d.vr; YL.iw = d.iw; YL.ih = d.ih;
     YL.sel = YL.win.length ? 0 : -1;
   } catch (e) {
@@ -4148,38 +4145,58 @@ function ylRender() {
   }
   YL.win.forEach((w, i) => {
     const bad = ylBad(w);
+    // 红点 = 人物站位（采样窗口自带）；手动加的窗口没有站位，标窗口中心
+    const pp = YL.pp[i];
+    const dx = pp ? pp[0] : w[0] + (w[2] >> 1);
+    const dy = pp ? pp[1] : w[1] + (w[3] >> 1);
     html += `<div class="yl-wbox${i === YL.sel ? " on" : ""}${bad ? " bad" : ""}" data-i="${i}"`
           + ` style="left:${w[0] / W * 100}%;top:${w[1] / H * 100}%;`
           + `width:${w[2] / W * 100}%;height:${w[3] / H * 100}%">`
           + `<span class="tag">#${i + 1}${bad ? " 出界" : ""} (${w[0]},${w[1]})</span>`
-          + `<i class="dot" title="相机中心 (${w[0] + (w[2] >> 1)}, ${w[1] + (w[3] >> 1)})"></i></div>`;
+          + `<i class="dot" style="left:${(dx - w[0]) / w[2] * 100}%;top:${(dy - w[1]) / w[3] * 100}%"`
+          + ` title="${pp ? "人物站位" : "相机中心"} (${dx}, ${dy})"></i></div>`;
   });
   $("#yl-winboxes").innerHTML = html;
   $$("#yl-winboxes .yl-wbox").forEach((b) => {
     b.addEventListener("mousedown", ylBoxDown);
   });
   const w = YL.win[YL.sel];
+  const pp = w && YL.pp[YL.sel];
   $("#yl-wininfo").textContent =
-    w ? `选中 #${YL.sel + 1}：左上 (${w[0]}, ${w[1]}) · 中心 (${w[0] + (w[2] >> 1)}, ${w[1] + (w[3] >> 1)}) · ${w[2]}×${w[3]}` : "（没选中窗口）";
+    w ? `选中 #${YL.sel + 1}：左上 (${w[0]}, ${w[1]}) · ${pp ? `人物站位 (${pp[0]}, ${pp[1]})` : `中心 (${w[0] + (w[2] >> 1)}, ${w[1] + (w[3] >> 1)})`} · ${w[2]}×${w[3]}` : "（没选中窗口）";
   ylView();
 }
 
-/* 选中窗口的实时画面：整图当背景图裁出来（含怪物叠加），挪一格立刻看到 */
+/* 选中窗口的实时画面：优先用「整图合成」（mobs+drops+0~5 随机玩家）本地裁剪，
+   合成图没到就用普通预览兜底 —— 拖窗口时是纯客户端裁剪，零请求 */
 function ylView() {
   const box = $("#yl-view"), w = YL.win[YL.sel];
   if (!w || !YL.iw) { box.hidden = true; return; }
   box.hidden = false;
+  const src = (YL.comp && YL.comp.complete && YL.comp.naturalWidth) ? YL.comp.src : $("#yl-mapimg").src;
   const s = Math.min(396 / w[2], 300 / w[3]);
   box.style.width = Math.round(w[2] * s) + "px";
   box.style.height = Math.round(w[3] * s) + "px";
-  box.style.backgroundImage = `url("${$("#yl-mapimg").src}")`;
+  box.style.backgroundImage = `url("${src}")`;
   box.style.backgroundSize = `${YL.iw * s}px ${YL.ih * s}px`;
   box.style.backgroundPosition = `${-w[0] * s}px ${-w[1] * s}px`;
+}
+
+/* 拉一张整图合成（新 seed = 换一批随机布局），到了就刷新实时画面 */
+function ylCompositeLoad() {
+  if (!mapRef) return;
+  YL.seed = Math.random().toString(36).slice(2, 10);
+  YL.comp = null;
+  const img = new Image();
+  img.onload = () => { if (String(mapRef.id) === img.dataset.mid) { YL.comp = img; ylView(); } };
+  img.dataset.mid = String(mapRef.id);
+  img.src = `/api/yolo/composite?id=${img.dataset.mid}&cls=${CLSMODE ? 1 : 0}&seed=${YL.seed}`;
 }
 
 function ylBoxDown(e) {
   e.preventDefault();
   YL.sel = +e.currentTarget.dataset.i;
+  YL.pp[YL.sel] = null;                    // 窗口挪走 = 原采样站位作废，红点退回中心
   ylRender();
   const w = YL.win[YL.sel];
   const k = YL.iw / $("#yl-mapimg").getBoundingClientRect().width;
@@ -4207,32 +4224,28 @@ $("#yl-mapimg").addEventListener("mousedown", (e) => {
   }
   w[0] = Math.max(0, Math.min(Math.round((e.clientX - rect.left) * k - w[2] / 2), YL.iw - w[2]));
   w[1] = Math.max(0, Math.min(Math.round((e.clientY - rect.top) * k - w[3] / 2), YL.ih - w[3]));
+  YL.pp[YL.sel] = null;                    // 手动摆的窗口没有采样站位
   YL.sel = YL.win.indexOf(w);
   ylRender();
 });
 
 $("#yl-resamp").onclick = yoloResample;
+$("#yl-reroll").onclick = ylCompositeLoad;   // 🎲 换一批：新 seed 重合成怪/掉落/玩家
 $("#yl-q").oninput = ylMapList;
-$("#yl-flt").onclick = (e) => {
-  const b = e.target.closest(".flt");
-  if (!b) return;
-  $$("#yl-flt .flt").forEach((x) => x.classList.remove("on"));
-  b.classList.add("on");
-  YL.filt = b.dataset.f;
-  ylMapList();
-};
 $("#yl-addwin").onclick = () => {
   if (!YL.iw) return;
   const w = (YL.win[YL.sel] || YL.win[0] || [0, 0, 1366, 768]).slice();
   w[0] = Math.max(0, Math.min(w[0] + 40, YL.iw - w[2]));
   w[1] = Math.max(0, Math.min(w[1] + 24, YL.ih - w[3]));
   YL.win.push(w);
+  YL.pp.push(null);
   YL.sel = YL.win.length - 1;
   ylRender();
 };
 $("#yl-delwin").onclick = () => {
   if (YL.sel < 0 || !YL.win[YL.sel]) return;
   YL.win.splice(YL.sel, 1);
+  YL.pp.splice(YL.sel, 1);
   YL.sel = Math.min(YL.sel, YL.win.length - 1);
   ylRender();
 };
@@ -4253,6 +4266,7 @@ document.addEventListener("keydown", (e) => {   // 精调：方向键挪选中�
   e.preventDefault();
   w[0] = Math.max(0, Math.min(w[0], YL.iw - w[2]));
   w[1] = Math.max(0, Math.min(w[1], YL.ih - w[3]));
+  YL.pp[YL.sel] = null;                    // 挪动后原采样站位作废
   ylRender();
 });
 
