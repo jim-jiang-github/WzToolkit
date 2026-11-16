@@ -5251,29 +5251,68 @@ def _yolo_tiers() -> dict:
         return {}
 
 
-def _yolo_stand_points(mj: dict, step: int = 8) -> list:
-    """玩家能站的位置：foothold 段按 step 采样（斜坡线性插值）+ 绳梯每 16px 一个。
+def _yolo_stand_points(mj: dict, step: int = 120, phase: float = 0.0) -> list:
+    """玩家能站的位置：地面 foothold 段按 step 均匀采样 + 绳梯按 step 均匀采样。
 
+    垂直段（|dx|<16）跳过 —— 那是崖壁不是地面，人物站不上去（用户 2026-11-16）。
+    密度：每 120px 一个点（早期 8px 的 1/15，用户反馈「密度低十几倍」）。
     相机位置由站位反推（Camera.cpp: target = 玩家 − 视口/2），所以这份点集就是
     「相机可达集」的生成元 —— 不从 foothold 采样就会造出玩家站不到的构图。
+    phase：每段采样起始偏移，换布局时抖一下点位，多布局不重复。
     """
     pts: list = []
     for f in mj.get("foothold", []):
         x1, y1 = float(f["x1"]), float(f["y1"])
         x2, y2 = float(f["x2"]), float(f["y2"])
-        n = max(1, int(abs(x2 - x1) // step))
-        for i in range(n + 1):
-            t = i / n
+        if abs(x2 - x1) < 16:
+            continue                              # 垂直崖壁：人物站不了
+        L = abs(x2 - x1)
+        d = phase % step
+        if d > L:
+            d = L / 2.0
+        while d <= L:
+            t = d / L
             pts.append((x1 + (x2 - x1) * t, y1 + (y2 - y1) * t))
+            d += step
     for lr in mj.get("ladderRope", []):
         x = float(lr["x"])
         y1, y2 = float(lr["y1"]), float(lr["y2"])
         lo, hi = (y1, y2) if y1 <= y2 else (y2, y1)
-        y = lo
+        d = (phase + x) % step                    # 每条绳相位随 x 错开
+        if d > hi - lo:
+            d = (hi - lo) / 2.0
+        y = lo + d
         while y <= hi:
             pts.append((x, y))
-            y += 16
+            y += step
     return pts
+
+
+def _visible_stands(pts: list, base_img, minx: float, miny: float) -> list:
+    """用预览图 alpha 过滤「隐形平台」上的站位点。
+
+    部分 foothold 是看不见的碰撞面（画面上是黑背景），点放上去红点/人物都会
+    悬空 —— 硬性要求红点必须在看得见的地面上（用户 2026-11-16）。判据：
+    脚底下 (x±2, y..y+5) 里至少 3 个不透明像素（薄平台也能过，黑区全透明被删）。
+    """
+    if base_img is None:
+        return pts
+    W, H = base_img.size
+    alpha = base_img.getchannel("A").load()
+    out = []
+    for (wx, wy) in pts:
+        x, y = int(round(wx - minx)), int(round(wy - miny))
+        if not (0 <= x < W and 0 <= y < H):
+            continue
+        hit = 0
+        for dy in range(6):
+            for dx in (-2, 0, 2):
+                px, py = x + dx, y + dy
+                if 0 <= px < W and 0 <= py < H and alpha[px, py] > 40:
+                    hit += 1
+        if hit >= 3:
+            out.append((wx, wy))
+    return out
 
 
 def _yolo_cam(px: float, py: float, vr: dict | None, W: int, H: int) -> tuple:
@@ -5292,59 +5331,36 @@ def _yolo_cam(px: float, py: float, vr: dict | None, W: int, H: int) -> tuple:
 
 
 def _yolo_views(mj: dict, vr, minx: float, miny: float, iw: int, ih: int,
-                n: int, sizes: list, seed: str, anchors=()) -> list:
-    """采 n 个相机窗口 [(left, top, W, H, px, py)]（预览图像素坐标）。
+                sizes: list, seed: str, base_img=None, anchors=()) -> list:
+    """按地面尺寸自动均布相机窗口 [(left, top, W, H, px, py)]（预览图像素坐标）。
 
-    ① 锚点构图（玩家居中）占 1/4：真实画面里自己几乎总在画面中央；
-    ② 其余从「站位 → 相机 → VR 钳制」的候选里做贪心最远点采样 —— 相机步进 1px
-       就是上千个几乎相同的窗口，不铺开只是重复样本，还会让验证指标虚高。
-
-    后两位 (px, py) 是产生这个窗口的玩家站位（世界坐标）：相机被 VR 钳到贴边时
-    窗口中心≠人物位置（客户端真实行为），前端红点要标在人物脚底而不是窗口中心。
+    窗口数量不用参数指定：站位点每 120px 一个、过掉隐形平台，剩下的每个点
+    各出一个 1366×768 视窗（相机公式 + VR 钳制）—— 点必然踩在看得见的地面/
+    绳子上，且沿地面均匀分布（用户 2026-11-16）。phase 由 seed 决定，多布局
+    点位自然错开。后两位 (px, py) 是产生这个窗口的玩家站位（世界坐标）：
+    相机被 VR 钳到贴边时窗口中心≠人物位置（客户端真实行为），前端红点标在
+    人物脚底。
     """
     rng = random.Random(f"yolo:view:{seed}")
-    pts = _yolo_stand_points(mj)
+    pts = _visible_stands(_yolo_stand_points(mj, 120, rng.uniform(0, 120)),
+                          base_img, minx, miny)
     if not pts:
         return []
-    if len(pts) > 4000:
-        pts = rng.sample(pts, 4000)
 
     def _cl(v, lo, hi):
         return max(lo, min(v, hi)) if hi >= lo else lo
 
     views: list = []
-    for (ax, ay) in list(anchors)[: max(1, n // 4)]:
+    for (ax, ay) in list(anchors)[:4]:
         W, H = rng.choice(sizes)
         views.append((_cl(int(ax - W / 2), 0, iw - W),
                       _cl(int(ay - H / 2), 0, ih - H), W, H, ax, ay))
-    if len(views) >= n:
-        return views[:n]
-    pool, seen = [], set()
-    for (W, H) in sizes:
-        for (px, py) in pts:
-            vx, vy = _yolo_cam(px, py, vr, W, H)
-            l = _cl(round(vx - minx), 0, iw - W)
-            t = _cl(round(vy - miny), 0, ih - H)
-            k = (l // 24, t // 24, W)
-            if k in seen:
-                continue
-            seen.add(k)
-            pool.append((l, t, W, H, px, py))
-    if not pool:
-        return views
-    first = rng.choice(pool)
-    picked = [first]
-    dist = [(p[0] - first[0]) ** 2 + (p[1] - first[1]) ** 2 for p in pool]
-    for _ in range(min(n - len(views), len(pool))):
-        i = max(range(len(pool)), key=lambda j: dist[j])
-        if dist[i] <= 0:
-            break
-        picked.append(pool[i])
-        pi = pool[i]
-        dist = [min(d, (pool[j][0] - pi[0]) ** 2 + (pool[j][1] - pi[1]) ** 2)
-                for j, d in enumerate(dist)]
-    views += picked
-    return views[:n]
+    for (px, py) in pts:
+        W, H = rng.choice(sizes)
+        vx, vy = _yolo_cam(px, py, vr, W, H)
+        views.append((_cl(round(vx - minx), 0, iw - W),
+                      _cl(round(vy - miny), 0, ih - H), W, H, px, py))
+    return views
 
 
 def _yolo_window(full, backs, tex, left: int, top: int, W: int, H: int,
@@ -5408,8 +5424,9 @@ def _yolo_montage(samples: list, path: Path) -> None:
     out.save(path, quality=90)
 
 
-def _yolo_windows_query(mid: str, n: int = 8, size: str = "", cls: bool = False) -> dict:
-    """手动精调模式：给一张图采「建议相机窗口」+ VR 合法范围（都是预览图像素坐标）。
+def _yolo_windows_query(mid: str, size: str = "", cls: bool = False) -> dict:
+    """手动精调模式：给一张图按地面自动均布「建议相机窗口」+ VR 合法范围
+    （都是预览图像素坐标）。
 
     前端拿这份做初始框，用户拖/微调后把最终窗口列表传回 /api/yolo/export
     （windows 参数），导出时不再自动采样。
@@ -5430,8 +5447,10 @@ def _yolo_windows_query(mid: str, n: int = 8, size: str = "", cls: bool = False)
         W, H = (int(x) for x in str(size or "1366x768").lower().split("x"))
     except Exception:                          # noqa: BLE001
         W, H = VIEW_W, VIEW_H
-    views = _yolo_views(mj, vr, minx, miny, iw, ih, max(1, min(60, int(n or 8))),
-                        [(W, H)], f"{mid}:edit", ())
+    from PIL import Image
+    base = Image.open(outdir / "preview_nobg.png")
+    views = _yolo_views(mj, vr, minx, miny, iw, ih, [(W, H)], f"{mid}:edit",
+                        base, ())
     pps = [[round(v[4] - minx), round(v[5] - miny)] if len(v) >= 6 else None
            for v in views]
     vrpx = None
@@ -5481,7 +5500,7 @@ def _yolo_composite(mid: str, cls: bool, seed: str):
     return val
 
 
-def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
+def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
               val_pct: int, flags: dict, out_root: Path,
               windows: dict | None = None, cover: bool = False) -> None:
     from PIL import Image
@@ -5489,7 +5508,6 @@ def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
     run = runs / time.strftime("%Y%m%d-%H%M%S")
     d_tr, d_va = run / "images" / "train", run / "images" / "val"
     l_tr, l_va = run / "labels" / "train", run / "labels" / "val"
-    _nw = lambda mid: len((windows or {}).get(mid) or []) or per_map  # noqa: E731
     try:
         ws = _need_ws()
         R = _render_mod()
@@ -5497,10 +5515,11 @@ def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
         for p in (d_tr, d_va, l_tr, l_va):
             p.mkdir(parents=True, exist_ok=True)
         with _ylock:
+            # 窗口数逐图逐布局才知道（地面长度决定），边跑边累计
             _yjob.update(running=True, error="", stage="准备", done=0,
-                         total=0 if cover else sum(_nw(m) for m in maps) * layouts,
-                         images=0, maps=0, boxes={k: 0 for k in YOLO_CLASSES},
-                         failed=[], out=str(run), url="")
+                         total=0, images=0, maps=0,
+                         boxes={k: 0 for k in YOLO_CLASSES}, failed=[],
+                         out=str(run), url="")
         samples: list = []
         n_img = 0
         counts = {k: 0 for k in YOLO_CLASSES}
@@ -5568,15 +5587,13 @@ def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
                     # 铺满整图（用户 2026-11-16：「地图空间原原本本完完整整照搬进
                     # 训练集」）：网格窗口铺满整张预览图，右/下贴边的窗口左移/上移
                     # 补齐不留死角；用所选分辨率（sizes[0]）保证窗口就是真实客户端
-                    # 视口大小。总张数要逐图渲染才知道，边跑边累计。
+                    # 视口大小。
                     W0, H0 = sizes[0]
                     cols = max(1, math.ceil(iw / W0))
                     rows = max(1, math.ceil(ih / H0))
                     views = [(min(c * W0, max(0, iw - W0)),
                               min(r * H0, max(0, ih - H0)), W0, H0)
                              for r in range(rows) for c in range(cols)]
-                    with _ylock:
-                        _yjob["total"] = _yjob.get("total", 0) + len(views)
                 elif fixed:
                     # 手动精调模式：窗口是用户在前端拖好的，只做图像边界钳制
                     # （VR 合法性前端已用红框提示，导出尊重用户的最终选择）
@@ -5587,8 +5604,11 @@ def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
                         t = max(0, min(int(t), ih - H2))
                         views.append((l, t, W2, H2))
                 else:
-                    views = _yolo_views(mj, vr, minx, miny, iw, ih, per_map, sizes,
-                                        f"{mid}:l{li}", anchors)
+                    # 自动模式：按地面均布站位点，每点一个视窗（数量由地面长度定）
+                    views = _yolo_views(mj, vr, minx, miny, iw, ih, sizes,
+                                        f"{mid}:l{li}", base, anchors)
+                with _ylock:
+                    _yjob["total"] = _yjob.get("total", 0) + len(views)
                 for vi, v in enumerate(views):
                     if _ystop.is_set():
                         break
@@ -5640,7 +5660,6 @@ def c_yolo_export(body: dict) -> dict:
     with _ylock:
         if _yjob["running"]:
             raise CliError("上一轮还在跑：先等它结束或点「停止」", 1)
-    per_map = max(1, min(120, int(body.get("per_map") or 8)))
     layouts = max(1, min(8, int(body.get("layouts") or 2)))
     val_pct = max(0, min(40, int(body.get("val") or 15)))
     res = str(body.get("size") or "1366x768")
@@ -5674,19 +5693,16 @@ def c_yolo_export(body: dict) -> dict:
     mode = "cls" if body.get("cls") else "mod"
     cover = bool(body.get("cover"))          # 铺满整图：网格窗口盖住每张图全部画面
     _ystop.clear()
-    _nw = lambda mid: len(windows.get(mid) or []) or per_map     # noqa: E731
-    total = 0 if cover else sum(_nw(m) for m in maps) * layouts
     with _ylock:
         _yjob.update(running=True, error="", stage="启动", done=0,
-                     total=total, log=[], out="", url="",
+                     total=0, log=[], out="", url="",
                      images=0, maps=0, boxes={k: 0 for k in YOLO_CLASSES},
                      failed=[])
     threading.Thread(target=_yolo_run,
-                     args=(maps, mode, per_map, layouts, sizes, val_pct, flags,
+                     args=(maps, mode, layouts, sizes, val_pct, flags,
                            EXPORTS / "yolo", windows, cover), daemon=True).start()
     return {"started": True, "maps": len(maps),
-            "total": total,
-            "per_map": per_map, "layouts": layouts, "sizes": sizes}
+            "total": 0, "layouts": layouts, "sizes": sizes}
 
 
 def c_yolo_stop() -> dict:
@@ -5856,7 +5872,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/yolo/windows":
             qs = urllib.parse.parse_qs(u.query)
             self._api(_yolo_windows_query,
-                      (qs.get("id") or [""])[0], (qs.get("n") or ["8"])[0],
+                      (qs.get("id") or [""])[0],
                       (qs.get("size") or [""])[0],
                       (qs.get("cls") or [""])[0] in ("1", "true", "yes"))
         elif path == "/api/yolo/composite":
