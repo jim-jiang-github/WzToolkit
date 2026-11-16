@@ -2,8 +2,8 @@
 """wztool —— WzToolkit 命令行工具（CLI-first，供人类与其他程序/AI 直接调用）。
 
 功能：导入 .wz → 转成 .nx → 浏览导出怪物素材（逐帧动画 PNG + 锚点 manifest）与地图
-（map.json / 贴图 / 渲染预览 / 客户端画面窗口 / 小地图 / 截图找图）。
-不含训练集、挂机之类的功能。
+（map.json / 贴图 / 渲染预览 / 客户端画面窗口 / 小地图 / 截图找图）；
+另有 YOLO 训练集合成（游戏画面帧 + 精确标注，相机按客户端模型采样）。
 所有子命令都支持 --json 机器可读输出；退出码：0 成功，1 业务错误，2 参数错误。
 
 常用示例::
@@ -3807,9 +3807,12 @@ def c_dmg_export_to(set_id: str) -> dict:
     return {"dir": str(outdir), "count": len(files)}
 
 
-def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
+def _composite_mobs(ws: Path, outdir: Path | None, mj: dict, base_png, seed: str,
                    density: int = 1, no_bg: bool = False):
     """把这张图的怪随机贴到地面上，产出 preview_mobs.png（脚底落在 foothold 地面）。
+
+    base_png 可以是路径，也可以直接是 PIL Image（YOLO 训练集批量合成用：
+    outdir=None 时不落盘，原地合成后把 Image 返回，省掉每批一次的几十 MB 写盘）。
 
     返回 (png路径, 摆放列表)：places 每项 {kind, x, y, w, h} 是该怪在预览图上的
     精确像素框（x,y=左上角）。
@@ -3832,7 +3835,7 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
                 if meta.get(str(l.get("id", "")).lstrip("0"), {})
                 .get("tier", "normal") != "big"]
     if not life:
-        return None, []
+        return (base_png if outdir is None else None), []
     R = _render_mod()
     minx, miny, bw, bh = R.map_bounds(mj)
     minx -= 40; miny -= 40; bw += 80; bh += 80
@@ -3854,8 +3857,9 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
             frames[k] = ka
             frames_flip[k] = kf
     if not frames:
-        return None, []
-    im = Image.open(base_png).convert("RGBA")
+        return (base_png if outdir is None else None), []
+    im = (base_png if isinstance(base_png, Image.Image)
+          else Image.open(base_png).convert("RGBA"))
     rng = random.Random(f"{seed}:d{density}")
     keys = list(frames)
     fhs = [(float(f["x1"]), float(f["y1"]), float(f["x2"]), float(f["y2"]))
@@ -3916,12 +3920,14 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
             places.append({"kind": kind, "state": act,
                            "x": round(px), "y": round(py),
                            "w": img.width, "h": img.height})
+    if outdir is None:                     # YOLO 批量合成：不落盘，直接返回图
+        return im, places
     out = outdir / ("preview_mobs_nobg.png" if no_bg else "preview_mobs.png")
     (im if no_bg else im.convert("RGB")).save(out)   # no_bg 保留透明通道
     return out, places
 
 
-def _composite_drops(outdir: Path, mj: dict, base_png: Path, seed: str,
+def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
                      no_bg: bool = False):
     """在合成图（通常已带怪）上再撒一层**关联掉落物**。
 
@@ -3938,10 +3944,11 @@ def _composite_drops(outdir: Path, mj: dict, base_png: Path, seed: str,
     from PIL import Image
     life = [l for l in mj.get("life", []) if l.get("type") == "m"]
     if not life or not CLS_ICONS.is_dir():
-        return None, []
+        return (base_png if outdir is None else None), []
     drops = _drops()
     rng = random.Random(f"{seed}:drops")
-    im = Image.open(base_png).convert("RGBA")
+    im = (base_png if isinstance(base_png, Image.Image)
+          else Image.open(base_png).convert("RGBA"))
     minx = miny = None
     # 与渲染一致的画布原点：读预览旁的 .meta 太绕，直接用 map_bounds+pad 重算
     R = _render_mod()
@@ -4026,7 +4033,9 @@ def _composite_drops(outdir: Path, mj: dict, base_png: Path, seed: str,
                 gy = gy0
             _place(ic, x, gy, e["i"])
     if not places:
-        return None, []
+        return im, []
+    if outdir is None:
+        return im, places
     out = outdir / ("preview_drops_nobg.png" if no_bg else "preview_drops.png")
     (im if no_bg else im.convert("RGB")).save(out)
     return out, places
@@ -4120,7 +4129,7 @@ def c_char_players() -> dict:
     return {"players": out}
 
 
-def _composite_players(outdir: Path, mj: dict, base_png: Path, seed: str,
+def _composite_players(outdir: Path | None, mj: dict, base_png, seed: str,
                        no_bg: bool = False):
     """把 1~5 个随机玩家贴到地面上，产出 preview_players.png。
 
@@ -4135,11 +4144,12 @@ def _composite_players(outdir: Path, mj: dict, base_png: Path, seed: str,
     fhs = [(float(f["x1"]), float(f["y1"]), float(f["x2"]), float(f["y2"]))
            for f in mj.get("foothold", [])]
     if not fhs:
-        return None, []
+        return (base_png if outdir is None else None), []
     R = _render_mod()
     bx, by, bw, bh = R.map_bounds(mj)
     minx, miny = bx - 40, by - 40
-    im = Image.open(base_png).convert("RGBA")
+    im = (base_png if isinstance(base_png, Image.Image)
+          else Image.open(base_png).convert("RGBA"))
     rng = random.Random(f"{seed}:players")
     try:                                       # 客户端字体是 12px 宋体位图字
         f = ImageFont.truetype("C:/Windows/Fonts/simsun.ttc", 12)
@@ -4180,7 +4190,7 @@ def _composite_players(outdir: Path, mj: dict, base_png: Path, seed: str,
         places.append({"name": look["name"], "x": px, "y": py,
                        "w": img.width, "h": img.height})
     if not places:
-        return None, []
+        return im, []
     if f is not None and tags:
         # 客户端 NAMETAG 背板 = 黑 60% 半透明圆角小条（GraphicsGL.cpp:976）。
         # ImageDraw 直接写像素不混合，背板和文字都画在独立图层上再一次性
@@ -4194,6 +4204,8 @@ def _composite_players(outdir: Path, mj: dict, base_png: Path, seed: str,
             td.text((tx, ty), nm, font=f, fill=(255, 255, 255, 255),
                     stroke_width=1, stroke_fill=(0, 0, 0, 255), anchor="ma")
         im.alpha_composite(tag_layer)
+    if outdir is None:
+        return im, places
     out = outdir / ("preview_players_nobg.png" if no_bg else "preview_players.png")
     (im if no_bg else im.convert("RGB")).save(out)
     return out, places
@@ -4597,6 +4609,41 @@ def _view_origin(view: tuple | None, minx: float, miny: float,
     return round(vx), round(vy)
 
 
+def _map_vr(outdir: Path, mj: dict) -> dict | None:
+    """这张图的可视范围（世界坐标）：客户端 MapInfo.cpp 读 info 的
+    VRLeft/Right/Top/Bottom，相机永远钳在里面（Camera.cpp:58-66）。
+
+    没配 VR 时的兜底不是裸 foothold 包围盒——客户端 Footholdtree.cpp:91-92 是
+    walls=(左+25,右-25)、borders=(顶-300,底+100)：地面贴图在最低 foothold 下面
+    还有约 100px 厚度，不加余量窗口底边正好钳在 foothold 线上，地面边缘被切掉
+    （玩家实测 102020200）。
+    """
+    info = mj.get("info") or {}
+    try:
+        return {"left": int(info["VRLeft"]), "right": int(info["VRRight"]),
+                "top": int(info["VRTop"]), "bottom": int(info["VRBottom"])}
+    except (KeyError, TypeError, ValueError):
+        pass
+    if not mj.get("foothold"):
+        return None
+    xs = [v for f in mj["foothold"] for v in (f["x1"], f["x2"])]
+    ys = [v for f in mj["foothold"] for v in (f["y1"], f["y2"])]
+    # 下边界：foothold+100（客户端兜底）与地面贴图实际下边缘取较小——
+    # +100 的余量是给「贴图比最低 foothold 低一大截」的图的，最低
+    # foothold 就贴着贴图边的图（101030400 岩山）会把视窗推进地面
+    # 下面的天空里，游戏里视角到不了那里。
+    # 保险：最多钳到最低 foothold+10，最低平台本身永远得进视窗
+    # （+10 而不是 +20：岩山这类图的内容下缘只比 foothold 低 16px，
+    # 给多了又把视窗推进毛边缝里）
+    bot = max(ys) + 100
+    cb = _content_bottom(outdir, mj)
+    if cb is not None:
+        bot = min(bot, cb)
+    bot = max(bot, max(ys) + 10)
+    return {"left": min(xs) + 25, "right": max(xs) - 25,
+            "top": min(ys) - 300, "bottom": bot}
+
+
 def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: int,
                       view: tuple | None, visited: set,
                       seed: str | None = None,
@@ -4652,34 +4699,7 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                "lv": _kind_lv(k),
                "tier": meta.get(k, {}).get("tier", "normal")}
               for l in life]
-    # 可视范围：客户端 MapInfo.cpp 读 info 的 VRLeft/Right/Top/Bottom，相机永远
-    # 钳在里面（Camera.cpp:58-66）；没配 VR 时的兜底不是裸 foothold 包围盒——
-    # 客户端 Footholdtree.cpp:91-92 是 walls=(左+25,右-25)、
-    # borders=(顶-300,底+100)：地面贴图在最低 foothold 下面还有约 100px 厚度，
-    # 不加余量窗口底边正好钳在 foothold 线上，地面边缘被切掉（玩家实测 102020200）
-    info = mj.get("info") or {}
-    vr = None
-    try:
-        vr = {"left": int(info["VRLeft"]), "right": int(info["VRRight"]),
-              "top": int(info["VRTop"]), "bottom": int(info["VRBottom"])}
-    except (KeyError, TypeError, ValueError):
-        if mj.get("foothold"):
-            xs = [v for f in mj["foothold"] for v in (f["x1"], f["x2"])]
-            ys = [v for f in mj["foothold"] for v in (f["y1"], f["y2"])]
-            # 下边界：foothold+100（客户端兜底）与地面贴图实际下边缘取较小——
-            # +100 的余量是给「贴图比最低 foothold 低一大截」的图的，最低
-            # foothold 就贴着贴图边的图（101030400 岩山）会把视窗推进地面
-            # 下面的天空里，游戏里视角到不了那里。
-            # 保险：最多钳到最低 foothold+10，最低平台本身永远得进视窗
-            # （+10 而不是 +20：岩山这类图的内容下缘只比 foothold 低 16px，
-            # 给多了又把视窗推进毛边缝里）
-            bot = max(ys) + 100
-            cb = _content_bottom(outdir, mj)
-            if cb is not None:
-                bot = min(bot, cb)
-            bot = max(bot, max(ys) + 10)
-            vr = {"left": min(xs) + 25, "right": max(xs) - 25,
-                  "top": min(ys) - 300, "bottom": bot}
+    vr = _map_vr(outdir, mj)
     result = {"dir": str(outdir), "preview": size,
               "no_bg": bool(no_bg),
               "preview_path": str(png),
@@ -5077,6 +5097,356 @@ def c_clear_cache() -> dict:
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- YOLO 训练集
+# 合成「客户端画面帧 + YOLO 标注」：地形/怪物/掉落/玩家全部由数据生成，标注
+# 直接来自合成时的世界坐标（零人工标注）。相机位置不是自由变量 —— 按客户端
+# 相机模型采样（foothold 站位 → Camera.cpp 的 target=玩家−视口/2 → VR 钳制），
+# 所以构图（含贴边、半空、玩家偏心）和真实游戏一致。
+
+YOLO_CLASSES = ["mob", "boss", "drop", "player"]
+_yjob: dict = {"running": False, "error": "", "stage": "", "done": 0, "total": 0,
+               "log": [], "out": "", "url": "", "images": 0, "maps": 0,
+               "boxes": {k: 0 for k in YOLO_CLASSES}, "failed": []}
+_ylock = threading.Lock()
+_ystop = threading.Event()
+
+
+def _yolo_log(msg: str) -> None:
+    with _ylock:
+        _yjob["log"] = (_yjob["log"] + [msg])[-200:]
+
+
+def _yolo_tiers() -> dict:
+    """mob id → tier（normal/boss/big）：普通怪和 BOSS 在训练集里分两类。"""
+    mobnx = _nx_dir() / "Mob.nx"
+    if not mobnx.exists():
+        return {}
+    try:
+        return {m["id"]: m.get("tier", "normal") for m in mob_meta(mobnx)}
+    except Exception:                          # noqa: BLE001
+        return {}
+
+
+def _yolo_stand_points(mj: dict, step: int = 8) -> list:
+    """玩家能站的位置：foothold 段按 step 采样（斜坡线性插值）+ 绳梯每 16px 一个。
+
+    相机位置由站位反推（Camera.cpp: target = 玩家 − 视口/2），所以这份点集就是
+    「相机可达集」的生成元 —— 不从 foothold 采样就会造出玩家站不到的构图。
+    """
+    pts: list = []
+    for f in mj.get("foothold", []):
+        x1, y1 = float(f["x1"]), float(f["y1"])
+        x2, y2 = float(f["x2"]), float(f["y2"])
+        n = max(1, int(abs(x2 - x1) // step))
+        for i in range(n + 1):
+            t = i / n
+            pts.append((x1 + (x2 - x1) * t, y1 + (y2 - y1) * t))
+    for lr in mj.get("ladderRope", []):
+        x = float(lr["x"])
+        y1, y2 = float(lr["y1"]), float(lr["y2"])
+        lo, hi = (y1, y2) if y1 <= y2 else (y2, y1)
+        y = lo
+        while y <= hi:
+            pts.append((x, y))
+            y += 16
+    return pts
+
+
+def _yolo_cam(px: float, py: float, vr: dict | None, W: int, H: int) -> tuple:
+    """客户端相机：目标 = 玩家 − 视口/2，再钳进 VR（Camera.cpp:58-66）。"""
+    vx, vy = px - W / 2, py - H / 2
+    if vr:
+        if vr["right"] - vr["left"] >= W:
+            vx = min(max(vx, vr["left"]), vr["right"] - W)
+        else:
+            vx = (vr["left"] + vr["right"] - W) / 2
+        if vr["bottom"] - vr["top"] >= H:
+            vy = min(max(vy, vr["top"]), vr["bottom"] - H)
+        else:
+            vy = (vr["top"] + vr["bottom"] - H) / 2
+    return vx, vy
+
+
+def _yolo_views(mj: dict, vr, minx: float, miny: float, iw: int, ih: int,
+                n: int, sizes: list, seed: str, anchors=()) -> list:
+    """采 n 个相机窗口 [(left, top, W, H)]（预览图像素坐标）。
+
+    ① 锚点构图（玩家居中）占 1/4：真实画面里自己几乎总在画面中央；
+    ② 其余从「站位 → 相机 → VR 钳制」的候选里做贪心最远点采样 —— 相机步进 1px
+       就是上千个几乎相同的窗口，不铺开只是重复样本，还会让验证指标虚高。
+    """
+    rng = random.Random(f"yolo:view:{seed}")
+    pts = _yolo_stand_points(mj)
+    if not pts:
+        return []
+    if len(pts) > 4000:
+        pts = rng.sample(pts, 4000)
+
+    def _cl(v, lo, hi):
+        return max(lo, min(v, hi)) if hi >= lo else lo
+
+    views: list = []
+    for (ax, ay) in list(anchors)[: max(1, n // 4)]:
+        W, H = rng.choice(sizes)
+        views.append((_cl(int(ax - W / 2), 0, iw - W),
+                      _cl(int(ay - H / 2), 0, ih - H), W, H))
+    if len(views) >= n:
+        return views[:n]
+    pool, seen = [], set()
+    for (W, H) in sizes:
+        for (px, py) in pts:
+            vx, vy = _yolo_cam(px, py, vr, W, H)
+            l = _cl(round(vx - minx), 0, iw - W)
+            t = _cl(round(vy - miny), 0, ih - H)
+            k = (l // 24, t // 24, W)
+            if k in seen:
+                continue
+            seen.add(k)
+            pool.append((l, t, W, H))
+    if not pool:
+        return views
+    first = rng.choice(pool)
+    picked = [first]
+    dist = [(p[0] - first[0]) ** 2 + (p[1] - first[1]) ** 2 for p in pool]
+    for _ in range(min(n - len(views), len(pool))):
+        i = max(range(len(pool)), key=lambda j: dist[j])
+        if dist[i] <= 0:
+            break
+        picked.append(pool[i])
+        pi = pool[i]
+        dist = [min(d, (pool[j][0] - pi[0]) ** 2 + (pool[j][1] - pi[1]) ** 2)
+                for j, d in enumerate(dist)]
+    views += picked
+    return views[:n]
+
+
+def _yolo_window(full, backs, tex, left: int, top: int, W: int, H: int,
+                 minx: float, miny: float):
+    """从整图合成结果里裁一个客户端窗口：先画背景视差层（屏幕空间），再贴前景。"""
+    from PIL import Image
+    R = _render_mod()
+    canvas = Image.new("RGBA", (W, H), (16, 18, 24, 255))
+    if backs:
+        R.draw_backs_view(canvas, backs, tex,
+                          (left + minx) + W / 2, (top + miny) + H / 2,
+                          W, H, front=0)
+    canvas.paste(full, (-left, -top), full)
+    return canvas.convert("RGB")
+
+
+def _yolo_label(boxes: list, left: int, top: int, W: int, H: int,
+                min_vis: float = 0.25) -> list:
+    """世界（合成图）坐标框 → YOLO 归一化框；可见面积 <25% 的不标（露太少学不了）。"""
+    out = []
+    for cls, p in boxes:
+        x0, y0 = p["x"] - left, p["y"] - top
+        x1, y1 = x0 + p["w"], y0 + p["h"]
+        ix0, iy0 = max(0, x0), max(0, y0)
+        ix1, iy1 = min(W, x1), min(H, y1)
+        w, h = ix1 - ix0, iy1 - iy0
+        if w < 3 or h < 3:
+            continue
+        if w * h < min_vis * max(1, p["w"] * p["h"]):
+            continue
+        out.append((cls, (ix0 + ix1) / 2 / W, (iy0 + iy1) / 2 / H, w / W, h / H))
+    return out
+
+
+def _yolo_montage(samples: list, path: Path) -> None:
+    """抽检拼图：画了框的缩略图网格，肉眼确认标签/锚点没偏。"""
+    from PIL import Image, ImageDraw, ImageFont
+    if not samples:
+        return
+    tw = 320
+    tiles = []
+    for (img, lbl, W, H) in samples[:16]:
+        s = tw / W
+        th = max(1, round(H * s))
+        th_img = img.resize((tw, th), Image.LANCZOS)
+        d = ImageDraw.Draw(th_img)
+        colors = [(255, 96, 96), (255, 176, 32), (64, 208, 255), (120, 255, 140)]
+        for (c, cx, cy, bw, bh) in lbl:
+            x0 = (cx - bw / 2) * tw
+            x1 = (cx + bw / 2) * tw
+            y0 = (cy - bh / 2) * th
+            y1 = (cy + bh / 2) * th
+            d.rectangle((x0, y0, x1, y1), outline=colors[c % 4], width=2)
+        tiles.append(th_img)
+    cols = 4
+    rows = (len(tiles) + cols - 1) // cols
+    ch = max(t.height for t in tiles)
+    out = Image.new("RGB", (cols * tw, rows * ch), (18, 20, 24))
+    for i, t in enumerate(tiles):
+        out.paste(t, ((i % cols) * tw, (i // cols) * ch))
+    out.save(path, quality=90)
+
+
+def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
+              val_pct: int, flags: dict, out_root: Path) -> None:
+    from PIL import Image
+    runs = out_root
+    run = runs / time.strftime("%Y%m%d-%H%M%S")
+    d_tr, d_va = run / "images" / "train", run / "images" / "val"
+    l_tr, l_va = run / "labels" / "train", run / "labels" / "val"
+    try:
+        ws = _need_ws()
+        R = _render_mod()
+        tiers = _yolo_tiers()
+        for p in (d_tr, d_va, l_tr, l_va):
+            p.mkdir(parents=True, exist_ok=True)
+        with _ylock:
+            _yjob.update(running=True, error="", stage="准备", done=0,
+                         total=len(maps) * per_map * layouts, images=0, maps=0,
+                         boxes={k: 0 for k in YOLO_CLASSES}, failed=[],
+                         out=str(run), url="")
+        samples: list = []
+        n_img = 0
+        counts = {k: 0 for k in YOLO_CLASSES}
+        for ki, mid in enumerate(maps):
+            if _ystop.is_set():
+                _yolo_log("已停止")
+                break
+            _yjob["stage"] = f"地图 {mid}（{ki + 1}/{len(maps)}）"
+            try:
+                d = c_map_export(mid, preview=True, cls=(mode == "cls"), no_bg=True)
+                outdir = Path(d["dir"])
+                mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
+                ov = d.get("overlay") or {}
+                minx, miny = float(ov["minx"]), float(ov["miny"])
+                iw, ih = int(ov["w"]), int(ov["h"])
+                if not mj.get("foothold"):
+                    _yolo_log(f"跳过 {mid}：没有 foothold")
+                    continue
+                base = Image.open(outdir / "preview_nobg.png").convert("RGBA")
+                backs = mj.get("back") or []
+                tex = R.TexStore([str(outdir / "img")])
+                vr = d.get("vr") or _map_vr(outdir, mj)
+            except Exception as e:                     # noqa: BLE001
+                _yjob["failed"].append([mid, str(e)])
+                _yolo_log(f"跳过 {mid}：{e}")
+                continue
+            # train/val 按「整张地图」划分：同一张图的相邻窗口几乎一样，随机切
+            # 窗口会泄漏、验证 mAP 虚高。用 id 哈希而不是 id%100 —— 怀旧服页名
+            # 大量以 0000 结尾，取尾两位会整段整段落进同一侧
+            split_val = (int(hashlib.md5(mid.encode()).hexdigest()[:8], 16) % 100
+                         < val_pct) if mid.isdigit() else False
+            for li in range(layouts):
+                if _ystop.is_set():
+                    break
+                lay = f"{mid}:l{li}"
+                im = base.copy()
+                boxes: list = []
+                pls: list = []
+                try:
+                    got, mobs = _composite_mobs(ws, None, mj, im, lay, 1)
+                    im = got if got is not None else im
+                    if flags["drop"]:
+                        got, pls_d = _composite_drops(None, mj, im, lay)
+                        im = got if got is not None else im
+                        boxes += [(2, p) for p in pls_d]
+                    if flags["player"]:
+                        got, pls = _composite_players(None, mj, im, lay)
+                        im = got if got is not None else im
+                        boxes += [(3, p) for p in pls]
+                except Exception as e:                 # noqa: BLE001
+                    _yjob["failed"].append([f"{mid}l{li}", str(e)])
+                    _yolo_log(f"{mid} 布局 {li} 合成失败：{e}")
+                    continue
+                if flags["mob"] or flags["boss"]:
+                    for p in mobs:
+                        t = tiers.get(str(p.get("kind")), "normal")
+                        if t == "boss":
+                            if flags["boss"]:
+                                boxes.append((1, p))
+                        elif flags["mob"]:
+                            boxes.append((0, p))
+                anchors = [(p["x"] + p["w"] // 2, p["y"] + p["h"]) for p in pls]
+                views = _yolo_views(mj, vr, minx, miny, iw, ih, per_map, sizes,
+                                    f"{mid}:l{li}", anchors)
+                for vi, (l, t, W, H) in enumerate(views):
+                    if _ystop.is_set():
+                        break
+                    img = _yolo_window(im, backs, tex, l, t, W, H, minx, miny)
+                    name = f"{mid}_{li:02d}_{vi:03d}"
+                    lbl = _yolo_label(boxes, l, t, W, H)
+                    img.save((d_va if split_val else d_tr) / f"{name}.jpg", quality=88)
+                    with open((l_va if split_val else l_tr) / f"{name}.txt", "w",
+                              encoding="utf-8") as fh:
+                        for (c, cx, cy, bw, bh) in lbl:
+                            fh.write(f"{c} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+                    n_img += 1
+                    for (c, *_rest) in lbl:
+                        counts[YOLO_CLASSES[c]] += 1
+                    if len(samples) < 16 and vi % max(1, per_map // 4) == 0:
+                        samples.append((img, lbl, W, H))
+                    _yjob["done"] = _yjob.get("done", 0) + 1
+                with _ylock:
+                    _yjob["images"] = n_img
+                    _yjob["boxes"] = dict(counts)
+                    _yjob["maps"] = ki + 1
+        # dataset.yaml / classes.txt / 抽检图
+        (run / "classes.txt").write_text("\n".join(YOLO_CLASSES) + "\n", encoding="utf-8")
+        (run / "dataset.yaml").write_text(
+            f"path: {run.as_posix()}\ntrain: images/train\nval: images/val\n"
+            f"nc: {len(YOLO_CLASSES)}\nnames: {json.dumps(YOLO_CLASSES)}\n",
+            encoding="utf-8")
+        _yolo_montage(samples, run / "_preview.jpg")
+        url = _res_url(run / "_preview.jpg") if (run / "_preview.jpg").exists() else ""
+        with _ylock:
+            _yjob.update(running=False, stage="完成", url=url)
+        _yolo_log(f"完成：{n_img} 张图 / {sum(counts.values())} 个框 → {run}")
+    except Exception as e:                         # noqa: BLE001
+        with _ylock:
+            _yjob.update(running=False, error=str(e), stage="失败")
+        _yolo_log(f"失败：{e}")
+
+
+def c_yolo_status() -> dict:
+    with _ylock:
+        return {**_yjob, "log": _yjob["log"][-60:]}
+
+
+def c_yolo_export(body: dict) -> dict:
+    maps = [str(m).strip() for m in (body.get("maps") or []) if str(m).strip()]
+    if not maps:
+        raise CliError("maps 必选：要导哪些地图 id（前端把筛选后的列表传上来）", 2)
+    with _ylock:
+        if _yjob["running"]:
+            raise CliError("上一轮还在跑：先等它结束或点「停止」", 1)
+    per_map = max(1, min(120, int(body.get("per_map") or 8)))
+    layouts = max(1, min(8, int(body.get("layouts") or 2)))
+    val_pct = max(0, min(40, int(body.get("val") or 15)))
+    res = str(body.get("size") or "1366x768")
+    try:
+        W, H = (int(x) for x in res.lower().split("x"))
+    except Exception:                              # noqa: BLE001
+        W, H = VIEW_W, VIEW_H
+    sizes = [(W, H)]
+    if body.get("random_size"):
+        sizes = [(1024, 768), (1366, 768), (1280, 720), (1920, 1080)]
+    flags = {k: bool(body.get(k, True)) for k in ("mob", "boss", "drop", "player")}
+    if not any(flags.values()):
+        raise CliError("至少选一个类别", 2)
+    mode = "cls" if body.get("cls") else "mod"
+    _ystop.clear()
+    with _ylock:
+        _yjob.update(running=True, error="", stage="启动", done=0,
+                     total=len(maps) * per_map, log=[], out="", url="",
+                     images=0, maps=0, boxes={k: 0 for k in YOLO_CLASSES},
+                     failed=[])
+    threading.Thread(target=_yolo_run,
+                     args=(maps, mode, per_map, layouts, sizes, val_pct, flags,
+                           EXPORTS / "yolo"), daemon=True).start()
+    return {"started": True, "maps": len(maps),
+            "total": len(maps) * per_map * layouts,
+            "per_map": per_map, "layouts": layouts, "sizes": sizes}
+
+
+def c_yolo_stop() -> dict:
+    _ystop.set()
+    return {"stopping": True}
+
+
 # ---------------------------------------------------------------- CLI 出口
 
 def _out(data: dict, as_json: bool) -> None:
@@ -5161,7 +5531,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                   "/api/clsbuild", "/api/clsimgsearch",
                   "/api/mob/export",
                   "/api/char/render", "/api/char/export",
-                  "/api/map/export", "/api/map/imgsearch", "/api/export/clear-cache"}
+                  "/api/map/export", "/api/map/imgsearch", "/api/export/clear-cache",
+                  "/api/yolo/export", "/api/yolo/stop"}
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
@@ -5231,6 +5602,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(404, {"detail": "no icon"})
         elif path == "/api/cls/tables":
             self._api(c_cls_tables)
+        elif path == "/api/yolo/status":
+            self._api(c_yolo_status)
         elif path.startswith("/preview/"):
             self._send_file(CACHE / urllib.parse.unquote(path[len("/preview/"):]),
                             "image/png")
@@ -5307,6 +5680,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_map_imgsearch, str(img))
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
+        elif path == "/api/yolo/export":
+            self._api(c_yolo_export, b)
+        elif path == "/api/yolo/stop":
+            self._api(c_yolo_stop)
         elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps",
                       "/api/char/parts", "/api/char/players",
                       "/api/skill/jobs", "/api/skill/list",
