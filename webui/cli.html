@@ -3473,7 +3473,7 @@ function pathSvgHtml() {
   const dot = (p, col, label) =>
     `<circle cx="${X(p)}" cy="${Y(p)}" r="9" fill="none" stroke="${col}" stroke-width="4" />` +
     `<text x="${X(p) + 14}" y="${Y(p) - 10}" font-size="22" font-weight="bold" fill="${col}" stroke="#000" stroke-width="0.6">${label}</text>`;
-  return `<svg class="pathsvg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${segs}${dot(PAT.a, "#3bff7c", "起")}${dot(PAT.b, "#ff5555", "终")}</svg>`;
+  return `<svg class="pathsvg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${segs}${dot(PAT.a, "#3bff7c", "起")}${dot((PAT.res && PAT.res.to_eff) || PAT.b, "#ff5555", "终")}</svg>`;
 }
 function pathSummary() {
   if (!PAT || PAT.id !== (mapRef && mapRef.id)) return "";
@@ -3481,7 +3481,8 @@ function pathSummary() {
   if (!PAT.res) return "🧭 寻路中…";
   if (!PAT.res.ok) return `⚠️ 寻路失败：${esc(PAT.res.why || "未知原因")}`;
   const r = PAT.res, n = { walk: "走", jump: "跳", fall: "落", climb: "爬", grab: "抓绳" };
-  return `路线 ${r.actions.length} 步（跳 ${r.jumps} · 落 ${r.falls} · 爬 ${r.climbs}）：`
+  const air = r.air && r.air[0] ? "起点在半空：先落体 → " : "";
+  return `${air}路线 ${r.actions.length} 步（跳 ${r.jumps} · 落 ${r.falls} · 爬 ${r.climbs}）：`
     + r.actions.map((a) => n[a.a] || a.a).join(" → ")
     + `　<span class="muted">（黄=走 橙弧=跳/抓 紫点=爬绳 蓝虚=落）</span>`;
 }

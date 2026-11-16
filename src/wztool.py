@@ -4774,15 +4774,66 @@ def _nav_astar(g: dict, src: int, dst: int) -> list | None:
 
 
 def c_cls_path(mid: str, fx: float, fy: float, tx: float, ty: float) -> dict:
-    """地图寻路：世界坐标 from → to，返回动作序列 + 折线（画图/执行两用）。"""
+    """地图寻路：世界坐标 from → to，返回动作序列 + 折线（画图/执行两用）。
+
+    点击点在半空时按客户端语义先**自由落体**：垂直坠到下面第一块 foothold
+    （脚下的平台从上面是实心的，下坠只会落在最先碰到的平台上），再从落点
+    开始规划；终点在半空同理，目的地 = 点击点正下方的落点。"""
     mid = str(mid).strip()
     if not re.fullmatch(r"\d{1,9}", mid):
         raise CliError("地图 id 应该是数字", 2)
     g = _nav_cached(mid)
     if g is None:
         raise CliError(f"地图 {mid} 还没有 map.json 缓存（先打开这张图渲染一次）", 1)
-    a = _nav_snap(g, float(fx), float(fy))
-    b = _nav_snap(g, float(tx), float(ty))
+    fhs = g["fhs"]
+
+    def on_ground(x: float, y: float) -> bool:
+        """点击点脚下 30px 内就有 foothold = 站在地面上（页面点怪/点人时
+        鼠标常常悬在角色 sprite 中部，偏上几十px 也算站这块地面）。"""
+        for fh in fhs:
+            if not _nav_spans(fh, x, 40.0):
+                continue
+            px = min(max(x, fh["xl"]), fh["xr"])
+            if abs(_nav_y_at(fh, px) - y) <= 30:
+                return True
+        return False
+
+    def drop_spot(x: float, y: float) -> int | None:
+        """半空点 → 垂直下坠落到下面第一块地面，落点建成临时节点接进图。"""
+        land = _nav_land_below(fhs, x, y)
+        if land is None:
+            return None
+        fi = fhs.index(land)
+        px = min(max(x, land["xl"]), land["xr"])
+        for i, sp in enumerate(g["spots"]):
+            if sp["fh"] == fi and abs(sp["x"] - px) < 1.5:
+                return i
+        g["spots"].append({"fh": fi, "x": px, "y": _nav_y_at(land, px), "kind": "tmp"})
+        g["adj"].append([])
+        new = len(g["spots"]) - 1
+        _nav_wire_tmp(g, new)
+        return new
+
+    a = b = None
+    pre = None                                  # 半空起点：先落体再规划
+    air_a = not on_ground(fx, fy)
+    if air_a:
+        a = drop_spot(fx, fy)
+        if a is not None:
+            sp = g["spots"][a]
+            pre = {"a": "fall", "from": [round(fx, 1), round(fy, 1)],
+                   "to": [round(sp["x"], 1), round(sp["y"], 1)]}
+    if a is None:
+        a = _nav_snap(g, fx, fy)
+    air_b = not on_ground(tx, ty)
+    b_eff = [round(tx, 1), round(ty, 1)]        # 终点标记画在「实际能站到的落点」
+    if air_b:
+        b = drop_spot(tx, ty)
+        if b is not None:
+            sp = g["spots"][b]
+            b_eff = [round(sp["x"], 1), round(sp["y"], 1)]
+    if b is None:
+        b = _nav_snap(g, tx, ty)
     if a is None or b is None:
         raise CliError("起点或终点附近没有可站立的地面（点在地图外了？）", 1)
     nodes = _nav_astar(g, a, b)
@@ -4802,10 +4853,13 @@ def c_cls_path(mid: str, fx: float, fy: float, tx: float, ty: float) -> dict:
             acts[-1]["to"] = a_["to"]          # 连续走合并成一段
         else:
             acts.append(a_)
-    if acts and acts[0]["a"] == "walk":
+    if pre is not None:
+        acts.insert(0, pre)
+    elif acts and acts[0]["a"] == "walk":
         acts[0]["from"] = [round(fx, 1), round(fy, 1)]
     return {"ok": True, "id": mid, "pts": pts, "actions": acts,
             "cost": round(cost, 2), "spots": len(spots),
+            "to_eff": b_eff, "air": [air_a, air_b],
             "jumps": sum(1 for x in acts if x["a"] == "jump"),
             "falls": sum(1 for x in acts if x["a"] == "fall"),
             "climbs": sum(1 for x in acts if x["a"] == "climb")}
