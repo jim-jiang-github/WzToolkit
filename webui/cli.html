@@ -3437,8 +3437,9 @@ function setPathMode(on) {
   OPTS.path = !!on;
   saveOpts();
   PAT = null;
-  const pb = $("#path-btn"), gv = $("#gameview"), out = $("#path-out");
+  const pb = $("#path-btn"), gv = $("#gameview"), out = $("#path-out"), ck = $("#path-toggle");
   if (pb) pb.classList.toggle("on", OPTS.path);
+  if (ck) ck.checked = OPTS.path;
   if (gv) gv.classList.toggle("picking", OPTS.path);
   renderLifeDots();
   if (out) out.innerHTML = OPTS.path ? "🧭 寻路模式：在地图上点一下选起点" : "";
@@ -3676,7 +3677,7 @@ async function mapLoad(id, preview, cls) {
       ${d.preview.w}×${d.preview.h}${preview ? "（预览）" : ""}</div>
       <div class="row">
         ${nKinds ? `<button class="mini" id="dex-btn" title="这只地图出现的怪物，带立绘的图鉴">👾 怪物图鉴（${nKinds} 种）</button>` : ""}
-        <button class="mini ${OPTS.path ? "on" : ""}" id="path-btn" title="寻路模式（开=点地图选起点/终点，自动规划走/跳/落/爬，黄=走、橙弧=跳/抓绳、紫点=爬、蓝虚=落，第三下重新选起点；关=点地图打开整图放大查看）。物理参数取自客户端源码（跳高≈72px、走速100px/s），地形用的是客户端读的同一份 foothold 真值，无需图像识别；与导出无关，导出图永远不会带路线">🧭 点击寻路</button>
+        <button class="mini ${OPTS.path ? "on" : ""}" id="path-btn" title="寻路模式（开=点地图选起点/终点，自动规划走/跳/落/爬；关=点地图打开整图放大查看）">🧭 点击寻路</button>
         <button class="mini" id="mz-btn" title="整张地图放大查看（滚轮/滚动条平移，叠加层同样显示）">🔍 查看大图</button>
         <button class="mini" id="opt-btn" title="显示叠加层与导出选项">⚙ 显示设置</button>
         <button class="primary mini" id="do-export" title="导出 WebUI 里游戏窗口当前显示的那块画面（1366×768，拖动画布到哪就导哪）→ .exports/maps/&lt;id&gt;/window.png；是否带怪物由「显示怪物」开关决定，不显示背景同样生效">导出窗口</button>
@@ -3691,6 +3692,7 @@ async function mapLoad(id, preview, cls) {
         <label title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上；切换时原地换图，画面不闪黑"><input type="checkbox" id="nobg-toggle" ${OPTS.nobg ? "checked" : ""} /> 不显示背景</label>
         ${nRope ? `<label title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" ${OPTS.rope ? "checked" : ""} /> 显示绳索（${nRope}）</label>` : ""}
         ${nLad ? `<label title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" ${OPTS.lad ? "checked" : ""} /> 显示梯子（${nLad}）</label>` : ""}
+        <label title="地图上点两下：第一下=起点，第二下=终点，自动规划「走/跳/落/爬绳」路线并画出来（黄=走、橙弧=跳/抓绳、紫点=爬、蓝虚=落）。物理参数取自客户端源码（跳高≈72px、走速100px/s），/foothold 是客户端读的同一份真值，无需图像识别。第三下重新选起点。开关在工具栏上（🧭 点击寻路），这里只是同一状态的镜像"><input type="checkbox" id="path-toggle" ${OPTS.path ? "checked" : ""} /> 🧭 点击寻路</label>
         ${d.minimap ? `<div class="optgrp">小地图 HUD 标记</div>
         <label title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${OPTS.mmp ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
         <label><input type="checkbox" id="mm-n" ${OPTS.mmn ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>` : ""}
@@ -3797,6 +3799,8 @@ async function mapLoad(id, preview, cls) {
     if (rl) rl.onchange = () => { OPTS.lad = rl.checked; saveOpts(); renderLifeDots(); };
     const fh = $("#fh-toggle");
     if (fh) fh.onchange = () => { OPTS.fh = fh.checked; saveOpts(); renderLifeDots(); };
+    const pw = $("#path-toggle");
+    if (pw) pw.onchange = () => setPathMode(pw.checked);
     const nb2 = $("#nobg-toggle");
     if (nb2) nb2.onchange = () => { OPTS.nobg = nb2.checked; saveOpts(); syncBkVisible(); };
     const ds = $("#density");
