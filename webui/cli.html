@@ -131,6 +131,10 @@
   .prog-bar.indet i { animation: progs 1.1s linear infinite; }
   @keyframes progs { from { left: -35%; width: 35%; } to { left: 100%; width: 35%; } }
   .prog-sub { font-size: 11.5px; margin-top: 5px; }
+  /* YOLO 训练集面板 */
+  .yl-body { padding: 12px 16px; display: flex; flex-direction: column;
+             gap: 10px; overflow: auto; min-height: 0; }
+  #yl-scope button { padding: 4px 10px; font-size: 12px; }
   .rc-btn { font-size: 12px; padding: 2px 9px; }
   .cols { display: grid; grid-template-columns: 300px 1fr; gap: 10px;
           flex: 1; min-height: 0; }
@@ -609,6 +613,7 @@
         <button data-m="skill" title="技能特效：按职业浏览全部技能，播放每个技能的施放/弹道/命中/全屏特效，导出逐帧 PNG">✨ 技能特效</button>
         <button data-m="dmg" title="伤害数字：Effect/BasicEff 里的全部伤害数字样式（红/蓝/暴击…），输入数字实时预览，导出逐帧 PNG">🔢 伤害数字</button>
         <button data-m="battle" title="随机战斗：人物 / 技能 / 怪物 / 伤害数字随机组合——换一批重新抽，自动播放攻击和伤害">🎲 随机战斗</button>
+        <button data-m="yolo" title="YOLO 训练集：合成客户端画面帧（地图+怪物+掉落+玩家）+ 精确标注 → .exports/yolo/，零人工标注">🎯 YOLO 训练集</button>
       </div>
       <div class="rail-hint" id="mode-hint"></div>
     </div>
@@ -774,6 +779,50 @@
       </div>
       <div class="btstage" id="bt-stage"><span class="muted" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">抽卡中 …</span></div>
       <div class="muted" id="bt-note" style="margin-top:6px">人物 / 技能 / 怪物 / 伤害样式全部随机——点「🎲 换一批」重新抽；「👾 怪物 / 👑 Boss」切换抽卡怪物池；「🗺 限定地图」只抽那张图里自然刷新的怪（输地图名或 ID 从下拉里选）；「⚔️ 攻击」打一轮：技能特效 + 怪物受击 + 真实排版的伤害数字（5% 概率 Miss）。需要 Mob.nx / Character.nx / Skill.nx / 伤害数字库都已就绪。</div>
+    </div>
+
+    <!-- YOLO 训练集：合成画面帧 + 精确标注 -->
+    <div class="pane" id="yolodex" hidden>
+      <div class="md-bar">
+        <span class="muted">合成「客户端画面 + YOLO 标注」——标注来自合成时的世界坐标，零人工标注；相机按客户端规则采样（foothold 站位 → 相机公式 → VR 钳制）</span>
+        <span style="flex:1"></span>
+        <button class="primary mini" id="yl-start" title="按下面的设置批量导出 → .exports/yolo/&lt;时间戳&gt;/（YOLO 格式：images/ labels/ dataset.yaml）">▶ 开始导出</button>
+        <button class="mini" id="yl-stop" hidden>■ 停止</button>
+      </div>
+      <div class="yl-body">
+        <div class="row">
+          <span class="muted">范围</span>
+          <div class="seg" id="yl-scope">
+            <button data-s="cur" class="on" title="只导当前正在预览的这张地图">当前地图</button>
+            <button data-s="list" title="导出本数据源（现代库/怀旧服）列表里的全部地图">全部地图</button>
+            <button data-s="mob" title="只导有怪物刷新的地图（怀旧服大图库 339 张）——训练检测建议用这档">全部有怪</button>
+          </div>
+          <span class="muted">类别</span>
+          <label class="muted" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="yl-mob" checked> 怪物</label>
+          <label class="muted" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="yl-boss" checked> BOSS</label>
+          <label class="muted" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="yl-drop" checked> 掉落</label>
+          <label class="muted" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="yl-player" checked> 玩家</label>
+        </div>
+        <div class="row">
+          <span class="muted">每图窗口</span>
+          <input type="text" id="yl-per" value="8" style="min-width:56px;width:56px" title="每张地图采多少个相机窗口（相机位置按站位→相机公式→VR钳制采样，自动铺开不重复）">
+          <span class="muted">随机布局</span>
+          <input type="text" id="yl-lay" value="2" style="min-width:56px;width:56px" title="每张地图重抽几次怪物/掉落/玩家的摆位（更多布局 = 更多样的遮挡关系）">
+          <span class="muted">验证集 %</span>
+          <input type="text" id="yl-val" value="15" style="min-width:56px;width:56px" title="按整张地图划分 train/val（不是按窗口随机切——同图的相似窗口会泄漏，验证 mAP 会虚高）">
+          <label class="muted" style="display:flex;gap:4px;align-items:center" title="窗口尺寸在 1024×768 / 1366×768 / 1280×720 / 1920×1080 里随机——不同玩家客户端分辨率不一样"><input type="checkbox" id="yl-rsize"> 随机分辨率</label>
+          <span class="muted" id="yl-count"></span>
+        </div>
+        <div class="progbox" id="yl-prog" hidden>
+          <div class="prog-head"><b id="yl-stage">准备中…</b><span class="muted" id="yl-pct"></span></div>
+          <div class="prog-bar"><i id="yl-fill"></i></div>
+          <div class="prog-sub muted" id="yl-sub"></div>
+        </div>
+        <div class="muted" id="yl-msg"></div>
+        <img id="yl-img" hidden alt="" style="max-width:100%;max-height:520px;border-radius:10px"
+             title="抽检拼图：随机 16 张导出图画上标注框 —— 先看这里确认框贴合，再拿去训练">
+        <div class="muted" id="yl-out"></div>
+      </div>
     </div>
   </div>
 
@@ -2925,10 +2974,11 @@ const MODE_HINT = {
   skill: "左侧选职业和技能 → 看特效动画 / 导出",
   dmg: "左侧选数字样式 → 输入数字实时预览 / 导出",
   battle: "🎲 换一批重新抽 → 自动打怪",
+  yolo: "选范围和类别 → 开始导出 → 拿 _preview.jpg 先核对标注",
 };
 let MODE = "map";
 function setMode(m) {
-  if (m !== "mob" && m !== "drop" && m !== "char" && m !== "skill" && m !== "dmg" && m !== "battle") m = "map";
+  if (m !== "mob" && m !== "drop" && m !== "char" && m !== "skill" && m !== "dmg" && m !== "battle" && m !== "yolo") m = "map";
   MODE = m;
   $("#pane-map").hidden = m !== "map";
   $("#mobdex").hidden = m !== "mob";
@@ -2937,6 +2987,7 @@ function setMode(m) {
   $("#skdex").hidden = m !== "skill";
   $("#dmgdex").hidden = m !== "dmg";
   $("#battle").hidden = m !== "battle";
+  $("#yolodex").hidden = m !== "yolo";
   $$("#mainseg button").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
   $("#mode-hint").textContent = modeHint(m);
   if (m !== "map") $("#mapzoom").hidden = true;
@@ -2951,6 +3002,7 @@ function setMode(m) {
   if (m === "dmg") dmgOpen();
   if (m === "battle") btOpen();
   else btPause();
+  if (m === "yolo") yoloOpen();
   if (m === "map") requestAnimationFrame(fitGameView);   // 回到地图：预览格按当前尺寸重新适配
 }
 
@@ -3808,6 +3860,98 @@ $("#skdex .md-bar").onclick = (e) => {
   setSkFilt(b.dataset.f);
 };
 window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); fitGameView(); });
+
+/* ---------------- YOLO 训练集导出 ---------------- */
+let YLTIMER = 0;
+const YL = { scope: "cur" };
+
+function yoloScopeMaps() {
+  if (YL.scope === "cur") return mapRef ? [String(mapRef.id)] : [];
+  if (CLSMODE) {
+    const items = CLS_MAPS || [];
+    if (YL.scope === "mob") return items.filter((m) => m.mob).map((m) => String(m.id));
+    return items.map((m) => String(m.id));
+  }
+  if (YL.scope === "mob") return [...LIFE].map(String);   // 现代库：LIFE 是有怪 id 集合
+  return MAPS.map(String);
+}
+
+function yoloOpen() {
+  $$("#yl-scope button").forEach((b) => b.classList.toggle("on", b.dataset.s === YL.scope));
+  const items = CLSMODE ? (CLS_MAPS || []) : MAPS;
+  const nmob = CLSMODE ? items.filter((m) => m.mob).length : LIFE.size;
+  $("#yl-count").textContent =
+    items.length ? `本数据源 ${items.length} 张 · 有怪 ${nmob} 张` : "";
+  if (!$("#yl-prog").hidden || $("#yl-img").src) yoloPoll();
+}
+
+async function yoloPoll() {
+  clearTimeout(YLTIMER);
+  let d;
+  try { d = await api("/api/yolo/status"); } catch (e) { return; }
+  $("#yl-stop").hidden = !d.running;
+  $("#yl-start").disabled = !!d.running;
+  if (d.running || d.total || d.images) {
+    $("#yl-prog").hidden = false;
+    $("#yl-stage").textContent = d.error ? "出错"
+      : (d.running ? (d.stage || "跑着…") : "完成");
+    const pct = d.total ? Math.round(d.done / d.total * 100) : (d.running ? 0 : 100);
+    $("#yl-pct").textContent = d.total ? `${d.done}/${d.total}（${pct}%）` : "";
+    $("#yl-fill").style.width = pct + "%";
+    $("#yl-sub").textContent = d.images
+      ? `已出 ${d.images} 张图 · 框：怪 ${d.boxes.mob} / BOSS ${d.boxes.boss} / 掉落 ${d.boxes.drop} / 玩家 ${d.boxes.player}`
+        + (d.failed.length ? ` · 跳过 ${d.failed.length} 张图（日志见下）` : "")
+      : (d.log || []).slice(-1)[0] || "";
+  }
+  $("#yl-msg").textContent = d.error ? "⚠ " + d.error : "";
+  if (d.url) {
+    const img = $("#yl-img");
+    if (!img.src.endsWith(d.url)) img.src = d.url;
+    img.hidden = false;
+  }
+  if (d.out)
+    $("#yl-out").textContent =
+      `输出目录：${d.out} —— YOLO 格式（images/ + labels/ + dataset.yaml），`
+      + `训练：yolo detect train data=<目录>/dataset.yaml model=yolo11s.pt imgsz=960`;
+  if (d.running) YLTIMER = setTimeout(yoloPoll, 800);
+}
+
+async function yoloStart() {
+  const maps = yoloScopeMaps();
+  if (!maps.length) {
+    $("#yl-msg").textContent = YL.scope === "cur"
+      ? "先在「🗺 地图」页选一张地图，或把范围切到「全部有怪」"
+      : "列表还没加载好（回地图页等列表出来再回来）";
+    return;
+  }
+  $("#yl-msg").textContent = "";
+  try {
+    await api("/api/yolo/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        maps, cls: CLSMODE,
+        per_map: parseInt($("#yl-per").value, 10) || 8,
+        layouts: parseInt($("#yl-lay").value, 10) || 2,
+        val: parseInt($("#yl-val").value, 10) || 15,
+        random_size: $("#yl-rsize").checked,
+        mob: $("#yl-mob").checked, boss: $("#yl-boss").checked,
+        drop: $("#yl-drop").checked, player: $("#yl-player").checked,
+      }),
+    });
+  } catch (e) { $("#yl-msg").textContent = "⚠ " + e.message; return; }
+  $("#yl-img").hidden = true;
+  yoloPoll();
+}
+
+$$("#yl-scope button").forEach((b) => b.onclick = () => { YL.scope = b.dataset.s; yoloOpen(); });
+$("#yl-start").onclick = yoloStart;
+$("#yl-stop").onclick = async () => {
+  try {
+    await api("/api/yolo/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  } catch (e) {}
+  yoloPoll();
+};
+
 setMode("map");   // 初始态：地图（顺便填上左侧导轨下方的提示）
 dataModeSync();   // 恢复上次的 数据模式（现代库/怀旧服）开关状态
 boot();</script>
