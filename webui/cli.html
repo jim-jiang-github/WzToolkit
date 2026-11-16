@@ -932,7 +932,7 @@ function api(path, opts) {
 }
 function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + (e?.stack || e?.message || String(e)); }
 
-let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [], CN_NEED_CLS = false, CN_NEED_DMG = false;
+let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [], CN_NEED_CLS = false, CN_NEED_WZJS = false, CN_NEED_DMG = false;
 let MAP_LV = {};           // 现代库 地图id → [min,max] 推荐等级（列表行徽标）
 let CLS_MAP_LV = {};       // 怀旧服大图库等级表——必须与现代库分开存：
                            // 切「现代库」再切回来时 CLS_MAPS 有缓存不重拉，
@@ -987,21 +987,35 @@ function clsHintHTML() {
 }
 
 /* 「🔄 重建大图库」按钮（提示面板和 canvas 兜底详情里都有）：
-   POST /api/wzjsbuild 起后台任务 → 复用全局进度条；任务结束自动重拉列表，
-   大图库就绪后点行恢复完整渲染 */
+   走统一的「⬇ 转换缺失数据」管线（POST /api/convert）—— 后端把大图库
+   重建并进这次任务，顺带补齐其它缺失项；前端复用全局进度条，
+   任务结束自动重拉列表，大图库就绪后点行恢复完整渲染 */
 async function wzjsRebuild() {
   const btn = $("#wzjs-rebuild");
   if (btn) { btn.disabled = true; btn.textContent = "启动中…"; }
   try {
-    await api("/api/wzjsbuild", { method: "POST" });
+    const d = await api("/api/convert", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files: [] }),
+    });
+    if (!d.started) {          // 已是最新（比如别的标签页刚转完）：直接刷新列表
+      CLS_MAPS = null;
+      loadLists();
+      return;
+    }
     startProgress();
+    let saw = false;          // 至少看到一次「在跑」才能判「跑完」（任务启动有延迟）
     const wait = setInterval(async () => {
       let p;
       try { p = await api("/api/progress"); } catch (e) { return; }
-      if (!p.clsmap || !p.clsmap.running) {
+      const busy = !!(p.convert.running || p.minimap.running || p.auto.running
+                      || (p.cls && p.cls.running) || (p.clsmap && p.clsmap.running));
+      if (busy) saw = true;
+      if (saw && !busy) {      // 整条管线（nx 转换→小图库→大图库）都收尾了
         clearInterval(wait);
         CLS_MAPS = null;      // 强制重拉：wzjs 就绪状态变了
         loadLists();
+        if (p.clsmap && p.clsmap.error) fail(new Error(p.clsmap.error));
       }
     }, 1500);
   } catch (e) {
@@ -1596,8 +1610,10 @@ async function scan() {
       // 不再扫描后自动全量重转（全量要 1 小时上下，只测怀旧服找图时不需要等）。
       const cn = d.cn;
       const cls = d.cls || null;
+      const wzjs = d.wzjs || null;
       const dmg = d.dmg || null;
-      // 收集所有缺失项；怀旧服小地图库/伤害数字库没建好也算「缺失」，一起交给后端一键备齐
+      // 收集所有缺失项；怀旧服小地图库/大图库/伤害数字库没建好也算「缺失」，
+      // 一起交给后端一键备齐（大图库 stale = 客户端更新过，也要重建）
       const missing = [];
       if (!cn.string_nx) missing.push("String.nx");
       if (!cn.map_nx) missing.push("Map.nx");
@@ -1606,14 +1622,22 @@ async function scan() {
       if (!cn.skill_nx) missing.push("Skill.nx");
       CN_MISSING = missing;
       CN_NEED_CLS = !!(cls && cls.dir && !cls.ready && !cls.building);
+      CN_NEED_WZJS = !!(wzjs && wzjs.dir && !wzjs.ready && !wzjs.building);
       CN_NEED_DMG = !!(dmg && dmg.dir && !dmg.ready);
       // 栏里的小提示：缺东西时才出现（没什么可转就不用占地方）
       const hcv = $("#ws-cv");
-      if (hcv) hcv.hidden = !(missing.length || CN_NEED_CLS || CN_NEED_DMG);
+      if (hcv) hcv.hidden = !(missing.length || CN_NEED_CLS || CN_NEED_WZJS || CN_NEED_DMG);
       const clsRow = cls && cls.dir ? `
         <tr><td>怀旧服小地图库（mxdclassic 的 canvas 素材，怀旧服找图用）</td>
             <td>${cls.ready ? `<span class="ok">已建好（${cls.count} 张）</span>`
                 : (cls.building ? '<span class="ok">构建中…</span>' : '<span class="miss">未建（点「转换缺失数据」会自动建）</span>')}</td>
+            <td></td></tr>` : "";
+      const wzjsRow = wzjs && wzjs.dir ? `
+        <tr><td>怀旧服大图库（WZJS ${wzjs.count || 1750} 张地图，渲染完整大图用）</td>
+            <td>${wzjs.ready ? `<span class="ok">已建好（${wzjs.count} 张）</span>`
+                : (wzjs.building ? '<span class="ok">构建中…</span>'
+                : (wzjs.stale ? '<span class="miss">需重建 —— 客户端资源库已变化（游戏更新过）</span>'
+                : '<span class="miss">未建（点「转换缺失数据」会自动建）</span>'))}</td>
             <td></td></tr>` : "";
       const dmgRow = dmg && dmg.dir ? `
         <tr><td>伤害数字库（Effect/BasicEff 的 No* 数字集，伤害数字页签用）</td>
@@ -1624,14 +1648,15 @@ async function scan() {
         `数据源：<b>${WS}</b> · 🇨🇳 国服官方数据（自动定位 ${cn.data}）`;
       $("#ws-mini").textContent = `国服官方 · ${cn.map_nx ? "已转换" : "待转换"}`;
       $("#wz-table").innerHTML = `
-        <table><tr><th>数据源</th><th>状态</th><th style="text-align:right">${(missing.length || CN_NEED_CLS || CN_NEED_DMG)
+        <table><tr><th>数据源</th><th>状态</th><th style="text-align:right">${(missing.length || CN_NEED_CLS || CN_NEED_WZJS || CN_NEED_DMG)
             ? `<button class="mini" id="cn-cv-all"
-                title="把缺失的 nx 一次性排队转换；怀旧服小地图库/伤害数字库没建好也会接着自动建（转完进度条自动停）">⬇ 转换缺失数据</button>`
+                title="把缺失的 nx 一次性排队转换；怀旧服小地图库/大图库（含客户端更新后的重建）/伤害数字库没建好也会接着自动建（转完进度条自动停）">⬇ 转换缺失数据</button>`
             : ""}</th></tr>
         <tr><td>Map.nx（全量 10 分片 + Back/Tile/Obj 位图，约 23 GB）</td>
             <td>${cn.map_nx ? `<span class="ok">已转换（${cn.map_nx_mb} MB）</span>` : '<span class="miss">未转换</span>'}</td>
             <td></td></tr>
         ${clsRow}
+        ${wzjsRow}
         ${dmgRow}
         <tr><td>String.nx（地图名等中文表）</td>
             <td>${cn.string_nx ? '<span class="ok">已转换</span>' : '<span class="miss">未转换</span>'}</td>

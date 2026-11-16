@@ -523,6 +523,8 @@ def c_workspace(path: str) -> dict:
                        "skill_nx_gb": gb(skill_nx)},
                 # 怀旧服小地图库状态（工作区= mxdclassic / 安装根时能定位 Unity 数据包）
                 "cls": _cls_state(),
+                # 怀旧服大图库状态（WZJS 1750 张可渲染地图；stale=客户端更新过要重建）
+                "wzjs": _wzjs_state(),
                 # 伤害数字库状态（Effect/BasicEff.img 的 No* 数字集）
                 "dmg": _dmg_state()}
     files = []
@@ -1567,6 +1569,26 @@ def _cls_state() -> dict:
             n = 0
     return {"dir": str(w) if w else None, "ready": _cls_ready(), "count": n,
             "building": _clsjob["running"]}
+
+
+def _wzjs_state() -> dict:
+    """怀旧服大图库（WZJS 1750 张）状态：数据源面板行 + 「需要重建」判定。
+
+    stale=True 表示建过（built.json 里有 ids）但现在不就绪——多半是客户端
+    更新了 Unity 数据包；「⬇ 转换缺失数据」会把它当缺失项一并重建。
+    """
+    w = _cls_w_dir()
+    ready = _wzjs_ready()
+    built: dict = {}
+    if w is not None:
+        try:
+            built = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            built = {}
+    return {"dir": str(w) if w else None, "ready": ready,
+            "stale": bool(built.get("ids")) and not ready,
+            "count": len(built.get("ids") or []),
+            "building": _wzjsjob["running"]}
 
 
 def _cls_names() -> dict:
@@ -2742,20 +2764,6 @@ def _web_clsbuild() -> dict:
         if f.exists():
             f.unlink()
     threading.Thread(target=_cls_build, daemon=True).start()
-    return {"started": True}
-
-
-def _web_wzjsbuild() -> dict:
-    """WebUI「怀旧服大图库」重建按钮：客户端资源包更新过 / 库没建好都点这里。
-
-    后台线程跑 _wzjs_build（断点续跑：同版本已转过的图自动跳过，只补变化
-    的）；前端轮询 /api/progress 的 clsmap 段看进度，跑完 _wzjs_ready 变真。
-    """
-    if _wzjsjob["running"]:
-        raise CliError("怀旧服大图库正在构建中", 1)
-    if _cls_w_dir() is None:
-        raise CliError("当前工作区找不到怀旧服客户端（mxdclassic 的 Unity 数据包）", 1)
-    threading.Thread(target=_wzjs_build, daemon=True).start()
     return {"started": True}
 
 
@@ -5794,8 +5802,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(_web_reconvert)
         elif path == "/api/clsbuild":
             self._api(_web_clsbuild)
-        elif path == "/api/wzjsbuild":
-            self._api(_web_wzjsbuild)
         elif path == "/api/clsimgsearch":
             img = b.get("image")
             if not img:
@@ -5864,6 +5870,10 @@ def _web_convert(names: list[str], force: bool) -> dict:
     todo: list[Path] = []
     cls_todo = False
     dmg_todo = False
+    # 怀旧服 WZJS 大图库（1750 张可渲染地图）没建好/客户端更新过期 → 统一并进
+    # 这一次转换任务（两种数据源模式都生效——大图库只看 mxdclassic Unity 包）
+    wzjs_todo = (_cls_w_dir() is not None and not _wzjs_ready()
+                 and not _wzjsjob["running"])
     if _cn_mode() is not None:
         paths = {"String.nx": CN_NX / "String.nx", "Map.nx": CN_NX / "Map.nx",
                  "Mob.nx": CN_NX / "Mob.nx", "Character.nx": CN_NX / "Character.nx",
@@ -5874,9 +5884,6 @@ def _web_convert(names: list[str], force: bool) -> dict:
                       if (not names or n in names) and not paths[n].exists()]
         # 怀旧服小地图库（mxdclassic）没建好 → 并进这次任务，转完自动建
         cls_todo = _cls_w_dir() is not None and not _cls_ready() and not _clsjob["running"]
-        # 怀旧服 WZJS 大图库（1750 张可渲染地图）没建好 → 同样并进这次任务
-        wzjs_todo = (_cls_w_dir() is not None and not _wzjs_ready()
-                     and not _wzjsjob["running"])
         # 伤害数字库（Effect/BasicEff 的 No* 数字集）没建好 → 一样并进这次任务
         dmg_todo = _dmg_effect_dir() is not None and not _dmg_ready()
         # 全库出图没跑完 → 同样并进这次任务：转换完自动把每张图的预览缓存
@@ -5892,7 +5899,7 @@ def _web_convert(names: list[str], force: bool) -> dict:
     else:
         ws = _need_ws()
         todo = _convert_pick(ws, names, force)
-        if not todo:
+        if not todo and not wzjs_todo:
             return {"started": False, "message": "选中的都已是 .nx（要重转勾「强制重转」）"}
         cn_todo = None
         mapall_todo = False
@@ -5950,6 +5957,14 @@ def _web_convert(names: list[str], force: bool) -> dict:
             else:
                 for wz in todo:
                     _convert_one(wz, lambda s: _job["log"].append(s))
+                    _job["done"] += 1
+                if wzjs_todo:
+                    _job["log"].append(
+                        "转换完成，接着构建怀旧服大图库（WZJS 1750 张地图 → "
+                        "可渲染缓存，已转过的自动跳过）…")
+                    _wzjs_build(log=lambda s: _job["log"].append(s))
+                    if _wzjsjob["error"]:
+                        _job["log"].append(f"怀旧服大图库出错：{_wzjsjob['error']}")
                     _job["done"] += 1
             _job["log"].append("全部完成 ✔")
             # 数据刚变 —— 顺手把小地图库（找图用的 PNG 目录 + 签名索引）预热出来，
