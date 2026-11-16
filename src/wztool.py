@@ -4305,6 +4305,53 @@ VIEW_W, VIEW_H = 1366, 768      # 客户端画面窗口，也是唯一的导出�
 MMUI_STATIC = WEBUI / "assets" / "minimap"
 
 
+_content_pngsize_cache: dict = {}
+
+
+def _content_bottom(outdir: Path, mj: dict) -> float | None:
+    """地面内容（tile/obj 贴图）不透明主体的实际下边缘。
+
+    贴图从 outdir\\img 的 PNG 读（cls/nx 两条管线产物同构），下缘按
+    「alpha>128 的像素覆盖率 ≥50% 的最后一行」算——很多地面瓦片（岩山
+    enH1 这类）底下几行是稀疏毛边，按整张贴图高算会把这些锯齿缝也算进
+    视窗，贴到最底还是从毛边缝里透出一条天空蓝。
+    无 VR 地图的视窗下边界钳制用：客户端兜底「最低 foothold +100」的 100px
+    是留给地面贴图厚度的余量，但有的图（101030400 东部岩山）最低 foothold
+    就在贴图行边上，+100 会把视窗推到地面贴图下面，露出一条游戏里根本
+    看不到的天空蓝。"""
+    sizes = _content_pngsize_cache.setdefault(str(outdir), {})
+    bottom = None
+    for L in mj.get("layers", []):
+        for e in list(L.get("tile", [])) + list(L.get("obj", [])):
+            img = e.get("img")
+            if not img:
+                continue
+            h = sizes.get(img)
+            if h is None:
+                p = outdir / "img" / img
+                try:
+                    import numpy as np
+                    from PIL import Image
+                    a = np.asarray(Image.open(p).convert("RGBA").getchannel("A"))
+                    # 视窗下边界要落在「整行每个像素都不透明」的行上：
+                    # 岩山 enH1 这类瓦片底缘是稀疏毛刺，刺之间的缝隙柱往上
+                    # 延伸十几 px，行覆盖率 50%/95% 的中间阈值都堵不住——
+                    # 贴到最底还是会从缝里透蓝。逐级回退防全半透明贴图。
+                    cov = (a > 128).mean(axis=1)          # 每行不透明覆盖率
+                    solid = np.flatnonzero(cov >= 0.999)
+                    if not solid.size:
+                        solid = np.flatnonzero(cov >= 0.95)
+                    if not solid.size:
+                        solid = np.flatnonzero(cov >= 0.5)
+                    h = int(solid[-1]) + 1 if solid.size else 0
+                except Exception:          # noqa: BLE001
+                    h = 0
+                sizes[img] = h
+            b = float(e.get("y", 0)) - float(e.get("oy", 0)) + h
+            bottom = b if bottom is None else max(bottom, b)
+    return bottom
+
+
 def _view_origin(view: tuple | None, minx: float, miny: float,
                  bw: float, bh: float) -> tuple[int, int]:
     """导出窗口左上角的世界坐标：按传入值夹在地图内，缺省取地图正中。
@@ -4389,8 +4436,20 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
         if mj.get("foothold"):
             xs = [v for f in mj["foothold"] for v in (f["x1"], f["x2"])]
             ys = [v for f in mj["foothold"] for v in (f["y1"], f["y2"])]
+            # 下边界：foothold+100（客户端兜底）与地面贴图实际下边缘取较小——
+            # +100 的余量是给「贴图比最低 foothold 低一大截」的图的，最低
+            # foothold 就贴着贴图边的图（101030400 岩山）会把视窗推进地面
+            # 下面的天空里，游戏里视角到不了那里。
+            # 保险：最多钳到最低 foothold+10，最低平台本身永远得进视窗
+            # （+10 而不是 +20：岩山这类图的内容下缘只比 foothold 低 16px，
+            # 给多了又把视窗推进毛边缝里）
+            bot = max(ys) + 100
+            cb = _content_bottom(outdir, mj)
+            if cb is not None:
+                bot = min(bot, cb)
+            bot = max(bot, max(ys) + 10)
             vr = {"left": min(xs) + 25, "right": max(xs) - 25,
-                  "top": min(ys) - 300, "bottom": max(ys) + 100}
+                  "top": min(ys) - 300, "bottom": bot}
     result = {"dir": str(outdir), "preview": size,
               "no_bg": bool(no_bg),
               "preview_path": str(png),
@@ -4466,6 +4525,18 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
     if not preview:
         from PIL import Image
         vx, vy = _view_origin(view, minx, miny, bw, bh)
+        # 再钳进 VR（客户端 Camera.cpp:58-66 视窗永远在 VR 里）：直传 API/CLI
+        # 的 view 不再能落到游戏里到不了的地方（如岩山无 VR 图兜底边界下面的
+        # 天空）。VR 比窗口还小的维度居中，与 _view_origin 同款规则。
+        if vr:
+            if vr["right"] - vr["left"] >= VIEW_W:
+                vx = min(max(vx, vr["left"]), vr["right"] - VIEW_W)
+            else:
+                vx = (vr["left"] + vr["right"] - VIEW_W) / 2
+            if vr["bottom"] - vr["top"] >= VIEW_H:
+                vy = min(max(vy, vr["top"]), vr["bottom"] - VIEW_H)
+            else:
+                vy = (vr["top"] + vr["bottom"] - VIEW_H) / 2
         left, top = round(vx - minx), round(vy - miny)
         canvas = Image.new("RGBA", (VIEW_W, VIEW_H),
                            (0, 0, 0, 0) if no_bg else (16, 18, 24, 255))
