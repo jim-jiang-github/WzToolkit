@@ -77,6 +77,12 @@ else:
             break
     VENDOR = ROOT / "vendor"
 
+# vendor\ 是隐式命名空间包：脚本直跑（python src\wztool.py）时 sys.path[0]=src\，
+# 仓库根不在路径里，`from vendor.clssprite import ...` 会炸（exe 里 PyInstaller
+# 已打包 vendor 没这问题）。把根塞进 sys.path，两种跑法通吃。
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 BIN = ROOT / "bin"
 CACHE = ROOT / ".cache"
 EXPORTS = ROOT / ".exports"
