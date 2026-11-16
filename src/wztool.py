@@ -5524,7 +5524,8 @@ def _yolo_composite(mid: str, cls: bool, seed: str):
 
 def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
               val_pct: int, flags: dict, out_root: Path,
-              windows: dict | None = None, cover: bool = False) -> None:
+              windows: dict | None = None, cover: bool = False,
+              max_views: int = 0) -> None:
     from PIL import Image
     runs = out_root
     run = runs / time.strftime("%Y%m%d-%H%M%S")
@@ -5646,6 +5647,13 @@ def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
                     # 自动模式：按地面均布站位点，每点一个视窗（数量由地面长度定）
                     views = _yolo_views(mj, vr, minx, miny, iw, ih, sizes,
                                         f"{mid}:l{li}", base, ())
+                    # 大图站位点上百个、相邻窗口重叠 ~91%（120px 步距 vs 1366px
+                    # 视窗），整库导出体积/耗时爆炸 → 每布局均匀抽 max_views 个
+                    # （用户 2026-11-17：339 张全导 + Kaggle 数据集 20GB 硬限制）
+                    if max_views and len(views) > max_views:
+                        idx = sorted({round(i * (len(views) - 1) / (max_views - 1))
+                                      for i in range(max_views)})
+                        views = [views[i] for i in idx]
                 with _ylock:
                     _yjob["total"] = _yjob.get("total", 0) + len(views)
                 for vi, v in enumerate(views):
@@ -5777,6 +5785,9 @@ def c_yolo_export(body: dict) -> dict:
             windows[k] = ws
     mode = "cls" if body.get("cls") else "mod"
     cover = bool(body.get("cover"))          # 铺满整图：网格窗口盖住每张图全部画面
+    # 自动采样每布局窗口数封顶（0=不限）：站位步距 120px、视窗 1366px，相邻窗口
+    # 重叠 91%，封顶 32 几乎不损失信息，整库 339 张导出体积/耗时才可控
+    max_views = max(0, min(64, int(body.get("max_views") or 32)))
     _ystop.clear()
     with _ylock:
         _yjob.update(running=True, error="", stage="启动", done=0,
@@ -5785,7 +5796,8 @@ def c_yolo_export(body: dict) -> dict:
                      failed=[])
     threading.Thread(target=_yolo_run,
                      args=(maps, mode, layouts, sizes, val_pct, flags,
-                           EXPORTS / "yolo", windows, cover), daemon=True).start()
+                           EXPORTS / "yolo", windows, cover, max_views),
+                     daemon=True).start()
     return {"started": True, "maps": len(maps),
             "total": 0, "layouts": layouts, "sizes": sizes}
 
