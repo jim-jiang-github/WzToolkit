@@ -3995,7 +3995,7 @@ window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); fitGam
 
 /* ---------------- YOLO 训练集导出 ---------------- */
 let YLTIMER = 0;
-const YL = { scope: "mob", win: [], pp: [], comp: null, seed: "",
+const YL = { scope: "mob", win: [], pp: [], viewKey: null, viewImg: null, seed: "",
              sel: -1, vr: null, iw: 0, ih: 0, mapid: "", loading: false };
 // pp[i] = 第 i 个窗口的玩家站位（预览图坐标，VR 钳边时≠窗口中心）；comp = 合成图（mobs+drops+玩家）
 // 范围/类别选择行已删（用户 2026-11-16：左侧已有地图搜索）——
@@ -4066,7 +4066,7 @@ function ylMapList() {
 
 async function yoloPickMap(id) {
   YL.scope = "cur";                                   // 点了某张图 = 进入这张图的精调
-  YL.win = []; YL.pp = []; YL.comp = null; YL.mapid = ""; YL.sel = -1;   // 换图：清掉旧窗口/合成图
+  YL.win = []; YL.pp = []; YL.viewKey = null; YL.viewImg = null; YL.mapid = ""; YL.sel = -1;   // 换图：清掉旧窗口/预览缓存
   ylMapList();                                        // 立刻把选中行高亮刷出来
   $("#yl-msg").textContent = `地图 ${id} 渲染中（整图，大图要几秒）…`;
   try {
@@ -4080,7 +4080,7 @@ async function yoloPickMap(id) {
     return;
   }
   $("#yl-msg").textContent = "";
-  ylCompositeLoad();                                // 整图合成（怪+掉落+玩家）异步拉
+  ylCompositeLoad();                                // 初始随机批次（每个红点一套怪/掉落/玩家）
   yoloOpen();                                       // 数据好了 → 采样出框
 }
 
@@ -4144,30 +4144,50 @@ function ylRender() {
   ylView();
 }
 
-/* 选中窗口的实时画面：优先用「整图合成」（mobs+drops+0~5 随机玩家）本地裁剪，
-   合成图没到就用普通预览兜底 —— 拖窗口时是纯客户端裁剪，零请求 */
+/* 选中窗口的实时画面：每个红点一套独立随机的怪/掉落/玩家（seed = 全局批次 + 窗口
+   序号，和导出同规则）。先显示普通预览的即时裁剪兜底，该窗口的合成图到了再换上；
+   拖动中不请求（画面跟不上），松手才合成 */
 function ylView() {
   const box = $("#yl-view"), w = YL.win[YL.sel];
   if (!w || !YL.iw) { box.hidden = true; return; }
   box.hidden = false;
-  const src = (YL.comp && YL.comp.complete && YL.comp.naturalWidth) ? YL.comp.src : $("#yl-mapimg").src;
   const s = Math.min(396 / w[2], 300 / w[3]);
   box.style.width = Math.round(w[2] * s) + "px";
   box.style.height = Math.round(w[3] * s) + "px";
-  box.style.backgroundImage = `url("${src}")`;
+  box.style.backgroundImage = `url("${$("#yl-mapimg").src}")`;
   box.style.backgroundSize = `${YL.iw * s}px ${YL.ih * s}px`;
   box.style.backgroundPosition = `${-w[0] * s}px ${-w[1] * s}px`;
+  if (YL.dragging) return;
+  const key = `${YL.mapid}:${YL.seed}:${YL.sel}:${w[0]}:${w[1]}:${w[2]}:${w[3]}`;
+  if (key === YL.viewKey && YL.viewImg) {      // 已合成过：直接复用
+    box.style.backgroundImage = `url("${YL.viewImg.src}")`;
+    box.style.backgroundSize = "100% 100%";
+    box.style.backgroundPosition = "0 0";
+    return;
+  }
+  clearTimeout(YL.viewTimer);
+  const myKey = key, sel = YL.sel;
+  YL.viewTimer = setTimeout(() => {
+    const img = new Image();
+    img.onload = () => {
+      if (YL.viewKey !== myKey) return;        // 已经切到别的点了
+      YL.viewImg = img;
+      box.style.backgroundImage = `url("${img.src}")`;
+      box.style.backgroundSize = "100% 100%";
+      box.style.backgroundPosition = "0 0";
+    };
+    YL.viewKey = myKey;
+    img.src = `/api/yolo/composite?id=${YL.mapid}&cls=${CLSMODE ? 1 : 0}`
+            + `&seed=${YL.seed}:${sel}&l=${w[0]}&t=${w[1]}&w=${w[2]}&h=${w[3]}`;
+  }, 120);
 }
 
-/* 拉一张整图合成（新 seed = 换一批随机布局），到了就刷新实时画面 */
+/* 换一批：换全局随机批次 —— 所有红点的怪/掉落/玩家布局全部重抽（点谁谁刷新） */
 function ylCompositeLoad() {
   if (!mapRef) return;
   YL.seed = Math.random().toString(36).slice(2, 10);
-  YL.comp = null;
-  const img = new Image();
-  img.onload = () => { if (String(mapRef.id) === img.dataset.mid) { YL.comp = img; ylView(); } };
-  img.dataset.mid = String(mapRef.id);
-  img.src = `/api/yolo/composite?id=${img.dataset.mid}&cls=${CLSMODE ? 1 : 0}&seed=${YL.seed}`;
+  YL.viewKey = null; YL.viewImg = null;
+  ylView();
 }
 
 function ylDotDown(e) {
@@ -4184,12 +4204,16 @@ function ylDotDown(e) {
   const mm = (ev) => {
     const dx = ev.clientX - s0x, dy = ev.clientY - s0y;
     if (!moved && Math.abs(dx) + Math.abs(dy) < 4) return;   // 没怎么动 = 只是点选
-    if (!moved) { moved = true; YL.pp[YL.sel] = null; }      // 真拖动才作废站位
+    if (!moved) { moved = true; YL.pp[YL.sel] = null; YL.dragging = true; }
     w[0] = Math.max(0, Math.min(Math.round(l0 + dx * k), YL.iw - w[2]));
     w[1] = Math.max(0, Math.min(Math.round(t0 + dy * k), YL.ih - w[3]));
     ylRender();
   };
-  const mu = () => { document.removeEventListener("mousemove", mm); document.removeEventListener("mouseup", mu); };
+  const mu = () => {
+    document.removeEventListener("mousemove", mm);
+    document.removeEventListener("mouseup", mu);
+    if (moved) { YL.dragging = false; ylRender(); }   // 松手才按新位置合成
+  };
   document.addEventListener("mousemove", mm);
   document.addEventListener("mouseup", mu);
 }
