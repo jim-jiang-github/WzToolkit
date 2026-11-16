@@ -5359,7 +5359,7 @@ def _yolo_windows_query(mid: str, n: int = 8, size: str = "", cls: bool = False)
 
 def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
               val_pct: int, flags: dict, out_root: Path,
-              windows: dict | None = None) -> None:
+              windows: dict | None = None, cover: bool = False) -> None:
     from PIL import Image
     runs = out_root
     run = runs / time.strftime("%Y%m%d-%H%M%S")
@@ -5374,9 +5374,9 @@ def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
             p.mkdir(parents=True, exist_ok=True)
         with _ylock:
             _yjob.update(running=True, error="", stage="准备", done=0,
-                         total=sum(_nw(m) for m in maps) * layouts, images=0, maps=0,
-                         boxes={k: 0 for k in YOLO_CLASSES}, failed=[],
-                         out=str(run), url="")
+                         total=0 if cover else sum(_nw(m) for m in maps) * layouts,
+                         images=0, maps=0, boxes={k: 0 for k in YOLO_CLASSES},
+                         failed=[], out=str(run), url="")
         samples: list = []
         n_img = 0
         counts = {k: 0 for k in YOLO_CLASSES}
@@ -5440,7 +5440,20 @@ def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
                             boxes.append((0, p))
                 anchors = [(p["x"] + p["w"] // 2, p["y"] + p["h"]) for p in pls]
                 fixed = (windows or {}).get(mid)
-                if fixed:
+                if cover:
+                    # 铺满整图（用户 2026-11-16：「地图空间原原本本完完整整照搬进
+                    # 训练集」）：网格窗口铺满整张预览图，右/下贴边的窗口左移/上移
+                    # 补齐不留死角；用所选分辨率（sizes[0]）保证窗口就是真实客户端
+                    # 视口大小。总张数要逐图渲染才知道，边跑边累计。
+                    W0, H0 = sizes[0]
+                    cols = max(1, math.ceil(iw / W0))
+                    rows = max(1, math.ceil(ih / H0))
+                    views = [(min(c * W0, max(0, iw - W0)),
+                              min(r * H0, max(0, ih - H0)), W0, H0)
+                             for r in range(rows) for c in range(cols)]
+                    with _ylock:
+                        _yjob["total"] = _yjob.get("total", 0) + len(views)
+                elif fixed:
                     # 手动精调模式：窗口是用户在前端拖好的，只做图像边界钳制
                     # （VR 合法性前端已用红框提示，导出尊重用户的最终选择）
                     views = []
@@ -5534,9 +5547,10 @@ def c_yolo_export(body: dict) -> dict:
         if ws:
             windows[k] = ws
     mode = "cls" if body.get("cls") else "mod"
+    cover = bool(body.get("cover"))          # 铺满整图：网格窗口盖住每张图全部画面
     _ystop.clear()
     _nw = lambda mid: len(windows.get(mid) or []) or per_map     # noqa: E731
-    total = sum(_nw(m) for m in maps) * layouts
+    total = 0 if cover else sum(_nw(m) for m in maps) * layouts
     with _ylock:
         _yjob.update(running=True, error="", stage="启动", done=0,
                      total=total, log=[], out="", url="",
@@ -5544,7 +5558,7 @@ def c_yolo_export(body: dict) -> dict:
                      failed=[])
     threading.Thread(target=_yolo_run,
                      args=(maps, mode, per_map, layouts, sizes, val_pct, flags,
-                           EXPORTS / "yolo", windows), daemon=True).start()
+                           EXPORTS / "yolo", windows, cover), daemon=True).start()
     return {"started": True, "maps": len(maps),
             "total": total,
             "per_map": per_map, "layouts": layouts, "sizes": sizes}

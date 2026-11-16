@@ -832,6 +832,7 @@
           <span class="muted">验证集 %</span>
           <input type="text" id="yl-val" value="15" style="min-width:56px;width:56px" title="按整张地图划分 train/val（不是按窗口随机切——同图的相似窗口会泄漏，验证 mAP 会虚高）">
           <label class="muted" style="display:flex;gap:4px;align-items:center" title="窗口尺寸在 1024×768 / 1366×768 / 1280×720 / 1920×1080 里随机——不同玩家客户端分辨率不一样"><input type="checkbox" id="yl-rsize"> 随机分辨率</label>
+          <label class="muted" style="display:flex;gap:4px;align-items:center" title="网格窗口铺满每张地图的完整画面（右/下贴边自动补齐，不留死角），忽略「每图窗口」和手动精调窗口；分辨率用上面选的（不随机）。配「全部地图」= 把整个地图空间一张不漏搬进训练集"><input type="checkbox" id="yl-cover"> 铺满整图</label>
           <span class="muted" id="yl-count"></span>
         </div>
         <div class="row">
@@ -4211,11 +4212,13 @@ async function yoloStart() {
       layouts: parseInt($("#yl-lay").value, 10) || 2,
       val: parseInt($("#yl-val").value, 10) || 15,
       random_size: $("#yl-rsize").checked,
+      cover: $("#yl-cover").checked,
       mob: $("#yl-mob").checked, boss: $("#yl-boss").checked,
       drop: $("#yl-drop").checked, player: $("#yl-player").checked,
     };
-    // 当前地图 + 精调过窗口 → 按用户摆的位置导，不再自动采样
-    if (YL.scope === "cur" && mapRef && YL.win.length && YL.mapid === String(mapRef.id))
+    // 当前地图 + 精调过窗口 + 没勾铺满 → 按用户摆的位置导，不再自动采样
+    if (YL.scope === "cur" && !$("#yl-cover").checked && mapRef && YL.win.length
+        && YL.mapid === String(mapRef.id))
       body.windows = { [String(mapRef.id)]: YL.win.map((w) => w.slice()) };
     await api("/api/yolo/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -4227,6 +4230,7 @@ async function yoloStart() {
 }
 
 $$("#yl-scope button").forEach((b) => b.onclick = () => { YL.scope = b.dataset.s; yoloOpen(); });
+$("#yl-cover").onchange = () => { $("#yl-per").disabled = $("#yl-cover").checked; };
 $("#yl-start").onclick = yoloStart;
 $("#yl-stop").onclick = async () => {
   try {
