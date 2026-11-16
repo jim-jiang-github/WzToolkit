@@ -5555,48 +5555,47 @@ def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
                 if _ystop.is_set():
                     break
                 lay = f"{mid}:l{li}"
-                im = base.copy()
-                boxes: list = []
-                pls: list = []
-                try:
-                    got, mobs = _composite_mobs(ws, None, mj, im, lay, 1)
-                    im = got if got is not None else im
-                    if flags["drop"]:
-                        got, pls_d = _composite_drops(None, mj, im, lay)
-                        im = got if got is not None else im
-                        boxes += [(2, p) for p in pls_d]
-                    if flags["player"]:
-                        got, pls = _composite_players(None, mj, im, lay)
-                        im = got if got is not None else im
-                        boxes += [(3, p) for p in pls]
-                except Exception as e:                 # noqa: BLE001
-                    _yjob["failed"].append([f"{mid}l{li}", str(e)])
-                    _yolo_log(f"{mid} 布局 {li} 合成失败：{e}")
-                    continue
-                if flags["mob"] or flags["boss"]:
-                    for p in mobs:
-                        t = tiers.get(str(p.get("kind")), "normal")
-                        if t == "boss":
-                            if flags["boss"]:
-                                boxes.append((1, p))
-                        elif flags["mob"]:
-                            boxes.append((0, p))
-                anchors = [(p["x"] + p["w"] // 2, p["y"] + p["h"]) for p in pls]
                 fixed = (windows or {}).get(mid)
+                shared_im = None          # 铺满整图模式：一张全图合成供所有窗口裁
+                shared_boxes: list = []
                 if cover:
                     # 铺满整图（用户 2026-11-16：「地图空间原原本本完完整整照搬进
                     # 训练集」）：网格窗口铺满整张预览图，右/下贴边的窗口左移/上移
                     # 补齐不留死角；用所选分辨率（sizes[0]）保证窗口就是真实客户端
-                    # 视口大小。
+                    # 视口大小。整图只合成一份（窗口拼回去要无接缝）。
                     W0, H0 = sizes[0]
                     cols = max(1, math.ceil(iw / W0))
                     rows = max(1, math.ceil(ih / H0))
                     views = [(min(c * W0, max(0, iw - W0)),
                               min(r * H0, max(0, ih - H0)), W0, H0)
                              for r in range(rows) for c in range(cols)]
+                    im = base.copy()
+                    try:
+                        got, mobs = _composite_mobs(ws, None, mj, im, lay, 1)
+                        im = got if got is not None else im
+                        if flags["drop"]:
+                            got, pls_d = _composite_drops(None, mj, im, lay)
+                            im = got if got is not None else im
+                            shared_boxes += [(2, p) for p in pls_d]
+                        if flags["player"]:
+                            got, _pls = _composite_players(None, mj, im, lay)
+                            im = got if got is not None else im
+                            shared_boxes += [(3, p) for p in _pls]
+                        for p in mobs:
+                            t2 = tiers.get(str(p.get("kind")), "normal")
+                            if t2 == "boss":
+                                if flags["boss"]:
+                                    shared_boxes.append((1, p))
+                            elif flags["mob"]:
+                                shared_boxes.append((0, p))
+                        shared_im = im
+                    except Exception as e:             # noqa: BLE001
+                        _yjob["failed"].append([f"{mid}l{li}", str(e)])
+                        _yolo_log(f"{mid} 布局 {li} 合成失败：{e}")
+                        continue
                 elif fixed:
-                    # 手动精调模式：窗口是用户在前端拖好的，只做图像边界钳制
-                    # （VR 合法性前端已用红框提示，导出尊重用户的最终选择）
+                    # 手动精调模式：窗口是用户在前端摆好的，只做图像边界钳制
+                    # （导出尊重用户的最终选择）
                     views = []
                     for (l, t, W2, H2) in fixed:
                         W2, H2 = int(W2), int(H2)
@@ -5606,16 +5605,50 @@ def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
                 else:
                     # 自动模式：按地面均布站位点，每点一个视窗（数量由地面长度定）
                     views = _yolo_views(mj, vr, minx, miny, iw, ih, sizes,
-                                        f"{mid}:l{li}", base, anchors)
+                                        f"{mid}:l{li}", base, ())
                 with _ylock:
                     _yjob["total"] = _yjob.get("total", 0) + len(views)
                 for vi, v in enumerate(views):
                     if _ystop.is_set():
                         break
                     l, t, W, H = v[0], v[1], v[2], v[3]
-                    img = _yolo_window(im, backs, tex, l, t, W, H, minx, miny)
+                    if shared_im is not None:
+                        # 铺满整图：所有窗口裁自同一份合成（拼回无接缝）
+                        img = _yolo_window(shared_im, backs, tex, l, t, W, H, minx, miny)
+                        lbl = _yolo_label(shared_boxes, l, t, W, H)
+                    else:
+                        # 每个窗口独立随机合成一套怪/掉落/玩家（用户 2026-11-16：
+                        # 一个点 = 一个全新视角，共享一份合成训练强度不够）
+                        wlay = f"{lay}:w{vi}"
+                        wim = base.copy()
+                        wboxes: list = []
+                        try:
+                            got, mobs = _composite_mobs(ws, None, mj, wim, wlay, 1)
+                            wim = got if got is not None else wim
+                            if flags["drop"]:
+                                got, pls_d = _composite_drops(None, mj, wim, wlay)
+                                wim = got if got is not None else wim
+                                wboxes += [(2, p) for p in pls_d]
+                            if flags["player"]:
+                                got, _pls = _composite_players(None, mj, wim, wlay)
+                                wim = got if got is not None else wim
+                                wboxes += [(3, p) for p in _pls]
+                            for p in mobs:
+                                t2 = tiers.get(str(p.get("kind")), "normal")
+                                if t2 == "boss":
+                                    if flags["boss"]:
+                                        wboxes.append((1, p))
+                                elif flags["mob"]:
+                                    wboxes.append((0, p))
+                        except Exception as e:         # noqa: BLE001
+                            _yjob["failed"].append([f"{mid}l{li}w{vi}", str(e)])
+                            _yolo_log(f"{mid} 窗口 {vi} 合成失败：{e}")
+                            with _ylock:
+                                _yjob["done"] = _yjob.get("done", 0) + 1
+                            continue
+                        img = _yolo_window(wim, backs, tex, l, t, W, H, minx, miny)
+                        lbl = _yolo_label(wboxes, l, t, W, H)
                     name = f"{mid}_{li:02d}_{vi:03d}"
-                    lbl = _yolo_label(boxes, l, t, W, H)
                     img.save((d_va if split_val else d_tr) / f"{name}.jpg", quality=88)
                     with open((l_va if split_val else l_tr) / f"{name}.txt", "w",
                               encoding="utf-8") as fh:
@@ -5876,17 +5909,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       (qs.get("size") or [""])[0],
                       (qs.get("cls") or [""])[0] in ("1", "true", "yes"))
         elif path == "/api/yolo/composite":
-            # 精调页「实时画面」：整图合成（mobs+drops+0~5 玩家，seed 定布局），
-            # 前端拿去本地裁剪窗口 —— 拖动零请求
+            # 精调页「实时画面」：整图合成（mobs+drops+0~5 玩家，seed 定布局）。
+            # 带 l/t/w/h 时返回该窗口的裁剪画面（含背景视差层），seed 按窗口带
+            # 序号 —— 每个红点一套独立随机的怪/掉落/玩家（与导出同规则）
             qs = urllib.parse.parse_qs(u.query)
             mid = (qs.get("id") or [""])[0]
             if not re.fullmatch(r"\d{1,9}", mid.strip()):
                 self._send_json(400, {"detail": "地图 id 应该是数字"})
                 return
             try:
-                im = _yolo_composite(mid.strip(),
-                                     (qs.get("cls") or ["0"])[0] in ("1", "true", "yes"),
-                                     (qs.get("seed") or [""])[0])[0]
+                val = _yolo_composite(mid.strip(),
+                                      (qs.get("cls") or ["0"])[0] in ("1", "true", "yes"),
+                                      (qs.get("seed") or [""])[0])
+                im, backs, tex = val[0], val[1], val[2]
+                minx, miny = val[3], val[4]
+                rect = [(qs.get(k) or [""])[0] for k in ("l", "t", "w", "h")]
+                if all(rect):
+                    l, t, W, H = (max(0, int(float(x))) for x in rect)
+                    im = _yolo_window(im, backs, tex, l, t, W, H, minx, miny)
                 buf = io.BytesIO()
                 im.convert("RGB").save(buf, "PNG")
                 self._send_bytes(buf.getvalue(), "image/png")
