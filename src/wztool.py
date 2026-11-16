@@ -4126,7 +4126,9 @@ def _composite_players(outdir: Path, mj: dict, base_png: Path, seed: str,
 
     外观/名字/站位全部由 seed 决定（同 seed 同布局，与 _composite_mobs 同款）：
     随机外观（肤色/发型/脸型/装备穿戴概率）+ 随机名字，随机 foothold 段内随机
-    x 落地，50% 随机镜像；头顶画游戏风格名字（白字黑描边，12px 宋体）。
+    x 落地，50% 随机镜像；名字画在脚底正下方（客户端 Char.cpp:68
+    namelabel.draw(absp+(0,-4))、字形向下展开 → 名字落在角色脚下），带
+    NAMETAG 黑 60% 半透明圆角背板（GraphicsGL.cpp:976）、白字居中。
     返回 (png路径, places)，places 带名字与像素框。
     """
     from PIL import Image, ImageDraw, ImageFont
@@ -4172,16 +4174,26 @@ def _composite_players(outdir: Path, mj: dict, base_png: Path, seed: str,
                 or px > im.width + img.width or py > im.height + img.height:
             continue
         im.alpha_composite(img, (px, py))
-        tags.append((px + img.width // 2, py - 8, look["name"]))
+        # 客户端字形占 [脚上2px, 脚下9px]、背板占脚下 2~13px（GraphicsGL
+        # drawtext 的 NAMETAG 分支）：名字在正下方、轻微压住鞋底
+        tags.append((px + img.width // 2, py + img.height - 2, look["name"]))
         places.append({"name": look["name"], "x": px, "y": py,
                        "w": img.width, "h": img.height})
     if not places:
         return None, []
     if f is not None and tags:
-        d = ImageDraw.Draw(im)
+        # 客户端 NAMETAG 背板 = 黑 60% 半透明圆角小条（GraphicsGL.cpp:976）。
+        # ImageDraw 直接写像素不混合，背板和文字都画在独立图层上再一次性
+        # alpha_composite（背板要能透出下面的地面，文字不能被背板压暗）
+        tag_layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        td = ImageDraw.Draw(tag_layer)
         for tx, ty, nm in tags:
-            d.text((tx, ty), nm, font=f, fill=(255, 255, 255, 255),
-                   stroke_width=2, stroke_fill=(0, 0, 0, 255), anchor="ms")
+            bb = td.textbbox((tx, ty), nm, font=f, anchor="ma")
+            td.rounded_rectangle((bb[0] - 4, bb[1] - 1, bb[2] + 4, bb[3] + 1),
+                                 radius=3, fill=(0, 0, 0, 153))
+            td.text((tx, ty), nm, font=f, fill=(255, 255, 255, 255),
+                    stroke_width=1, stroke_fill=(0, 0, 0, 255), anchor="ma")
+        im.alpha_composite(tag_layer)
     out = outdir / ("preview_players_nobg.png" if no_bg else "preview_players.png")
     (im if no_bg else im.convert("RGB")).save(out)
     return out, places
@@ -4781,9 +4793,10 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
             _render_preview(outdir, base_png, no_bg=True)
             R.draw_backs_view(canvas, mj.get("back", []), R.TexStore([str(outdir / "img")]),
                               vx + VIEW_W / 2, vy + VIEW_H / 2, VIEW_W, VIEW_H, front=0)
-        # 窗口底图：带怪/带掉落用合成结果（已在 nobg 底图上），否则就是 nobg 底图
+        # 窗口底图：带怪/带掉落/带玩家用合成结果（已在 nobg 底图上），否则就是 nobg 底图
         src_path = (Path(result["preview_path"])
-                    if result.get("mobs") or result.get("drops") else base_png)
+                    if (result.get("mobs") or result.get("drops")
+                        or result.get("players")) else base_png)
         src = Image.open(src_path).convert("RGBA")
         # 窗口可以超出地图边界（小图/边缘），只贴交集，其余留空
         sx0, sy0 = max(0, left), max(0, top)

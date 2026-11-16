@@ -312,14 +312,15 @@
   #list .it .lvchip { font: 10.5px/1 Consolas, monospace; color: #7fb4e8;
                       background: #1c2a3a; border-radius: 4px; padding: 2px 4px;
                       margin-left: auto; flex: none; }
-  /* 显示玩家：随机外观玩家立绘（锚点定位同怪物 .mspr）+ 游戏风格头顶名字 */
+  /* 显示玩家：随机外观玩家立绘（锚点定位同怪物 .mspr）+ 名字条（客户端
+     Char.cpp:68 名字画在脚底正下方 + NAMETAG 黑 60% 半透明圆角背板、白字居中） */
   .pwrap { position: absolute; pointer-events: none; }
   .pwrap .pspr { width: 100%; display: block; image-rendering: pixelated; }
-  .pwrap .ptag { position: absolute; left: 50%; bottom: calc(100% - 2px);
+  .pwrap .ptag { position: absolute; left: 50%; top: calc(100% - 3px);
                  transform: translateX(-50%); white-space: nowrap;
-                 font: 11px/1.4 SimSun, "宋体", serif; color: #fff;
-                 text-shadow: -1px 0 1px #000, 1px 0 1px #000,
-                              0 -1px 1px #000, 0 1px 1px #000; }
+                 font: 11px/1.5 SimSun, "宋体", serif; color: #fff;
+                 background: rgba(0, 0, 0, 0.6); border-radius: 3px;
+                 padding: 0 4px; }
   .md-list .it.big.on { background: #521019; }
   .md-list .it.boss.on { background: #4a2f08; }
   .md-detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
