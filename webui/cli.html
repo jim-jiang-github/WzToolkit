@@ -135,6 +135,32 @@
   .yl-body { padding: 12px 16px; display: flex; flex-direction: column;
              gap: 10px; overflow: auto; min-height: 0; }
   #yl-scope button { padding: 4px 10px; font-size: 12px; }
+  .yl-man { border-top: 1px dashed rgba(128,128,128,.3); padding-top: 10px; }
+  .yl-mlist { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 2px; max-height: 130px;
+              overflow: auto; }
+  .yl-mlist .it { font-size: 12px; padding: 2px 8px; border: 1px solid rgba(128,128,128,.4);
+                  border-radius: 6px; cursor: pointer; max-width: 260px; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+  .yl-mlist .it.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
+  .yl-edit { display: flex; gap: 14px; margin-top: 8px; align-items: flex-start; }
+  .yl-mapwrap { position: relative; flex: 1; min-width: 0; max-width: 100%; align-self: flex-start; }
+  .yl-mapwrap img { display: block; max-width: 100%; image-rendering: pixelated;
+                    border-radius: 8px; cursor: crosshair; }
+  .yl-wbox { position: absolute; border: 1px solid rgba(255,216,64,.9);
+             background: rgba(255,216,64,.12); box-sizing: border-box;
+             cursor: move; }
+  .yl-wbox .tag { position: absolute; left: 0; top: 0; font-size: 10px; line-height: 13px;
+                  padding: 0 4px; background: rgba(0,0,0,.6); color: #ffd840;
+                  white-space: nowrap; border-radius: 0 0 4px 0; }
+  .yl-wbox.on { border: 2px solid #ffd840; background: rgba(255,216,64,.24); z-index: 3; }
+  .yl-wbox.bad { border-color: #ff5252; }
+  .yl-wbox.bad .tag { color: #ff5252; }
+  .yl-vr { position: absolute; border: 1px dashed rgba(255,82,82,.65);
+           box-sizing: border-box; pointer-events: none; z-index: 1; }
+  .yl-side { width: 400px; flex: none; display: flex; flex-direction: column; gap: 6px; }
+  .yl-view { border: 1px solid rgba(128,128,128,.45); border-radius: 8px;
+             overflow: hidden; background: #10141c; align-self: flex-start;
+             image-rendering: pixelated; }
   .rc-btn { font-size: 12px; padding: 2px 9px; }
   .cols { display: grid; grid-template-columns: 300px 1fr; gap: 10px;
           flex: 1; min-height: 0; }
@@ -794,7 +820,7 @@
         <div class="row">
           <span class="muted">范围</span>
           <div class="seg" id="yl-scope">
-            <button data-s="cur" class="on" title="只导当前正在预览的这张地图">当前地图</button>
+            <button data-s="cur" class="on" title="只导一张地图：在下面搜地图 id/名字点一下选进来，然后拖黄框精调相机窗口">当前地图</button>
             <button data-s="list" title="导出本数据源（现代库/怀旧服）列表里的全部地图">全部地图</button>
             <button data-s="mob" title="只导有怪物刷新的地图（怀旧服大图库 339 张）——训练检测建议用这档">全部有怪</button>
             <button data-s="pick" title="自己挑地图：在下面的框里填地图 id 或名字（换行/逗号/空格分隔），支持模糊搜名">自选名单</button>
@@ -827,6 +853,34 @@
           <div class="prog-sub muted" id="yl-sub"></div>
         </div>
         <div class="muted" id="yl-msg"></div>
+        <div class="yl-man" id="yl-man" hidden>
+          <div class="row">
+            <input type="text" id="yl-q" placeholder="搜地图 id / 名字 → 点一下选进本页精调 …"
+                   style="width:280px" autocomplete="off">
+            <span class="muted" id="yl-picked"></span>
+          </div>
+          <div class="yl-mlist" id="yl-mlist"></div>
+          <div class="row">
+            <b>相机窗口（拖/微调，每格导一张）</b>
+            <button class="mini" id="yl-resamp" title="按「每图窗口」数重新自动采样一版（foothold 站位 → 相机公式 → VR 钳制），作为微调起点">🎲 自动采样</button>
+            <button class="mini" id="yl-addwin" title="以当前选中窗口的位置为底，在旁边加一个新窗口（或没选中时加在地图中央）">＋ 加窗口</button>
+            <button class="mini" id="yl-delwin" title="删掉选中的那个窗口">🗑 删选中</button>
+            <span class="muted" id="yl-wins"></span>
+          </div>
+          <div class="yl-edit">
+            <div class="yl-mapwrap" id="yl-mapwrap">
+              <img id="yl-mapimg" alt="整图（窗口框叠在这张图上拖）">
+              <div id="yl-winboxes"></div>
+            </div>
+            <div class="yl-side">
+              <div class="yl-view" id="yl-view"></div>
+              <div class="muted" id="yl-wininfo"></div>
+              <div class="muted" style="font-size:11.5px">
+                点框选中 → 图上直接拖，或 <b>方向键 1px / Shift+方向键 10px</b>；点空白处把选中窗口移过去（没选中就新开一个）；红虚线=相机合法范围（VR），出界的框导出时会按图边钳回。
+              </div>
+            </div>
+          </div>
+        </div>
         <img id="yl-img" hidden alt="" style="max-width:100%;max-height:520px;border-radius:10px"
              title="抽检拼图：随机 16 张导出图画上标注框 —— 先看这里确认框贴合，再拿去训练">
         <div class="muted" id="yl-out"></div>
@@ -3871,7 +3925,7 @@ window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); fitGam
 
 /* ---------------- YOLO 训练集导出 ---------------- */
 let YLTIMER = 0;
-const YL = { scope: "cur" };
+const YL = { scope: "cur", win: [], sel: -1, vr: null, iw: 0, ih: 0, mapid: "", loading: false };
 
 function yoloScopeMaps() {
   if (YL.scope === "cur") return mapRef ? [String(mapRef.id)] : [];
@@ -3928,7 +3982,209 @@ function yoloOpen() {
       items.length ? `本数据源 ${items.length} 张 · 有怪 ${nmob} 张` : "";
   }
   if (!$("#yl-prog").hidden || $("#yl-img").src) yoloPoll();
+  // 手动精调区：「当前地图」范围就显示 —— 地图可以直接在本页下面的选择器里挑，
+  // 不用切回地图页（挑中后走同一份 mapLoad，数据/缓存/叠加全复用）
+  const canEdit = YL.scope === "cur";
+  $("#yl-man").hidden = !canEdit;
+  if (canEdit) {
+    ylMapList();
+    const ready = mapRef && mapData && mapData.overlay;
+    const id = ready ? String(mapRef.id) : "";
+    $("#yl-picked").textContent = !id
+      ? "还没选地图：在上面搜一下点一张"
+      : `当前：${mapData.name ? mapData.name + " · " : ""}${id}（大图首次渲染要几秒）`;
+    if (id && (YL.mapid !== id || !YL.win.length) && !YL.loading) yoloResample();
+    else if (id) ylRender();
+  }
 }
+
+/* 本页地图选择器：搜 id/名字 → 点一下加载该图并进精调 */
+function ylMapList() {
+  const q = ($("#yl-q").value || "").trim().toLowerCase();
+  const box = $("#yl-mlist");
+  if (!box) return;
+  const items = CLSMODE ? (CLS_MAPS || []) : MAPS.map((s) => ({ id: s }));
+  let arr = items.filter((m) =>
+    !q || String(m.id).includes(q) ||
+    (CLSMODE && `${m.name || ""} ${m.street || ""}`.toLowerCase().includes(q)));
+  arr = arr.slice(0, q ? 40 : 24);
+  const cur = mapRef ? String(mapRef.id) : "";
+  box.innerHTML = arr.map((m) => {
+    const label = CLSMODE && m.name ? esc(m.name) + " " : "";
+    const tip = CLSMODE ? `${m.id} · ${esc(m.name || "")}${m.street ? " · " + esc(m.street) : ""}${m.mob ? " · 有怪" : ""}`
+                        : String(m.id);
+    return `<span class="it${String(m.id) === cur ? " on" : ""}" data-id="${m.id}" title="${tip}">${label}<span class="muted">${m.id}</span></span>`;
+  }).join("") || '<span class="muted">没有匹配的地图</span>';
+  box.querySelectorAll(".it").forEach((el) => { el.onclick = () => yoloPickMap(el.dataset.id); });
+}
+
+async function yoloPickMap(id) {
+  YL.win = []; YL.mapid = ""; YL.sel = -1;          // 换图：清掉旧窗口
+  $("#yl-picked").textContent = `地图 ${id} 渲染中（整图，大图要几秒）…`;
+  try {
+    await mapLoad(id, true, CLSMODE);
+  } catch (e) {                                       // noqa: BLE001
+    $("#yl-picked").textContent = "⚠ " + (e.message || e);
+    return;
+  }
+  if (!mapData || !mapData.overlay || String(mapRef.id) !== String(id)) {
+    $("#yl-picked").textContent = `⚠ 地图 ${id} 加载失败（看顶部错误栏）`;
+    return;
+  }
+  yoloOpen();                                       // 数据好了 → 采样出框
+}
+
+/* ---- 手动精调：整图叠框，拖/方向键微调相机窗口，导出用固定窗口 ---- */
+async function yoloResample() {
+  if (!mapRef || !mapData || YL.loading) return;
+  const id = String(mapRef.id);
+  YL.loading = true;
+  $("#yl-wins").textContent = "采样中…（首次要先渲染整图）";
+  try {
+    const n = parseInt($("#yl-per").value, 10) || 8;
+    const d = await api(`/api/yolo/windows?id=${id}&n=${n}&cls=${CLSMODE ? 1 : 0}`);
+    YL.mapid = id;
+    YL.win = d.views.map((v) => v.slice());
+    YL.vr = d.vr; YL.iw = d.iw; YL.ih = d.ih;
+    YL.sel = YL.win.length ? 0 : -1;
+  } catch (e) {
+    YL.loading = false;
+    $("#yl-wins").textContent = "⚠ " + e.message;
+    return;
+  }
+  YL.loading = false;
+  const img = $("#yl-mapimg");
+  if (img.dataset.mid !== id) {
+    img.dataset.mid = id;
+    img.src = mapData.preview_url + (mapData.mobs ? `?v=${Date.now()}` : "");
+  }
+  ylRender();
+}
+
+/* 窗口是否在相机合法范围（VR）外 —— 游戏里镜头到不了，只是提示，导出仍按用户放的位置 */
+function ylBad(w) {
+  if (!YL.vr) return false;
+  const [vl, vt, vr, vb] = YL.vr;
+  const lOk = vr - vl >= w[2] ? (w[0] >= vl - 0.5 && w[0] <= vr - w[2] + 0.5)
+             : Math.abs(w[0] - (vl + vr - w[2]) / 2) > 0.5;
+  const tOk = vb - vt >= w[3] ? (w[1] >= vt - 0.5 && w[1] <= vb - w[3] + 0.5)
+             : Math.abs(w[1] - (vt + vb - w[3]) / 2) > 0.5;
+  return !(lOk && tOk);
+}
+
+function ylRender() {
+  if ($("#yl-man").hidden) return;
+  const W = YL.iw, H = YL.ih;
+  if (!W || !H) return;
+  const lay = parseInt($("#yl-lay").value, 10) || 2;
+  $("#yl-wins").textContent =
+    YL.win.length ? `${YL.win.length} 窗 × ${lay} 布局 = ${YL.win.length * lay} 张` : "没有窗口：🎲 自动采样 或 点图添加";
+  let html = "";
+  if (YL.vr) {
+    const [vl, vt, vr, vb] = YL.vr;
+    html += `<div class="yl-vr" style="left:${vl / W * 100}%;top:${vt / H * 100}%;`
+          + `width:${(vr - vl) / W * 100}%;height:${(vb - vt) / H * 100}%"></div>`;
+  }
+  YL.win.forEach((w, i) => {
+    const bad = ylBad(w);
+    html += `<div class="yl-wbox${i === YL.sel ? " on" : ""}${bad ? " bad" : ""}" data-i="${i}"`
+          + ` style="left:${w[0] / W * 100}%;top:${w[1] / H * 100}%;`
+          + `width:${w[2] / W * 100}%;height:${w[3] / H * 100}%">`
+          + `<span class="tag">#${i + 1}${bad ? " 出界" : ""} (${w[0]},${w[1]})</span></div>`;
+  });
+  $("#yl-winboxes").innerHTML = html;
+  $$("#yl-winboxes .yl-wbox").forEach((b) => {
+    b.addEventListener("mousedown", ylBoxDown);
+  });
+  const w = YL.win[YL.sel];
+  $("#yl-wininfo").textContent =
+    w ? `选中 #${YL.sel + 1}：左上 (${w[0]}, ${w[1]}) · ${w[2]}×${w[3]}` : "（没选中窗口）";
+  ylView();
+}
+
+/* 选中窗口的实时画面：整图当背景图裁出来（含怪物叠加），挪一格立刻看到 */
+function ylView() {
+  const box = $("#yl-view"), w = YL.win[YL.sel];
+  if (!w || !YL.iw) { box.hidden = true; return; }
+  box.hidden = false;
+  const s = Math.min(396 / w[2], 300 / w[3]);
+  box.style.width = Math.round(w[2] * s) + "px";
+  box.style.height = Math.round(w[3] * s) + "px";
+  box.style.backgroundImage = `url("${$("#yl-mapimg").src}")`;
+  box.style.backgroundSize = `${YL.iw * s}px ${YL.ih * s}px`;
+  box.style.backgroundPosition = `${-w[0] * s}px ${-w[1] * s}px`;
+}
+
+function ylBoxDown(e) {
+  e.preventDefault();
+  YL.sel = +e.currentTarget.dataset.i;
+  ylRender();
+  const w = YL.win[YL.sel];
+  const k = YL.iw / $("#yl-mapimg").getBoundingClientRect().width;
+  const [s0x, s0y] = [e.clientX, e.clientY];
+  const [l0, t0] = [w[0], w[1]];
+  const mm = (ev) => {
+    w[0] = Math.max(0, Math.min(Math.round(l0 + (ev.clientX - s0x) * k), YL.iw - w[2]));
+    w[1] = Math.max(0, Math.min(Math.round(t0 + (ev.clientY - s0y) * k), YL.ih - w[3]));
+    ylRender();
+  };
+  const mu = () => { document.removeEventListener("mousemove", mm); document.removeEventListener("mouseup", mu); };
+  document.addEventListener("mousemove", mm);
+  document.addEventListener("mouseup", mu);
+}
+
+$("#yl-mapimg").addEventListener("mousedown", (e) => {
+  if (!YL.iw || $("#yl-man").hidden) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const k = YL.iw / rect.width;
+  let w = YL.win[YL.sel];
+  if (!w) {                             // 没选中：以点击处为中心新开一个
+    const b = YL.win[0] || [0, 0, 1366, 768];
+    w = b.slice();
+    YL.win.push(w);
+  }
+  w[0] = Math.max(0, Math.min(Math.round((e.clientX - rect.left) * k - w[2] / 2), YL.iw - w[2]));
+  w[1] = Math.max(0, Math.min(Math.round((e.clientY - rect.top) * k - w[3] / 2), YL.ih - w[3]));
+  YL.sel = YL.win.indexOf(w);
+  ylRender();
+});
+
+$("#yl-resamp").onclick = yoloResample;
+$("#yl-q").oninput = ylMapList;
+$("#yl-addwin").onclick = () => {
+  if (!YL.iw) return;
+  const w = (YL.win[YL.sel] || YL.win[0] || [0, 0, 1366, 768]).slice();
+  w[0] = Math.max(0, Math.min(w[0] + 40, YL.iw - w[2]));
+  w[1] = Math.max(0, Math.min(w[1] + 24, YL.ih - w[3]));
+  YL.win.push(w);
+  YL.sel = YL.win.length - 1;
+  ylRender();
+};
+$("#yl-delwin").onclick = () => {
+  if (YL.sel < 0 || !YL.win[YL.sel]) return;
+  YL.win.splice(YL.sel, 1);
+  YL.sel = Math.min(YL.sel, YL.win.length - 1);
+  ylRender();
+};
+
+document.addEventListener("keydown", (e) => {   // 精调：方向键挪选中窗口
+  if (MODE !== "yolo" || YL.scope !== "cur" || YL.sel < 0) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const w = YL.win[YL.sel];
+  if (!w) return;
+  const st = e.shiftKey ? 10 : 1;
+  let hit = true;
+  if (e.key === "ArrowLeft") w[0] -= st;
+  else if (e.key === "ArrowRight") w[0] += st;
+  else if (e.key === "ArrowUp") w[1] -= st;
+  else if (e.key === "ArrowDown") w[1] += st;
+  else hit = false;
+  if (!hit) return;
+  e.preventDefault();
+  w[0] = Math.max(0, Math.min(w[0], YL.iw - w[2]));
+  w[1] = Math.max(0, Math.min(w[1], YL.ih - w[3]));
+  ylRender();
+});
 
 async function yoloPoll() {
   clearTimeout(YLTIMER);
@@ -3974,17 +4230,21 @@ async function yoloStart() {
     ? (() => { const m = yoloPickMaps().miss; return m.length ? "⚠ 没认出：" + m.join("、") + "（其余照常导出）" : ""; })()
     : "";
   try {
+    const body = {
+      maps, cls: CLSMODE,
+      per_map: parseInt($("#yl-per").value, 10) || 8,
+      layouts: parseInt($("#yl-lay").value, 10) || 2,
+      val: parseInt($("#yl-val").value, 10) || 15,
+      random_size: $("#yl-rsize").checked,
+      mob: $("#yl-mob").checked, boss: $("#yl-boss").checked,
+      drop: $("#yl-drop").checked, player: $("#yl-player").checked,
+    };
+    // 当前地图 + 精调过窗口 → 按用户摆的位置导，不再自动采样
+    if (YL.scope === "cur" && mapRef && YL.win.length && YL.mapid === String(mapRef.id))
+      body.windows = { [String(mapRef.id)]: YL.win.map((w) => w.slice()) };
     await api("/api/yolo/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        maps, cls: CLSMODE,
-        per_map: parseInt($("#yl-per").value, 10) || 8,
-        layouts: parseInt($("#yl-lay").value, 10) || 2,
-        val: parseInt($("#yl-val").value, 10) || 15,
-        random_size: $("#yl-rsize").checked,
-        mob: $("#yl-mob").checked, boss: $("#yl-boss").checked,
-        drop: $("#yl-drop").checked, player: $("#yl-player").checked,
-      }),
+      body: JSON.stringify(body),
     });
   } catch (e) { $("#yl-msg").textContent = "⚠ " + e.message; return; }
   $("#yl-img").hidden = true;

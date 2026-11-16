@@ -5281,13 +5281,47 @@ def _yolo_montage(samples: list, path: Path) -> None:
     out.save(path, quality=90)
 
 
+def _yolo_windows_query(mid: str, n: int = 8, size: str = "", cls: bool = False) -> dict:
+    """手动精调模式：给一张图采「建议相机窗口」+ VR 合法范围（都是预览图像素坐标）。
+
+    前端拿这份做初始框，用户拖/微调后把最终窗口列表传回 /api/yolo/export
+    （windows 参数），导出时不再自动采样。
+    """
+    mid = str(mid).strip()
+    if not re.fullmatch(r"\d{1,9}", mid):
+        raise CliError("地图 id 应该是数字", 2)
+    d = c_map_export(mid, preview=True, cls=bool(cls), no_bg=True)
+    outdir = Path(d["dir"])
+    mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
+    if not mj.get("foothold"):
+        raise CliError("这张图没有 foothold，采不出相机窗口", 1)
+    ov = d.get("overlay") or {}
+    minx, miny = float(ov["minx"]), float(ov["miny"])
+    iw, ih = int(ov["w"]), int(ov["h"])
+    vr = d.get("vr") or _map_vr(outdir, mj)
+    try:
+        W, H = (int(x) for x in str(size or "1366x768").lower().split("x"))
+    except Exception:                          # noqa: BLE001
+        W, H = VIEW_W, VIEW_H
+    views = _yolo_views(mj, vr, minx, miny, iw, ih, max(1, min(60, int(n or 8))),
+                        [(W, H)], f"{mid}:edit", ())
+    vrpx = None
+    if vr:
+        vrpx = [round(vr["left"] - minx), round(vr["top"] - miny),
+                round(vr["right"] - minx), round(vr["bottom"] - miny)]
+    return {"id": mid, "minx": minx, "miny": miny, "iw": iw, "ih": ih, "vr": vrpx,
+            "views": [[int(l), int(t), W, H] for (l, t, _w, _h) in views]}
+
+
 def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
-              val_pct: int, flags: dict, out_root: Path) -> None:
+              val_pct: int, flags: dict, out_root: Path,
+              windows: dict | None = None) -> None:
     from PIL import Image
     runs = out_root
     run = runs / time.strftime("%Y%m%d-%H%M%S")
     d_tr, d_va = run / "images" / "train", run / "images" / "val"
     l_tr, l_va = run / "labels" / "train", run / "labels" / "val"
+    _nw = lambda mid: len((windows or {}).get(mid) or []) or per_map  # noqa: E731
     try:
         ws = _need_ws()
         R = _render_mod()
@@ -5296,7 +5330,7 @@ def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
             p.mkdir(parents=True, exist_ok=True)
         with _ylock:
             _yjob.update(running=True, error="", stage="准备", done=0,
-                         total=len(maps) * per_map * layouts, images=0, maps=0,
+                         total=sum(_nw(m) for m in maps) * layouts, images=0, maps=0,
                          boxes={k: 0 for k in YOLO_CLASSES}, failed=[],
                          out=str(run), url="")
         samples: list = []
@@ -5361,8 +5395,19 @@ def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
                         elif flags["mob"]:
                             boxes.append((0, p))
                 anchors = [(p["x"] + p["w"] // 2, p["y"] + p["h"]) for p in pls]
-                views = _yolo_views(mj, vr, minx, miny, iw, ih, per_map, sizes,
-                                    f"{mid}:l{li}", anchors)
+                fixed = (windows or {}).get(mid)
+                if fixed:
+                    # 手动精调模式：窗口是用户在前端拖好的，只做图像边界钳制
+                    # （VR 合法性前端已用红框提示，导出尊重用户的最终选择）
+                    views = []
+                    for (l, t, W2, H2) in fixed:
+                        W2, H2 = int(W2), int(H2)
+                        l = max(0, min(int(l), iw - W2))
+                        t = max(0, min(int(t), ih - H2))
+                        views.append((l, t, W2, H2))
+                else:
+                    views = _yolo_views(mj, vr, minx, miny, iw, ih, per_map, sizes,
+                                        f"{mid}:l{li}", anchors)
                 for vi, (l, t, W, H) in enumerate(views):
                     if _ystop.is_set():
                         break
@@ -5377,7 +5422,7 @@ def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
                     n_img += 1
                     for (c, *_rest) in lbl:
                         counts[YOLO_CLASSES[c]] += 1
-                    if len(samples) < 16 and vi % max(1, per_map // 4) == 0:
+                    if len(samples) < 16 and vi % max(1, len(views) // 4) == 0:
                         samples.append((img, lbl, W, H))
                     _yjob["done"] = _yjob.get("done", 0) + 1
                 with _ylock:
@@ -5427,18 +5472,37 @@ def c_yolo_export(body: dict) -> dict:
     flags = {k: bool(body.get(k, True)) for k in ("mob", "boss", "drop", "player")}
     if not any(flags.values()):
         raise CliError("至少选一个类别", 2)
+    # 手动精调窗口：{地图id: [[left, top, W, H], ...]}（前端 YOLO 面板拖好的）
+    windows: dict = {}
+    for k, v in (body.get("windows") or {}).items():
+        k = str(k).strip()
+        if k not in maps:
+            continue
+        ws = []
+        for it in (v or []):
+            try:
+                l, t, W2, H2 = (int(round(float(x))) for x in it[:4])
+            except Exception:                      # noqa: BLE001
+                continue
+            if W2 < 64 or H2 < 64:
+                continue
+            ws.append([l, t, W2, H2])
+        if ws:
+            windows[k] = ws
     mode = "cls" if body.get("cls") else "mod"
     _ystop.clear()
+    _nw = lambda mid: len(windows.get(mid) or []) or per_map     # noqa: E731
+    total = sum(_nw(m) for m in maps) * layouts
     with _ylock:
         _yjob.update(running=True, error="", stage="启动", done=0,
-                     total=len(maps) * per_map, log=[], out="", url="",
+                     total=total, log=[], out="", url="",
                      images=0, maps=0, boxes={k: 0 for k in YOLO_CLASSES},
                      failed=[])
     threading.Thread(target=_yolo_run,
                      args=(maps, mode, per_map, layouts, sizes, val_pct, flags,
-                           EXPORTS / "yolo"), daemon=True).start()
+                           EXPORTS / "yolo", windows), daemon=True).start()
     return {"started": True, "maps": len(maps),
-            "total": len(maps) * per_map * layouts,
+            "total": total,
             "per_map": per_map, "layouts": layouts, "sizes": sizes}
 
 
@@ -5604,6 +5668,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_cls_tables)
         elif path == "/api/yolo/status":
             self._api(c_yolo_status)
+        elif path == "/api/yolo/windows":
+            qs = urllib.parse.parse_qs(u.query)
+            self._api(_yolo_windows_query,
+                      (qs.get("id") or [""])[0], (qs.get("n") or ["8"])[0],
+                      (qs.get("size") or [""])[0],
+                      (qs.get("cls") or [""])[0] in ("1", "true", "yes"))
         elif path.startswith("/preview/"):
             self._send_file(CACHE / urllib.parse.unquote(path[len("/preview/"):]),
                             "image/png")
