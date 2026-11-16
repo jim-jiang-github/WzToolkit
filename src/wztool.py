@@ -5378,9 +5378,15 @@ def _yolo_window(full, backs, tex, left: int, top: int, W: int, H: int,
 
 
 def _yolo_label(boxes: list, left: int, top: int, W: int, H: int,
-                min_vis: float = 0.25) -> list:
-    """世界（合成图）坐标框 → YOLO 归一化框；可见面积 <25% 的不标（露太少学不了）。"""
-    out = []
+                min_vis: float = 0.25, mob_name: dict | None = None,
+                iname: dict | None = None) -> tuple:
+    """世界（合成图）坐标框 → YOLO 归一化框；可见面积 <25% 的不标（露太少学不了）。
+
+    返回 (txt框列表, 命名框列表)：后者给 annotations.jsonl（用户 2026-11-17：
+    标注数据要带怪物名字和掉落物品名字），怪=怪名、掉落=物品名、玩家=随机名。
+    """
+    out: list = []
+    named: list = []
     for cls, p in boxes:
         x0, y0 = p["x"] - left, p["y"] - top
         x1, y1 = x0 + p["w"], y0 + p["h"]
@@ -5391,8 +5397,24 @@ def _yolo_label(boxes: list, left: int, top: int, W: int, H: int,
             continue
         if w * h < min_vis * max(1, p["w"] * p["h"]):
             continue
-        out.append((cls, (ix0 + ix1) / 2 / W, (iy0 + iy1) / 2 / H, w / W, h / H))
-    return out
+        cx, cy, bw, bh = ((ix0 + ix1) / 2 / W, (iy0 + iy1) / 2 / H,
+                          w / W, h / H)
+        out.append((cls, cx, cy, bw, bh))
+        ent = {"c": cls, "x": round(cx, 6), "y": round(cy, 6),
+               "w": round(bw, 6), "h": round(bh, 6)}
+        if cls in (0, 1):                      # mob / boss
+            kid = str(p.get("kind", ""))
+            ent["id"] = kid
+            ent["name"] = (mob_name or {}).get(kid, "")
+        elif cls == 2:                         # drop
+            iid = str(p.get("item", ""))
+            ent["id"] = iid
+            ent["name"] = (iname or {}).get(iid, "")
+        else:                                  # player：合成时已带随机名
+            ent["id"] = ""
+            ent["name"] = str(p.get("name", "")) or "player"
+        named.append(ent)
+    return out, named
 
 
 def _yolo_montage(samples: list, path: Path) -> None:
@@ -5512,6 +5534,24 @@ def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
         ws = _need_ws()
         R = _render_mod()
         tiers = _yolo_tiers()
+        # 标注名字表（用户 2026-11-17：标注要带怪物名/掉落物名）：
+        # 怪 id → 名（Mob.nx 缓存，秒读）；物品 id(zfill8) → 名（vendor/itemnames.json）
+        mobnx = _nx_dir() / "Mob.nx"
+        mobname: dict = {}
+        if mobnx.exists():
+            try:
+                mobname = {m["id"]: (m.get("name") or "") for m in mob_meta(mobnx)}
+            except Exception:                      # noqa: BLE001
+                mobname = {}
+        iname: dict = {}
+        try:
+            iname = {k: (v or {}).get("name") or ""
+                     for k, v in _itemnames().items()}
+        except Exception:                          # noqa: BLE001
+            iname = {}
+        ann_path = run / "annotations.jsonl"
+        ann_path.parent.mkdir(parents=True, exist_ok=True)
+        ann = ann_path.open("w", encoding="utf-8")
         for p in (d_tr, d_va, l_tr, l_va):
             p.mkdir(parents=True, exist_ok=True)
         with _ylock:
@@ -5615,7 +5655,8 @@ def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
                     if shared_im is not None:
                         # 铺满整图：所有窗口裁自同一份合成（拼回无接缝）
                         img = _yolo_window(shared_im, backs, tex, l, t, W, H, minx, miny)
-                        lbl = _yolo_label(shared_boxes, l, t, W, H)
+                        lbl, named = _yolo_label(shared_boxes, l, t, W, H,
+                                                 mob_name=mobname, iname=iname)
                     else:
                         # 每个窗口独立随机合成一套怪/掉落/玩家（用户 2026-11-16：
                         # 一个点 = 一个全新视角，共享一份合成训练强度不够）
@@ -5647,13 +5688,19 @@ def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
                                 _yjob["done"] = _yjob.get("done", 0) + 1
                             continue
                         img = _yolo_window(wim, backs, tex, l, t, W, H, minx, miny)
-                        lbl = _yolo_label(wboxes, l, t, W, H)
+                        lbl, named = _yolo_label(wboxes, l, t, W, H,
+                                                 mob_name=mobname, iname=iname)
                     name = f"{mid}_{li:02d}_{vi:03d}"
+                    split = "val" if split_val else "train"
                     img.save((d_va if split_val else d_tr) / f"{name}.jpg", quality=88)
                     with open((l_va if split_val else l_tr) / f"{name}.txt", "w",
                               encoding="utf-8") as fh:
                         for (c, cx, cy, bw, bh) in lbl:
                             fh.write(f"{c} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+                    # 命名标注（怪名/物品名/玩家名）：annotations.jsonl 一行一图
+                    ann.write(json.dumps(
+                        {"file": f"images/{split}/{name}.jpg", "map": mid,
+                         "boxes": named}, ensure_ascii=False) + "\n")
                     n_img += 1
                     for (c, *_rest) in lbl:
                         counts[YOLO_CLASSES[c]] += 1
@@ -5674,8 +5721,13 @@ def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
         url = _res_url(run / "_preview.jpg") if (run / "_preview.jpg").exists() else ""
         with _ylock:
             _yjob.update(running=False, stage="完成", url=url)
+        ann.close()
         _yolo_log(f"完成：{n_img} 张图 / {sum(counts.values())} 个框 → {run}")
     except Exception as e:                         # noqa: BLE001
+        try:
+            ann.close()
+        except Exception:                          # noqa: BLE001
+            pass
         with _ylock:
             _yjob.update(running=False, error=str(e), stage="失败")
         _yolo_log(f"失败：{e}")
