@@ -948,6 +948,7 @@ const DETAIL_DEFAULT = $("#detail").innerHTML;
 let CLSMODE = localStorage.getItem("wt_datamode") === "cls";
 let CLS_MAPS = null;       // [{id, street, name, desc, w, h, mod}]
 let CLS_WZJS = false;      // 大图库（WZJS 1750 张）就绪 → 点行渲染完整地图
+let CLS_WZJS_STALE = false;  // true=建过但客户端资源包变了，要「重建」不是「去转换」
 let CLS_LIFE = null;       // Set(id)：有自然刷怪的地图（「有怪/无怪」筛选；null=未加载）
 let CLS_TAB = null;        // {mob:Set, skill:Set}（去前导零 id）
 let CLS_TAB_LOAD = null;
@@ -969,11 +970,46 @@ async function clsTables() {
 
 /* 怀旧服地图 tab 的默认提示（列表/大图库状态就绪后用 clsHintSync 刷新） */
 function clsHintHTML() {
+  const wzjsLine = CLS_WZJS
+    ? "大图库就绪，可窗口导出 / 找图"
+    : CLS_WZJS_STALE
+    ? `⚠ 客户端资源库已变化（游戏更新过），大图库需要重建
+       <button class="mini" id="wzjs-rebuild">🔄 重建大图库</button>
+       <div class="muted" style="margin-top:4px">重建期间地图只显示小 canvas；已转过的图自动跳过，只补变化的</div>`
+    : "大图库没建好：数据源面板点「⬇ 转换缺失数据」";
   return `<div class="muted">左侧选一张怀旧服地图：渲染完整大图（WZJS 地图数据，与现代库同款渲染管线）。<br><br>
     · 共 ${ (CLS_MAPS || []).length ? CLS_MAPS.length : "—" } 张<br>
     · 地图名来自客户端本地数据（1838 张名表）<br>
-    · ${CLS_WZJS ? "大图库就绪，可窗口导出 / 找图" : "大图库没建好：数据源面板点「⬇ 转换缺失数据」"}</div>`;
+    · ${wzjsLine}</div>`;
 }
+
+/* 「🔄 重建大图库」按钮（提示面板和 canvas 兜底详情里都有）：
+   POST /api/wzjsbuild 起后台任务 → 复用全局进度条；任务结束自动重拉列表，
+   大图库就绪后点行恢复完整渲染 */
+async function wzjsRebuild() {
+  const btn = $("#wzjs-rebuild");
+  if (btn) { btn.disabled = true; btn.textContent = "启动中…"; }
+  try {
+    await api("/api/wzjsbuild", { method: "POST" });
+    startProgress();
+    const wait = setInterval(async () => {
+      let p;
+      try { p = await api("/api/progress"); } catch (e) { return; }
+      if (!p.clsmap || !p.clsmap.running) {
+        clearInterval(wait);
+        CLS_MAPS = null;      // 强制重拉：wzjs 就绪状态变了
+        loadLists();
+      }
+    }, 1500);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = "🔄 重建大图库"; }
+    fail(e);
+  }
+}
+/* #detail 内容会被整体重写，按钮没法单独绑 → 事件委托在容器上 */
+$("#detail").addEventListener("click", (e) => {
+  if (e.target.closest("#wzjs-rebuild")) wzjsRebuild();
+});
 /* 提示文案是 dataModeSync 打的，那时列表还没拉回来（字数/就绪状态都是旧值）——
    列表到了再刷一次；已经打开某张地图（有 #mapsel）就别动，免得冲掉画面 */
 function clsHintSync() {
@@ -1788,6 +1824,7 @@ async function loadLists() {
         const d = await api("/api/cls/maps");
         CLS_MAPS = d.maps;
         CLS_WZJS = !!d.wzjs;   // 大图库就绪 → 点行渲染完整地图；否则只看 canvas
+        CLS_WZJS_STALE = !!d.wzjs_stale;   // 建过但不就绪 = 资源包变了，给重建按钮
         // 有怪名单：大图库才有（canvas 模式没刷怪数据 → 保持 null，筛选按钮不生效）
         CLS_LIFE = Array.isArray(d.life_maps) ? new Set(d.life_maps) : null;
         MAP_LV = d.mob_lv || {};
@@ -1887,6 +1924,9 @@ function clsSelect(id) {
   const det = $("#detail");
   const url = `/preview/minimap-cls/${m.id}.png`;
   det.innerHTML = `<div class="clsmap">
+    ${CLS_WZJS_STALE ? `<div class="miss" style="margin-bottom:8px">
+      ⚠ 客户端资源库已变化（游戏更新过），大图库待重建 —— 点行才只显示小 canvas。
+      <button class="mini" id="wzjs-rebuild">🔄 重建大图库</button></div>` : ""}
     <div class="cls-row"><b>${esc(m.name || "（无名）")}</b>
       <span class="muted">${esc(m.street || "")}</span>
       <span class="pill">${m.id}</span></div>

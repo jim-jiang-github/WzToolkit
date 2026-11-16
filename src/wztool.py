@@ -2297,6 +2297,7 @@ def c_cls_maps() -> dict:
                         "mob": mid in mobs,
                         "mod": mid.zfill(9) in modern})
         return {"maps": out, "names": len(names), "wzjs": True,
+                "wzjs_stale": False,
                 "life_maps": sorted(mobs), "mob_lv": _wzjs_map_lv()}
     if not _cls_ready():
         raise CliError("怀旧服小地图库还没建好 —— 数据源面板点「⬇ 转换缺失数据」", 1)
@@ -2308,7 +2309,15 @@ def c_cls_maps() -> dict:
         out.append({"id": mid, "street": n.get("street", ""), "name": n.get("name", ""),
                     "desc": n.get("desc", ""), "w": ent.get("cw"), "h": ent.get("ch"),
                     "mod": mid in modern})
-    return {"maps": out, "names": len(names), "wzjs": False, "mob_lv": None}
+    # 建过（built.json 里有 id）但现在不就绪 → 客户端资源包变化/工具升级，
+    # 前端显示「资源库已变化，需要重建」按钮而不是「还没建过」
+    stale = False
+    try:
+        stale = bool(json.loads(WZJS_BUILT.read_text(encoding="utf-8")).get("ids"))
+    except (OSError, ValueError):
+        pass
+    return {"maps": out, "names": len(names), "wzjs": False,
+            "wzjs_stale": stale, "mob_lv": None}
 
 
 def c_cls_tables() -> dict:
@@ -2733,6 +2742,20 @@ def _web_clsbuild() -> dict:
         if f.exists():
             f.unlink()
     threading.Thread(target=_cls_build, daemon=True).start()
+    return {"started": True}
+
+
+def _web_wzjsbuild() -> dict:
+    """WebUI「怀旧服大图库」重建按钮：客户端资源包更新过 / 库没建好都点这里。
+
+    后台线程跑 _wzjs_build（断点续跑：同版本已转过的图自动跳过，只补变化
+    的）；前端轮询 /api/progress 的 clsmap 段看进度，跑完 _wzjs_ready 变真。
+    """
+    if _wzjsjob["running"]:
+        raise CliError("怀旧服大图库正在构建中", 1)
+    if _cls_w_dir() is None:
+        raise CliError("当前工作区找不到怀旧服客户端（mxdclassic 的 Unity 数据包）", 1)
+    threading.Thread(target=_wzjs_build, daemon=True).start()
     return {"started": True}
 
 
@@ -5771,6 +5794,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(_web_reconvert)
         elif path == "/api/clsbuild":
             self._api(_web_clsbuild)
+        elif path == "/api/wzjsbuild":
+            self._api(_web_wzjsbuild)
         elif path == "/api/clsimgsearch":
             img = b.get("image")
             if not img:
