@@ -903,7 +903,7 @@ let MAPFILT = "all";   // all | mob | empty
 const OPTS = Object.assign({
   dots: false,  // 显示刷怪点
   mobs: true,   // 显示怪物（页面 = 纯前端叠加层；导出图按此开关合成）
-  drops: false, // 显示掉落（页面叠加层；导出窗口同样按此开关合成）
+  drops: true,  // 显示掉落（页面叠加层；导出窗口同样按此开关合成）——用户 2026-11-16 定默认勾
   fh: false,    // 显示地面
   nobg: false,  // 不显示背景（切换时原地换图，不闪黑）
   rope: true,   // 显示绳索
@@ -913,6 +913,14 @@ const OPTS = Object.assign({
   density: 1,   // 怪物密度倍数
 }, JSON.parse(localStorage.getItem("wt_mapopts") || "{}"));
 function saveOpts() { localStorage.setItem("wt_mapopts", JSON.stringify(OPTS)); }
+/* 一次性迁移（2026-11-16）：显示掉落改默认勾选。此前 localStorage 里的
+   drops:false 都是旧默认值被 saveOpts 整体带进去的，不是用户手动取消的，
+   强制翻回 true 一次（打过标记就不再动，之后以用户手动开关为准）。 */
+if (!localStorage.getItem("wt_mapopts_drops_def")) {
+  OPTS.drops = true;
+  localStorage.setItem("wt_mapopts_drops_def", "1");
+  saveOpts();
+}
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
 const VPW = 1366, VPH = 768;   // 游戏窗口（= 客户端画面）= 唯一导出尺寸
 let VIEWPOS = null;     // 窗口左上角在整张地图里的坐标（游戏像素）；null = 居中
