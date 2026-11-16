@@ -153,6 +153,10 @@
   .yl-wbox.on { border: 2px solid #ffd840; background: rgba(255,216,64,.24); z-index: 3; }
   .yl-wbox.bad { border-color: #ff5252; }
   .yl-wbox.bad .tag { color: #ff5252; }
+  /* 相机中心点：窗口正中心 = 相机对准的位置（白圈红点，深浅底都看得清） */
+  .yl-wbox .dot { position: absolute; left: 50%; top: 50%; width: 7px; height: 7px;
+                  margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: #ff3030;
+                  box-shadow: 0 0 0 1.5px rgba(255,255,255,.9); pointer-events: none; }
   .yl-vr { position: absolute; border: 1px dashed rgba(255,82,82,.65);
            box-sizing: border-box; pointer-events: none; z-index: 1; }
   .yl-side { width: 400px; flex: none; display: flex; flex-direction: column; gap: 6px; }
@@ -4156,7 +4160,8 @@ function ylRender() {
     html += `<div class="yl-wbox${i === YL.sel ? " on" : ""}${bad ? " bad" : ""}" data-i="${i}"`
           + ` style="left:${w[0] / W * 100}%;top:${w[1] / H * 100}%;`
           + `width:${w[2] / W * 100}%;height:${w[3] / H * 100}%">`
-          + `<span class="tag">#${i + 1}${bad ? " 出界" : ""} (${w[0]},${w[1]})</span></div>`;
+          + `<span class="tag">#${i + 1}${bad ? " 出界" : ""} (${w[0]},${w[1]})</span>`
+          + `<i class="dot" title="相机中心 (${w[0] + (w[2] >> 1)}, ${w[1] + (w[3] >> 1)})"></i></div>`;
   });
   $("#yl-winboxes").innerHTML = html;
   $$("#yl-winboxes .yl-wbox").forEach((b) => {
@@ -4164,7 +4169,7 @@ function ylRender() {
   });
   const w = YL.win[YL.sel];
   $("#yl-wininfo").textContent =
-    w ? `选中 #${YL.sel + 1}：左上 (${w[0]}, ${w[1]}) · ${w[2]}×${w[3]}` : "（没选中窗口）";
+    w ? `选中 #${YL.sel + 1}：左上 (${w[0]}, ${w[1]}) · 中心 (${w[0] + (w[2] >> 1)}, ${w[1] + (w[3] >> 1)}) · ${w[2]}×${w[3]}` : "（没选中窗口）";
   ylView();
 }
 
