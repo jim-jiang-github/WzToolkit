@@ -456,7 +456,6 @@
              color: #001322; font-size: 11px; line-height: 16px; padding: 0 6px;
              border-radius: 0 0 0 4px; pointer-events: none; white-space: nowrap; }
   .lifedots { position: absolute; inset: 0; pointer-events: none; }
-  .pathsvg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .ldot { position: absolute; width: 8px; height: 8px; border-radius: 50%;
           background: #ff5d5d; border: 1px solid #000c; transform: translate(-50%, -50%);
           box-shadow: 0 0 3px #0009; pointer-events: auto; cursor: help; }
@@ -926,7 +925,6 @@ const OPTS = Object.assign({
   lad: true,    // 显示梯子
   mmp: true,    // 小地图 HUD：传送门
   mmn: true,    // 小地图 HUD：NPC
-  path: false,  // 点击寻路：点两下图规划「走/跳/落/爬」路线（foothold 导航图 + A*）
   density: 1,   // 怪物密度倍数
 }, JSON.parse(localStorage.getItem("wt_mapopts") || "{}"));
 function saveOpts() { localStorage.setItem("wt_mapopts", JSON.stringify(OPTS)); }
@@ -1036,32 +1034,6 @@ function bindGvDrag() {
     VIEWPOS = { x: VIEWPOS.x + dx, y: VIEWPOS.y + dy };
     vpClamp();
     DRAGMOVED = Date.now();
-  };
-  gv.onclick = async (e) => {
-    // 点击寻路：预览图像素 → 世界坐标（overlay.minx/miny 是图 (0,0) 的世界坐标）
-    if (!OPTS.path || !mapData || !mapData.overlay || !VIEWPOS || !mapRef) return;
-    if (e.target.closest(".mm-hud") || e.target.closest("#vpframe")) return;
-    if (Date.now() - DRAGMOVED < 500) return;      // 刚拖完画布不算点击
-    const r = gv.getBoundingClientRect();
-    const px = (e.clientX - r.left) / GVS + VIEWPOS.x;
-    const py = (e.clientY - r.top) / GVS + VIEWPOS.y;
-    const w = { x: Math.round(px + mapData.overlay.minx),
-                y: Math.round(py + mapData.overlay.miny) };
-    if (!PAT || PAT.id !== mapRef.id || (PAT.a && PAT.b))
-      PAT = { id: mapRef.id, a: w, res: null };
-    else if (!PAT.b) PAT.b = w;
-    renderLifeDots();
-    const out = $("#path-out");
-    if (out) out.innerHTML = pathSummary();
-    if (!(PAT.a && PAT.b)) return;
-    try {
-      const q = `id=${mapRef.id}&fx=${PAT.a.x}&fy=${PAT.a.y}&tx=${PAT.b.x}&ty=${PAT.b.y}`;
-      PAT.res = await api("/api/cls/path?" + q);
-    } catch (err) {
-      PAT.res = { ok: false, why: (err && err.message) || String(err) };
-    }
-    renderLifeDots();
-    if (out) out.innerHTML = pathSummary();
   };
 }
 window.addEventListener("mousemove", (e) => {
@@ -3403,53 +3375,8 @@ async function lifeOverlayHTML() {
   return html;
 }
 
-/* ---- 点击寻路：后端 foothold 导航图 + A*（/api/cls/path），前端画线 ----
-   点两下图：第一下=起点，第二下=终点；第三下重新选起点。物理（跳高/走速/
-   爬速）取自客户端源码，绳梯挂点判定同 MapInfo::Ladder::inrange。 */
-let PAT = null;    // {id, a:{x,y}, b:{x,y}, res}
-const PATH_STYLE = {
-  walk:  'stroke="#ffd23f" stroke-width="4"',
-  jump:  'stroke="#ff8c3a" stroke-width="4" stroke-dasharray="10 6" fill="none"',
-  grab:  'stroke="#ff8c3a" stroke-width="4" stroke-dasharray="10 6" fill="none"',
-  fall:  'stroke="#4da3ff" stroke-width="3" stroke-dasharray="5 7" fill="none"',
-  climb: 'stroke="#c46bff" stroke-width="6" stroke-dasharray="2 8" stroke-linecap="round" fill="none"',
-};
-function pathSvgHtml() {
-  if (!PAT || !PAT.res || !PAT.res.ok || !mapData || !mapData.overlay) return "";
-  const ov = mapData.overlay, W = mapData.preview.w, H = mapData.preview.h;
-  const X = (p) => +(p[0] - ov.minx).toFixed(1);
-  const Y = (p) => +(p[1] - ov.miny).toFixed(1);
-  let segs = "", cur = null;
-  for (const a of PAT.res.actions) {
-    const f = a.from || cur || PAT.a, t = a.to || f;
-    const x1 = X(f), y1 = Y(f), x2 = X(t), y2 = Y(t);
-    if (a.a === "jump" || a.a === "grab") {
-      // 抛物线：控制点抬高，弧高随水平距离变大（真实跳跃轨迹的示意）
-      const my = Math.min(y1, y2) - Math.max(24, Math.abs(x2 - x1) * 0.3);
-      segs += `<path d="M ${x1} ${y1} Q ${(x1 + x2) / 2} ${my} ${x2} ${y2}" ${PATH_STYLE[a.a]} />`;
-    } else {
-      segs += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ${PATH_STYLE[a.a]} />`;
-    }
-    cur = t;
-  }
-  const dot = (p, col, label) =>
-    `<circle cx="${X(p)}" cy="${Y(p)}" r="9" fill="none" stroke="${col}" stroke-width="4" />` +
-    `<text x="${X(p) + 14}" y="${Y(p) - 10}" font-size="22" font-weight="bold" fill="${col}" stroke="#000" stroke-width="0.6">${label}</text>`;
-  return `<svg class="pathsvg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${segs}${dot(PAT.a, "#3bff7c", "起")}${dot(PAT.b, "#ff5555", "终")}</svg>`;
-}
-function pathSummary() {
-  if (!PAT || PAT.id !== (mapRef && mapRef.id)) return "";
-  if (!PAT.b) return `🧭 已选起点 (${PAT.a.x}, ${PAT.a.y}) —— 再点一下选终点`;
-  if (!PAT.res) return "🧭 寻路中…";
-  if (!PAT.res.ok) return `⚠️ 寻路失败：${esc(PAT.res.why || "未知原因")}`;
-  const r = PAT.res, n = { walk: "走", jump: "跳", fall: "落", climb: "爬", grab: "抓绳" };
-  return `路线 ${r.actions.length} 步（跳 ${r.jumps} · 落 ${r.falls} · 爬 ${r.climbs}）：`
-    + r.actions.map((a) => n[a.a] || a.a).join(" → ")
-    + `　<span class="muted">（黄=走 橙弧=跳/抓 紫点=爬绳 蓝虚=落）</span>`;
-}
-
 async function renderLifeDots() {
-  const html = (await lifeOverlayHTML()) + pathSvgHtml();
+  const html = await lifeOverlayHTML();
   const box = $("#lifedots");
   if (box) box.innerHTML = html;
   const mz = $("#mz-dots");
@@ -3616,7 +3543,6 @@ async function mapLoad(id, preview, cls) {
   // 显示设置（OPTS）持久化，换图不再重置；预览图永远不带怪物合成 —— 页面显示
   // 用纯前端怪物叠加层，勾「显示怪物」只是显隐，不触发服务端重渲（不闪黑）
   mapRef = { id, preview, cls: !!cls };
-  PAT = null;                       // 换图清掉旧路线（path-out 随 innerHTML 重建清空）
   const det = $("#detail");
   det.innerHTML = `<div>地图 <b>${id}</b><br><span class="muted">导出 + 渲染中（大图要几秒）…</span></div>`;
   try {
@@ -3651,7 +3577,6 @@ async function mapLoad(id, preview, cls) {
         <label title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上；切换时原地换图，画面不闪黑"><input type="checkbox" id="nobg-toggle" ${OPTS.nobg ? "checked" : ""} /> 不显示背景</label>
         ${nRope ? `<label title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" ${OPTS.rope ? "checked" : ""} /> 显示绳索（${nRope}）</label>` : ""}
         ${nLad ? `<label title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" ${OPTS.lad ? "checked" : ""} /> 显示梯子（${nLad}）</label>` : ""}
-        <label title="地图上点两下：第一下=起点，第二下=终点，自动规划「走/跳/落/爬绳」路线并画出来（黄=走、橙弧=跳/抓绳、紫点=爬、蓝虚=落）。物理参数取自客户端源码（跳高≈72px、走速100px/s），/foothold 是客户端读的同一份真值，无需图像识别。第三下重新选起点"><input type="checkbox" id="path-toggle" ${OPTS.path ? "checked" : ""} /> 🧭 点击寻路</label>
         ${d.minimap ? `<div class="optgrp">小地图 HUD 标记</div>
         <label title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${OPTS.mmp ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
         <label><input type="checkbox" id="mm-n" ${OPTS.mmn ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>` : ""}
@@ -3678,7 +3603,6 @@ async function mapLoad(id, preview, cls) {
           </div>
         </div>
       </div>
-      <div id="path-out" class="muted" style="margin:2px 0 4px;min-height:16px"></div>
       <div id="export-out" style="margin-top:6px"></div>`;
     mapData = d;
     bindMinimap(d);
@@ -3723,7 +3647,6 @@ async function mapLoad(id, preview, cls) {
     const mo = $("#mz-open");
     if (mo) mo.onclick = (e) => {
       e.preventDefault();
-      if (OPTS.path) { e.stopPropagation(); return; }   // 寻路模式：点击留给选点
       if (Date.now() - DRAGMOVED < 300) return;   // 刚拖完画布 → 当成拖动，不当点击
       mzOpen();
     };
@@ -3753,14 +3676,6 @@ async function mapLoad(id, preview, cls) {
     if (rl) rl.onchange = () => { OPTS.lad = rl.checked; saveOpts(); renderLifeDots(); };
     const fh = $("#fh-toggle");
     if (fh) fh.onchange = () => { OPTS.fh = fh.checked; saveOpts(); renderLifeDots(); };
-    const pw = $("#path-toggle");
-    if (pw) pw.onchange = () => {
-      OPTS.path = pw.checked; saveOpts();
-      PAT = null;                                 // 开关寻路都清掉旧路线
-      renderLifeDots();
-      const out = $("#path-out");
-      if (out) out.innerHTML = OPTS.path ? "🧭 寻路模式：在地图上点一下选起点" : "";
-    };
     const nb2 = $("#nobg-toggle");
     if (nb2) nb2.onchange = () => { OPTS.nobg = nb2.checked; saveOpts(); syncBkVisible(); };
     const ds = $("#density");
