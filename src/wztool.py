@@ -4308,9 +4308,9 @@ def _composite_players(outdir: Path | None, mj: dict, base_png, seed: str,
                 or px > im.width + img.width or py > im.height + img.height:
             continue
         im.alpha_composite(img, (px, py))
-        # 客户端字形占 [脚上2px, 脚下9px]、背板占脚下 2~13px（GraphicsGL
-        # drawtext 的 NAMETAG 分支）：名字在正下方、轻微压住鞋底
-        tags.append((px + img.width // 2, py + img.height - 2, look["name"]))
+        # 名字条顶边 = 立绘底边（鞋底）下方 2px —— 真机名字条贴在脚下、不压鞋
+        # （2026-11-16 对照真机截图修正：原先 -2 压住鞋底，有交集）
+        tags.append((px + img.width // 2, py + img.height + 2, look["name"]))
         places.append({"name": look["name"], "x": px, "y": py,
                        "w": img.width, "h": img.height})
     if not places:

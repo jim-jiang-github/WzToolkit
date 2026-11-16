@@ -341,12 +341,13 @@
                       background: #1c2a3a; border-radius: 4px; padding: 2px 4px;
                       margin-left: auto; flex: none; }
   /* 显示玩家：随机外观玩家立绘（锚点定位同怪物 .mspr）+ 名字条（客户端
-     Char.cpp:68 名字画在脚底正下方 + NAMETAG 黑 60% 半透明圆角背板、白字居中） */
+     Char.cpp:68 名字画在脚底正下方 + NAMETAG 黑 60% 半透明圆角背板、白字居中；
+     真机名字条顶边在鞋底**下方** 1~2px、不压脚 —— 2026-11-16 对照截图修正） */
   .pwrap { position: absolute; pointer-events: none; }
   .pwrap .pspr { width: 100%; display: block; image-rendering: pixelated; }
-  .pwrap .ptag { position: absolute; left: 50%; top: calc(100% - 3px);
+  .pwrap .ptag { position: absolute; left: 50%; top: calc(100% + 2px);
                  transform: translateX(-50%); white-space: nowrap;
-                 font: 11px/1.5 SimSun, "宋体", serif; color: #fff;
+                 font: 12px/17px SimSun, "宋体", serif; color: #fff;
                  background: rgba(0, 0, 0, 0.6); border-radius: 3px;
                  padding: 0 4px; }
   .md-list .it.big.on { background: #521019; }
