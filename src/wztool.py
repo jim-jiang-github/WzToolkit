@@ -3289,6 +3289,12 @@ def c_char_render(spec: dict) -> dict:
                 continue          # 国服加密噪点部件（无法还原）：整层不画，别把雪花贴到人身上
             if climbing and L.get("slot") == "face":
                 continue                      # 背对镜头：脸不画（客户端 climb 分支没有 face）
+            if L.get("slot") == "head" and re.search(
+                    r"_(?:lefEar|highlefEar|ear)\.png$", L["img"]):
+                continue                      # 皮肤头 img 里带 4 种耳朵画布（ear/lefEar/
+                                              # highlefEar/humanEar），客户端只画 humanEar
+                                              # （CharLook.cpp:134），其余是精灵种族备料，
+                                              # 全画会把尖耳朵叠在人耳外面
             if (L.get("z") or "") == "hairOverHead" and has_cap:
                 continue                      # 有帽子不画刘海（CharLook::draw 的 captype 分支只走 CAP）
             if climbing and has_back_hair and (L.get("z") or "") == "backHairBelowCap":
