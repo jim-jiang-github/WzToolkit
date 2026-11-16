@@ -2936,7 +2936,7 @@ btMapClr.onclick = () => {
 
 /* ---------------- 掉落图鉴：图标网格 + 出处怪物 ---------------- */
 const DZ_CAT = { equip: "装备", consume: "消耗", etc: "ETC", pet: "宠物", install: "摆放" };
-const DZ = { icons: null, flt: "all", q: "", sel: null, mobNames: null, timer: 0 };
+const DZ = { icons: null, flt: "all", q: "", sel: null, mobNames: null, timer: 0, view: null, limit: 600 };
 
 async function dzMobNames() {
   if (DZ.mobNames) return DZ.mobNames;
@@ -2983,7 +2983,8 @@ function dzRender() {
     items = items.filter((r) => r.id.includes(q) || (r.name || "").toLowerCase().includes(q));
   }
   cnt.textContent = `${items.length} 个`;
-  const MAX = 600;                       // 一次最多渲染 600 格，避免卡顿
+  DZ.view = items;                     // 全量过滤结果，网格按 DZ.limit 分页滚动加载
+  const MAX = DZ.limit;
   items = items.slice(0, MAX);
   grid.innerHTML = items.map((r) => `
     <div class="it${DZ.sel === r.id ? " on" : ""}" data-id="${r.id}">
@@ -2992,7 +2993,7 @@ function dzRender() {
       <div class="id">${r.id}</div>
       ${r.mobs.length ? `<div class="src" title="${r.mobs.length} 种怪掉落">☠${r.mobs.length}</div>` : ""}
     </div>`).join("")
-    + (DZ.icons.length > MAX && !DZ.q ? `<span class="muted" style="grid-column:1/-1;padding:6px">只显示前 ${MAX} 个，用搜索框定位 …</span>` : "");
+    + (DZ.view.length > MAX && !DZ.q ? `<span class="muted dz-more" style="grid-column:1/-1;padding:6px">已显示前 ${MAX} / ${DZ.view.length} 个 —— 往下滚动继续加载，或用搜索框定位 …</span>` : "");
 }
 
 async function dzDetail(iid) {
@@ -3865,7 +3866,13 @@ document.addEventListener("keydown", (e) => {
 /* 怪物素材查看器事件 */
 $("#md-q").oninput = mdRenderList;
 /* 掉落图鉴事件 */
-$("#dz-q").oninput = (e) => { DZ.q = (e.target.value || "").trim().toLowerCase(); dzRender(); };
+$("#dz-q").oninput = (e) => { DZ.q = (e.target.value || "").trim().toLowerCase(); DZ.limit = 600; dzRender(); };
+/* 滚动到底自动加载下一页（装备 4000+ 个，600 格一页；武器 0130xxxx 段靠翻页才能翻到） */
+$("#dz-grid").onscroll = () => {
+  const g = $("#dz-grid");
+  if (!DZ.view || DZ.q || g.scrollTop + g.clientHeight < g.scrollHeight - 400) return;
+  if (DZ.view.length > DZ.limit) { DZ.limit += 600; dzRender(); }
+};
 $("#dz-grid").onclick = (e) => {
   const it = e.target.closest(".it");
   if (it) { $$("#dz-grid .it").forEach((x) => x.classList.remove("on"));
@@ -3877,6 +3884,7 @@ $("#dropdex .md-bar").onclick = (e) => {
   $$(".dz-flt").forEach((x) => x.classList.remove("on"));
   b.classList.add("on");
   DZ.flt = b.dataset.f;
+  DZ.limit = 600;
   dzRender();
 };
 /* 技能特效查看器事件 */
