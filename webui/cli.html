@@ -139,19 +139,12 @@
   .yl-mapwrap { position: relative; flex: 1; min-width: 0; max-width: 100%; align-self: flex-start; }
   .yl-mapwrap img { display: block; max-width: 100%; image-rendering: pixelated;
                     border-radius: 8px; cursor: crosshair; }
-  .yl-wbox { position: absolute; border: 1px solid rgba(255,216,64,.9);
-             background: transparent; box-sizing: border-box;
-             cursor: move; }
-  .yl-wbox .tag { position: absolute; left: 0; top: 0; font-size: 10px; line-height: 13px;
-                  padding: 0 4px; background: rgba(0,0,0,.6); color: #ffd840;
-                  white-space: nowrap; border-radius: 0 0 4px 0; }
-  .yl-wbox.on { border: 2px solid #ffd840; background: transparent; z-index: 3; }
-  .yl-wbox.bad { border-color: #ff5252; }
-  .yl-wbox.bad .tag { color: #ff5252; }
-  /* 站位红点：窗口正中心 = 人物脚底（白圈红点，深浅底都看得清） */
-  .yl-wbox .dot { position: absolute; width: 21px; height: 21px;
+  /* 站位红点：每个导出窗口一个点，踩在人物站位上；点红点选中 → 右侧实时预览。
+     不画窗口框（用户 2026-11-16：100 多个框叠在一起太花），只留点 */
+  #yl-winboxes .dot { position: absolute; width: 21px; height: 21px;
                   margin: -10.5px 0 0 -10.5px; border-radius: 50%; background: #ff3030;
-                  box-shadow: 0 0 0 2px rgba(255,255,255,.9); pointer-events: none; }
+                  box-shadow: 0 0 0 2px rgba(255,255,255,.9); cursor: pointer; }
+  #yl-winboxes .dot.on { box-shadow: 0 0 0 2px #ffd840; }
   .yl-vr { position: absolute; border: 1px dashed rgba(255,82,82,.65);
            box-sizing: border-box; pointer-events: none; z-index: 1; }
   .yl-side { width: 400px; flex: none; display: flex; flex-direction: column; gap: 6px; }
@@ -837,7 +830,7 @@
             <div class="muted" id="yl-msg"></div>
             <div class="yl-man" id="yl-man" hidden>
               <div class="row">
-                <b>相机窗口（拖/微调，每格导一张）</b>
+                <b>相机窗口（点红点选中，每格导一张）</b>
                 <button class="mini" id="yl-resamp" title="沿地面每 120px 一个站位点自动均布一版（看得见的地面/绳子 → 相机公式 → VR 钳制），作为微调起点">🎲 自动采样</button>
                 <button class="mini" id="yl-reroll" title="换一批随机布局：怪物/掉落/玩家位置全部重抽（实时画面和导出画面同款合成规则）">🎲 换一批</button>
                 <button class="mini" id="yl-addwin" title="以当前选中窗口的位置为底，在旁边加一个新窗口（或没选中时加在地图中央）">＋ 加窗口</button>
@@ -853,7 +846,7 @@
                   <div class="yl-view" id="yl-view"></div>
                   <div class="muted" id="yl-wininfo"></div>
                   <div class="muted" style="font-size:11.5px">
-                    点框选中 → 图上直接拖，或 <b>方向键 1px / Shift+方向键 10px</b>；点空白处把选中窗口移过去（没选中就新开一个）；红虚线=相机合法范围（VR），出界的框导出时会按图边钳回。
+                    点红点选中 → 右边实时显示这个窗口的导出画面；按住红点拖 = 挪窗口，或 <b>方向键 1px / Shift+方向键 10px</b> 微调；点空白处把选中窗口移过去（没选中就新开一个）；红虚线=相机合法范围（VR）。
                   </div>
                 </div>
               </div>
@@ -4118,17 +4111,6 @@ async function yoloResample() {
   ylRender();
 }
 
-/* 窗口是否在相机合法范围（VR）外 —— 游戏里镜头到不了，只是提示，导出仍按用户放的位置 */
-function ylBad(w) {
-  if (!YL.vr) return false;
-  const [vl, vt, vr, vb] = YL.vr;
-  const lOk = vr - vl >= w[2] ? (w[0] >= vl - 0.5 && w[0] <= vr - w[2] + 0.5)
-             : Math.abs(w[0] - (vl + vr - w[2]) / 2) > 0.5;
-  const tOk = vb - vt >= w[3] ? (w[1] >= vt - 0.5 && w[1] <= vb - w[3] + 0.5)
-             : Math.abs(w[1] - (vt + vb - w[3]) / 2) > 0.5;
-  return !(lOk && tOk);
-}
-
 function ylRender() {
   if ($("#yl-man").hidden) return;
   const W = YL.iw, H = YL.ih;
@@ -4143,21 +4125,17 @@ function ylRender() {
           + `width:${(vr - vl) / W * 100}%;height:${(vb - vt) / H * 100}%"></div>`;
   }
   YL.win.forEach((w, i) => {
-    const bad = ylBad(w);
-    // 红点 = 人物站位（采样窗口自带）；手动加/拖过的窗口没有站位 —— 硬性要求
-    // 红点必须踩在看得见的地面/绳子上，没有站位就不画点（用户 2026-11-16）
+    // 每个窗口一个红点：采样窗口踩在人物站位上，手动窗口在中心；点它选中
     const pp = YL.pp[i];
-    html += `<div class="yl-wbox${i === YL.sel ? " on" : ""}${bad ? " bad" : ""}" data-i="${i}"`
-          + ` style="left:${w[0] / W * 100}%;top:${w[1] / H * 100}%;`
-          + `width:${w[2] / W * 100}%;height:${w[3] / H * 100}%">`
-          + `<span class="tag">#${i + 1}${bad ? " 出界" : ""} (${w[0]},${w[1]})</span>`
-          + (pp ? `<i class="dot" style="left:${(pp[0] - w[0]) / w[2] * 100}%;top:${(pp[1] - w[1]) / w[3] * 100}%"`
-                + ` title="人物站位 (${pp[0]}, ${pp[1]})"></i>` : "")
-          + `</div>`;
+    const dx = pp ? pp[0] : w[0] + (w[2] >> 1);
+    const dy = pp ? pp[1] : w[1] + (w[3] >> 1);
+    html += `<i class="dot${i === YL.sel ? " on" : ""}" data-i="${i}"`
+          + ` style="left:${dx / W * 100}%;top:${dy / H * 100}%"`
+          + ` title="#${i + 1} ${pp ? "人物站位" : "手动窗口"} (${dx}, ${dy}) · 点我看右侧实时画面"></i>`;
   });
   $("#yl-winboxes").innerHTML = html;
-  $$("#yl-winboxes .yl-wbox").forEach((b) => {
-    b.addEventListener("mousedown", ylBoxDown);
+  $$("#yl-winboxes .dot").forEach((b) => {
+    b.addEventListener("mousedown", ylDotDown);
   });
   const w = YL.win[YL.sel];
   const pp = w && YL.pp[YL.sel];
@@ -4192,18 +4170,23 @@ function ylCompositeLoad() {
   img.src = `/api/yolo/composite?id=${img.dataset.mid}&cls=${CLSMODE ? 1 : 0}&seed=${YL.seed}`;
 }
 
-function ylBoxDown(e) {
+function ylDotDown(e) {
   e.preventDefault();
+  e.stopPropagation();
   YL.sel = +e.currentTarget.dataset.i;
-  YL.pp[YL.sel] = null;                    // 窗口挪走 = 原采样站位作废（红点消失）
-  ylRender();
+  let moved = false;
+  ylRender();                                  // 点红点 → 右侧实时画面切到这个窗口
   const w = YL.win[YL.sel];
+  if (!w) return;
   const k = YL.iw / $("#yl-mapimg").getBoundingClientRect().width;
   const [s0x, s0y] = [e.clientX, e.clientY];
   const [l0, t0] = [w[0], w[1]];
   const mm = (ev) => {
-    w[0] = Math.max(0, Math.min(Math.round(l0 + (ev.clientX - s0x) * k), YL.iw - w[2]));
-    w[1] = Math.max(0, Math.min(Math.round(t0 + (ev.clientY - s0y) * k), YL.ih - w[3]));
+    const dx = ev.clientX - s0x, dy = ev.clientY - s0y;
+    if (!moved && Math.abs(dx) + Math.abs(dy) < 4) return;   // 没怎么动 = 只是点选
+    if (!moved) { moved = true; YL.pp[YL.sel] = null; }      // 真拖动才作废站位
+    w[0] = Math.max(0, Math.min(Math.round(l0 + dx * k), YL.iw - w[2]));
+    w[1] = Math.max(0, Math.min(Math.round(t0 + dy * k), YL.ih - w[3]));
     ylRender();
   };
   const mu = () => { document.removeEventListener("mousemove", mm); document.removeEventListener("mouseup", mu); };
