@@ -308,6 +308,10 @@
   .md-list .lvchip { font: 10.5px/1 Consolas, monospace; color: #7fb4e8;
                      background: #1c2a3a; border-radius: 4px; padding: 2px 4px;
                      margin-left: 6px; flex: none; }
+  /* 地图列表行的推荐等级徽标（同怪物列表的怪物等级） */
+  #list .it .lvchip { font: 10.5px/1 Consolas, monospace; color: #7fb4e8;
+                      background: #1c2a3a; border-radius: 4px; padding: 2px 4px;
+                      margin-left: auto; flex: none; }
   .md-list .it.big.on { background: #521019; }
   .md-list .it.boss.on { background: #4a2f08; }
   .md-detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
@@ -808,6 +812,7 @@ function api(path, opts) {
 function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + (e?.stack || e?.message || String(e)); }
 
 let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [], CN_NEED_CLS = false, CN_NEED_DMG = false;
+let MAP_LV = {};           // 地图id → [min,max] 推荐等级（列表行徽标）
 let MAPREADY = false, BUSY = false;   // 浏览区锁定状态：数据就绪 && 没有任务在跑
 let EXPDIR = "";   // 导出目录（boot 时由 /api/state 填）
 /* 地图详情区的默认内容（含 #exp-dir 导出目录标签）——必须在此刻先存一份：
@@ -1547,7 +1552,7 @@ async function wipeData() {
     });
     // 数据和工作区记忆都清了：输入框/状态面板回到「尚未选择」
     $("#ws-path").value = "";
-    WS = null; CN = false; MAPS = [];
+    WS = null; CN = false; MAPS = []; MAP_LV = {};   // 数据清空了：推荐等级表一并失效
     DMG.sets = null; DMG.sel = null;   // 伤害数字库也清了，切进页签时重新拉
     SK.jobs = null;                    // 技能列表同理
     $("#ws-state").textContent = "尚未选择";
@@ -1644,6 +1649,8 @@ async function tickProgress() {
 }
 
 async function loadLists() {
+  // 注意：MAP_LV 不能在这里无条件清空 —— 数据源刷新会再次进本函数，
+  // 此时 CLS_MAPS 已缓存走不进重拉分支，清了就把列表行的等级徽标洗掉
   MAPS = []; LIFE = new Set();
   if (CLSMODE) {
     // 怀旧服模式：列表 = 小地图库 523 张 canvas × 本地名表（不走 Map.nx）。
@@ -1655,6 +1662,7 @@ async function loadLists() {
         CLS_WZJS = !!d.wzjs;   // 大图库就绪 → 点行渲染完整地图；否则只看 canvas
         // 有怪名单：大图库才有（canvas 模式没刷怪数据 → 保持 null，筛选按钮不生效）
         CLS_LIFE = Array.isArray(d.life_maps) ? new Set(d.life_maps) : null;
+        MAP_LV = d.mob_lv || {};
       } catch (e) {
         CLS_MAPS = [];
         $("#list").innerHTML =
@@ -1671,8 +1679,17 @@ async function loadLists() {
     const d = await api("/api/maps");
     MAPS = d.maps;
     LIFE = new Set(d.life_maps || []);
+    MAP_LV = d.mob_lv || {};
   } catch (e) {}
   renderList();
+}
+
+/* 地图列表行的推荐等级徽标（Lv.x 或 Lv.x–y；等级来自图内自然刷怪怪的服务端数值） */
+function mapLvChip(id) {
+  const lv = MAP_LV[id];
+  if (!lv || lv.length !== 2) return "";
+  const tag = lv[0] !== lv[1] ? `${lv[0]}–${lv[1]}` : `${lv[0]}`;
+  return `<span class="lvchip" title="推荐等级（本图怪物等级区间）">Lv.${tag}</span>`;
 }
 
 function renderList() {
@@ -1696,7 +1713,7 @@ function renderList() {
     const top = items.slice(0, 400);
     box.innerHTML = top.map((m) =>
       `<div class="it" data-id="${m.id}" title="${esc(m.street ? m.street + " · " : "")}${esc(m.desc || "")}">
-        <span class="id">${m.id}</span><span class="nm">${esc(m.name || "")}</span></div>`).join("")
+        <span class="id">${m.id}</span><span class="nm">${esc(m.name || "")}</span>${mapLvChip(m.id)}</div>`).join("")
       || '<div class="muted" style="padding:10px">没有匹配</div>';
     box.querySelectorAll(".it").forEach((el) => { el.onclick = () => select(el); });
     return;
@@ -1712,7 +1729,7 @@ function renderList() {
       ? `${MAPS.length} 张 · 刷怪数据未加载 —— 重启服务后刷新页面`
       : `${items.length} 张`;
   box.innerHTML = top.map((m) =>
-    `<div class="it" data-id="${m}"><span class="id">${m}</span></div>`).join("")
+    `<div class="it" data-id="${m}"><span class="id">${m}</span>${mapLvChip(m)}</div>`)
     || '<div class="muted" style="padding:10px">没有匹配（或还没转换 Map.wz）</div>';
   box.querySelectorAll(".it").forEach((el) => {
     el.onclick = () => select(el);

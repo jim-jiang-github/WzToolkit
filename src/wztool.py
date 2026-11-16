@@ -1066,8 +1066,10 @@ def c_maps() -> dict:
         # 「有怪的图」：life 反向聚合里出现过的 mapid（只算 m=mob，npc 不算）
         life = life_index(mapnx.parent, mapnx)
         life_maps = sorted({m["mapid"] for rows in life.values() for m in rows})
-        _lists.update(key=key, maps=ids, life_maps=life_maps)
-    return {"maps": _lists["maps"], "life_maps": _lists.get("life_maps", [])}
+        # 每张图的推荐等级区间（列表行徽标 + 排序参考）
+        _lists.update(key=key, maps=ids, life_maps=life_maps, mob_lv=_map_lv_table(life))
+    return {"maps": _lists["maps"], "life_maps": _lists.get("life_maps", []),
+            "mob_lv": _lists.get("mob_lv", {})}
 
 
 # 图片找图 --------------------------------------------------------------------
@@ -1867,6 +1869,62 @@ def _wzjs_mob_ids() -> list:
     return ids
 
 
+def _wzjs_map_lv() -> dict:
+    """全库地图 → 推荐等级区间 [min,max]（图内自然刷怪怪的服务端等级聚合）。
+
+    列表页每行徽标用；扫 1750 张 map.json 只做一次，结果回写 built.json
+    （同 _wzjs_mob_ids 的缓存策略），之后零成本。建库进行中不写。
+    """
+    try:
+        b = json.loads(WZJS_BUILT.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if isinstance(b.get("mob_lv"), dict):
+        return b["mob_lv"]
+    st = _mob_stat_table()
+    if not st:
+        return {}
+    out: dict = {}
+    for mid in b.get("ids") or []:
+        try:
+            mj = json.loads((WZJS_MAP / mid / "map.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        kids = {str(l.get("id", "")).lstrip("0")
+                for l in mj.get("life", []) if l.get("type") == "m"}
+        lvs = [st[k][0] for k in kids if k in st and (st[k][0] or 0) > 0]
+        if lvs:
+            out[mid] = [min(lvs), max(lvs)]
+    if not _wzjsjob["running"]:
+        b["mob_lv"] = out
+        try:
+            tmp = WZJS_BUILT.with_suffix(".tmp")
+            tmp.write_text(json.dumps(b, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, WZJS_BUILT)
+        except OSError:
+            pass
+    return out
+
+
+def _map_lv_table(life: dict[str, list[dict]]) -> dict:
+    """现代库：life 反向聚合（怪→图）翻成正表 地图id → [min,max] 推荐等级。"""
+    st = _mob_stat_table()
+    if not st:
+        return {}
+    out: dict = {}
+    for kid, rows in life.items():
+        lv = (st.get(kid) or [0])[0]
+        if not lv or lv <= 0:
+            continue
+        for r in rows:
+            pair = out.setdefault(r["mapid"], [lv, lv])
+            if lv < pair[0]:
+                pair[0] = lv
+            if lv > pair[1]:
+                pair[1] = lv
+    return out
+
+
 def _wzjs_registry(w: Path, progress=None) -> dict:
     """加载（stamp/regver 一致时复用）或重建 spritesheet 注册表。
 
@@ -2233,7 +2291,7 @@ def c_cls_maps() -> dict:
                         "mob": mid in mobs,
                         "mod": mid.zfill(9) in modern})
         return {"maps": out, "names": len(names), "wzjs": True,
-                "life_maps": sorted(mobs)}
+                "life_maps": sorted(mobs), "mob_lv": _wzjs_map_lv()}
     if not _cls_ready():
         raise CliError("怀旧服小地图库还没建好 —— 数据源面板点「⬇ 转换缺失数据」", 1)
     idx = json.loads((CLS_MMIDX / "index.json").read_text(encoding="utf-8"))
@@ -2244,7 +2302,7 @@ def c_cls_maps() -> dict:
         out.append({"id": mid, "street": n.get("street", ""), "name": n.get("name", ""),
                     "desc": n.get("desc", ""), "w": ent.get("cw"), "h": ent.get("ch"),
                     "mod": mid in modern})
-    return {"maps": out, "names": len(names), "wzjs": False}
+    return {"maps": out, "names": len(names), "wzjs": False, "mob_lv": None}
 
 
 def c_cls_tables() -> dict:
