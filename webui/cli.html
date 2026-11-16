@@ -134,9 +134,9 @@
   /* YOLO 训练集面板 */
   .yl-body { padding: 12px 16px; display: flex; flex-direction: column;
              gap: 10px; overflow: auto; min-height: 0; }
-  /* 左右结构：左=地图选择栏，右=相机窗口编辑器/进度（用户 2026-11-16） */
-  .yl-cols { display: flex; gap: 16px; align-items: stretch; min-height: 0; }
-  .yl-left { width: 272px; flex: none; display: flex; flex-direction: column; gap: 8px; }
+  /* 左右结构：左=地图选择栏（复用地图页搜索 UI，宽度/间距与 .cols 一致），右=导出 */
+  .yl-cols { display: flex; gap: 10px; align-items: stretch; min-height: 0; }
+  .yl-left { width: 300px; flex: none; display: flex; flex-direction: column; gap: 8px; }
   .yl-left #yl-mlist { flex: 1; min-height: 360px; max-height: none; }
   .yl-right { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
   .yl-man { border-top: 1px dashed rgba(128,128,128,.3); padding-top: 10px; }
@@ -806,38 +806,37 @@
       <div class="muted" id="bt-note" style="margin-top:6px">人物 / 技能 / 怪物 / 伤害样式全部随机——点「🎲 换一批」重新抽；「👾 怪物 / 👑 Boss」切换抽卡怪物池；「🗺 限定地图」只抽那张图里自然刷新的怪（输地图名或 ID 从下拉里选）；「⚔️ 攻击」打一轮：技能特效 + 怪物受击 + 真实排版的伤害数字（5% 概率 Miss）。需要 Mob.nx / Character.nx / Skill.nx / 伤害数字库都已就绪。</div>
     </div>
 
-    <!-- YOLO 训练集：合成画面帧 + 精确标注 -->
+    <!-- YOLO 训练集：左栏复用地图页搜索 UI（用户 2026-11-16），右侧只放导出相关 -->
     <div class="pane" id="yolodex" hidden>
-      <div class="md-bar">
-        <span class="muted">合成「客户端画面 + YOLO 标注」——标注来自合成时的世界坐标，零人工标注；相机按客户端规则采样（foothold 站位 → 相机公式 → VR 钳制）</span>
-        <span style="flex:1"></span>
-        <button class="primary mini" id="yl-start" title="按下面的设置批量导出 → .exports/yolo/&lt;时间戳&gt;/（YOLO 格式：images/ labels/ dataset.yaml）">▶ 开始导出</button>
-        <button class="mini" id="yl-stop" hidden>■ 停止</button>
-      </div>
       <div class="yl-body">
-        <div class="row">
-          <span class="muted">每图窗口</span>
-          <input type="text" id="yl-per" value="8" style="min-width:56px;width:56px" title="每张地图采多少个相机窗口（相机位置按站位→相机公式→VR钳制采样，自动铺开不重复）">
-          <span class="muted">随机布局</span>
-          <input type="text" id="yl-lay" value="2" style="min-width:56px;width:56px" title="每张地图重抽几次怪物/掉落/玩家的摆位（更多布局 = 更多样的遮挡关系）">
-          <span class="muted">验证集 %</span>
-          <input type="text" id="yl-val" value="15" style="min-width:56px;width:56px" title="按整张地图划分 train/val（不是按窗口随机切——同图的相似窗口会泄漏，验证 mAP 会虚高）">
-          <label class="muted" style="display:flex;gap:4px;align-items:center" title="窗口尺寸在 1024×768 / 1366×768 / 1280×720 / 1920×1080 里随机——不同玩家客户端分辨率不一样"><input type="checkbox" id="yl-rsize"> 随机分辨率</label>
-          <label class="muted" style="display:flex;gap:4px;align-items:center" title="网格窗口铺满每张地图的完整画面（右/下贴边自动补齐，不留死角），忽略「每图窗口」和手动精调窗口；分辨率用上面选的（不随机）"><input type="checkbox" id="yl-cover"> 铺满整图</label>
-          <span class="muted" id="yl-count"></span>
-        </div>
         <div class="yl-cols">
           <div class="yl-left">
-            <input type="text" id="yl-q" placeholder="搜索 id 或名字 → 点行选进精调…" style="width:100%;box-sizing:border-box" autocomplete="off">
+            <div style="position:relative;display:flex;gap:6px;margin-bottom:8px">
+              <input type="text" id="yl-q" placeholder="搜索 id 或名字 …" style="flex:1;min-width:0" />
+              <button id="yl-imgsearch-btn" title="粘贴截图找地图：截一张游戏里的小地图（或整窗截图），Ctrl+V 粘贴进来直接搜">🖼 找图</button>
+              <div class="optpop imgpop" id="yl-img-pop" hidden></div>
+            </div>
             <div class="filters" id="yl-flt">
               <button class="flt on" data-f="all">全部</button>
               <button class="flt" data-f="mob">有怪</button>
               <button class="flt" data-f="empty">无怪</button>
             </div>
+            <div class="row" style="margin:2px 0 6px"><span class="muted" id="yl-count"></span></div>
             <div class="list" id="yl-mlist"></div>
-            <div class="muted" id="yl-picked" style="font-size:11.5px"></div>
           </div>
           <div class="yl-right">
+            <div class="row">
+              <button class="primary mini" id="yl-start" title="按当前设置批量导出 → .exports/yolo/&lt;时间戳&gt;/（YOLO 格式：images/ labels/ dataset.yaml）">▶ 开始导出</button>
+              <button class="mini" id="yl-stop" hidden>■ 停止</button>
+              <span class="muted">每图窗口</span>
+              <input type="text" id="yl-per" value="8" style="min-width:56px;width:56px" title="每张地图采多少个相机窗口（相机位置按站位→相机公式→VR钳制采样，自动铺开不重复）">
+              <span class="muted">随机布局</span>
+              <input type="text" id="yl-lay" value="2" style="min-width:56px;width:56px" title="每张地图重抽几次怪物/掉落/玩家的摆位（更多布局 = 更多样的遮挡关系）">
+              <span class="muted">验证集 %</span>
+              <input type="text" id="yl-val" value="15" style="min-width:56px;width:56px" title="按整张地图划分 train/val（不是按窗口随机切——同图的相似窗口会泄漏，验证 mAP 会虚高）">
+              <label class="muted" style="display:flex;gap:4px;align-items:center" title="窗口尺寸在 1024×768 / 1366×768 / 1280×720 / 1920×1080 里随机——不同玩家客户端分辨率不一样"><input type="checkbox" id="yl-rsize"> 随机分辨率</label>
+              <label class="muted" style="display:flex;gap:4px;align-items:center" title="网格窗口铺满每张地图的完整画面（右/下贴边自动补齐，不留死角），忽略「每图窗口」和手动精调窗口；分辨率用上面选的（不随机）"><input type="checkbox" id="yl-cover"> 铺满整图</label>
+            </div>
             <div class="progbox" id="yl-prog" hidden>
               <div class="prog-head"><b id="yl-stage">准备中…</b><span class="muted" id="yl-pct"></span></div>
               <div class="prog-bar"><i id="yl-fill"></i></div>
@@ -1348,7 +1347,7 @@ function bkZoomUrl() {
 }
 /* 点弹窗外面 = 关闭（「显示设置」「选择工作区」「怪物图鉴」「图片找图」通用；按钮自己的 onclick 已 stopPropagation） */
 document.addEventListener("click", (e) => {
-  for (const id of ["opt-pop", "ws-pop", "dex-pop", "img-pop"]) {
+  for (const id of ["opt-pop", "ws-pop", "dex-pop", "img-pop", "yl-img-pop"]) {
     const p = document.getElementById(id);
     if (p && !p.hidden && !e.target.closest("#" + id)) p.hidden = true;
   }
@@ -1378,26 +1377,30 @@ function imgPopHTML() {
     <div id="is-results"></div>`;
 }
 
-function imgSrcSyncUI() {
-  const bm = $("#is-src-mod"), bc = $("#is-src-cls");
+function imgSrcSyncUI(pop) {
+  if (!pop) return;
+  const bm = pop.querySelector("#is-src-mod"), bc = pop.querySelector("#is-src-cls");
   if (!bm || !bc) return;
   bm.classList.toggle("primary", IMGSRC === "mod");
   bc.classList.toggle("primary", IMGSRC === "cls");
 }
 
-function imgPopSetImage(dataUrl) {
+function imgPopSetImage(dataUrl, pop) {
   IMGQ = dataUrl;
-  const pop = $("#img-pop");
-  const prev = $("#is-prev"), drop = $("#is-drop"), go = $("#is-go");
-  if (!pop || !prev) return;
+  pop = pop || document.getElementById("img-pop");
+  if (!pop) return;
+  const prev = pop.querySelector("#is-prev"), drop = pop.querySelector("#is-drop"), go = pop.querySelector("#is-go");
+  if (!prev) return;
   prev.src = dataUrl; prev.hidden = false;
   if (drop) drop.style.display = "none";
   if (go) go.disabled = false;
 }
 
-async function imgDoSearch(seq) {
+async function imgDoSearch(seq, pop) {
   if (!IMGQ) return;
-  const st = $("#is-status"), out = $("#is-results");
+  pop = pop || document.getElementById("img-pop");
+  if (!pop) return;
+  const st = pop.querySelector("#is-status"), out = pop.querySelector("#is-results");
   if (!st || !out) return;
   st.textContent = "搜索中…";
   try {
@@ -1422,7 +1425,7 @@ async function imgDoSearch(seq) {
         const sec = Math.round((Date.now() - IMGT0) / 1000);
         st.textContent = `首次正在解压小地图库（约 1 分钟，只做一次）… 已等 ${sec}s`;
       }
-      setTimeout(() => imgDoSearch(seq), 1500);
+      setTimeout(() => imgDoSearch(seq, pop), 1500);
       return;
     }
     IMGT0 = 0;
@@ -1454,8 +1457,8 @@ async function imgDoSearch(seq) {
         e.stopPropagation();
         // 怀旧服识别结果：能对上现代版（同 id / 同名）就打开它，对不上保持只能识别
         if (IMGSRC === "cls" && !el.dataset.open) return;
-        $("#img-pop").hidden = true;
-        mapLoad(el.dataset.open || el.dataset.id, true);
+        pop.hidden = true;
+        (pop._onPick || ((id) => mapLoad(id, true)))(el.dataset.open || el.dataset.id);
       };
     }
   } catch (e) {
@@ -1463,16 +1466,19 @@ async function imgDoSearch(seq) {
   }
 }
 
-function bindImgPop() {
-  const btn = $("#imgsearch-btn"), pop = $("#img-pop");
+/* 泛化：地图页和 YOLO 页各有一套「搜索框 + 找图按钮 + 弹窗」；
+   onPick 决定点中识别结果后打开到哪（地图页直接预览，YOLO 页进精调） */
+function bindImgPop(btnId, popId, onPick) {
+  const btn = document.getElementById(btnId), pop = document.getElementById(popId);
   if (!btn || !pop) return;
+  pop._onPick = onPick;
   btn.onclick = (e) => {
     e.stopPropagation();
     if (!pop.hidden) { pop.hidden = true; return; }
     pop.innerHTML = imgPopHTML();
     pop.hidden = false;
     IMGQ = null; IMGT0 = 0; ++IMGSEQ;
-    const drop = $("#is-drop"), file = $("#is-file"), go = $("#is-go");
+    const drop = pop.querySelector("#is-drop"), file = pop.querySelector("#is-file"), go = pop.querySelector("#is-go");
     // 粘贴：弹窗开着时全局截获 Ctrl+V 的图片
     const onPaste = (ev) => {
       if (pop.hidden) return;
@@ -1481,7 +1487,7 @@ function bindImgPop() {
           const f = it.getAsFile();
           if (!f) continue;
           const rd = new FileReader();
-          rd.onload = () => imgPopSetImage(rd.result);
+          rd.onload = () => imgPopSetImage(rd.result, pop);
           rd.readAsDataURL(f);
           ev.preventDefault();
           return;
@@ -1501,7 +1507,7 @@ function bindImgPop() {
       const f = ev.dataTransfer?.files?.[0];
       if (f && f.type.startsWith("image/")) {
         const rd = new FileReader();
-        rd.onload = () => imgPopSetImage(rd.result);
+        rd.onload = () => imgPopSetImage(rd.result, pop);
         rd.readAsDataURL(f);
       }
     };
@@ -1509,20 +1515,22 @@ function bindImgPop() {
       const f = file.files?.[0];
       if (!f) return;
       const rd = new FileReader();
-      rd.onload = () => imgPopSetImage(rd.result);
+      rd.onload = () => imgPopSetImage(rd.result, pop);
       rd.readAsDataURL(f);
     };
-    go.onclick = (e2) => { e2.stopPropagation(); ++IMGSEQ; imgDoSearch(IMGSEQ); };
-    imgSrcSyncUI();
-    $("#is-src-mod").onclick = (e2) => { e2.stopPropagation(); IMGSRC = "mod"; imgSrcSyncUI(); };
-    $("#is-src-cls").onclick = (e2) => { e2.stopPropagation(); IMGSRC = "cls"; imgSrcSyncUI(); };
+    go.onclick = (e2) => { e2.stopPropagation(); ++IMGSEQ; imgDoSearch(IMGSEQ, pop); };
+    const bm = pop.querySelector("#is-src-mod"), bc = pop.querySelector("#is-src-cls");
+    imgSrcSyncUI(pop);
+    bm.onclick = (e2) => { e2.stopPropagation(); IMGSRC = "mod"; imgSrcSyncUI(pop); };
+    bc.onclick = (e2) => { e2.stopPropagation(); IMGSRC = "cls"; imgSrcSyncUI(pop); };
   };
   // 关弹窗时摘掉全局 paste（hidden 变化时触发）
   new MutationObserver(() => {
     if (pop.hidden && pop._onPaste) document.removeEventListener("paste", pop._onPaste);
   }).observe(pop, { attributes: true, attributeFilter: ["hidden"] });
 }
-bindImgPop();
+bindImgPop("imgsearch-btn", "img-pop");          // 地图页：点中结果 → 直接预览地图
+bindImgPop("yl-imgsearch-btn", "yl-img-pop", (id) => yoloPickMap(id));   // YOLO 页：点中结果 → 进该图精调
 /* 「📁 选择工作区」：只展开/收起面板，不弹对话框；
    选目录在面板里点路径框（点它弹选文件夹对话框换目录） */
 async function pickDir() {
@@ -4020,13 +4028,8 @@ function yoloScopeMaps() {
 }
 
 function yoloOpen() {
-  const items = CLSMODE ? (CLS_MAPS || []) : MAPS;
-  const nmob = CLSMODE ? items.filter((m) => m.mob).length : LIFE.size;
-  $("#yl-count").textContent =
-    items.length ? `本数据源 ${items.length} 张 · 有怪 ${nmob} 张` : "";
   if (!$("#yl-prog").hidden || $("#yl-img").src) yoloPoll();
-  // 顶部地图选择器恒显示（用户 2026-11-16：选图列表放上面，自选名单删掉）
-  ylMapList();
+  ylMapList();                                        // 左栏列表 + 计数行（和地图页同款）
   // 相机窗口编辑区：只在「当前地图」范围出现
   const canEdit = YL.scope === "cur";
   $("#yl-man").hidden = !canEdit;
@@ -4038,20 +4041,34 @@ function yoloOpen() {
   }
 }
 
-/* 本页地图选择器：和地图页同款控件（搜索 + 全部/有怪/无怪 + 列表行带名字/Lv） */
+/* 本页地图选择器：和地图页 renderList 完全同款（搜索 + 全部/有怪/无怪 + 计数行 + 列表行带名字/Lv），
+   唯一差别：点行进 YOLO 精调而不是地图预览；当前精调的图在列表里高亮 */
 function ylMapList() {
   const q = ($("#yl-q").value || "").trim().toLowerCase();
   const box = $("#yl-mlist");
   if (!box) return;
-  let items = CLSMODE ? (CLS_MAPS || []) : MAPS.map((s) => ({ id: s }));
-  if (q) items = items.filter((m) => String(m.id).includes(q) ||
-    (CLSMODE && ((m.name || "").toLowerCase().includes(q) ||
-                 (m.street || "").toLowerCase().includes(q))));
-  const has = (m) => (CLSMODE ? CLS_LIFE && CLS_LIFE.has(m.id) : LIFE.has(String(m.id)));
-  const noLife = CLSMODE ? !CLS_LIFE : !LIFE.size;
-  if (YL.filt !== "all" && !noLife)
-    items = items.filter((m) => YL.filt === "mob" ? has(m) : !has(m));
-  const top = items.slice(0, 200);
+  let items, noLife;
+  if (CLSMODE) {
+    // 怀旧服：按 id / 名字 / 街道搜，行里带中文名；有怪/无怪按 CLS_LIFE 筛
+    items = CLS_MAPS || [];
+    if (q) items = items.filter((m) => String(m.id).includes(q) ||
+      ((m.name || "").toLowerCase().includes(q) ||
+       (m.street || "").toLowerCase().includes(q)));
+    noLife = !CLS_LIFE;
+    if (!noLife && YL.filt === "mob") items = items.filter((m) => CLS_LIFE.has(m.id));
+    else if (!noLife && YL.filt === "empty") items = items.filter((m) => !CLS_LIFE.has(m.id));
+  } else {
+    items = MAPS.map((s) => ({ id: s }));
+    if (YL.filt === "mob") items = items.filter((m) => LIFE.has(String(m.id)));
+    else if (YL.filt === "empty") items = items.filter((m) => !LIFE.has(String(m.id)));
+    if (q) items = items.filter((m) => String(m.id).includes(q));
+    noLife = !LIFE.size;
+  }
+  $("#yl-count").textContent =
+    (CLSMODE ? "怀旧服 " : "") + `${items.length} 张`
+    + (YL.filt !== "all" && noLife && items.length
+      ? " · 刷怪数据未加载 —— 重启服务后刷新页面" : "");
+  const top = items.slice(0, 400);
   const cur = mapRef ? String(mapRef.id) : "";
   box.innerHTML = top.map((m) => CLSMODE
     ? `<div class="it" data-id="${m.id}" title="${esc(m.street ? m.street + " · " : "")}${esc(m.desc || "")}">` +
@@ -4062,25 +4079,24 @@ function ylMapList() {
     el.classList.toggle("on", el.dataset.id === cur);   // 当前精调的图高亮
     el.onclick = () => yoloPickMap(el.dataset.id);
   });
-  $("#yl-picked").textContent =
-    `共 ${items.length} 张` + (noLife && YL.filt !== "all" ? " · 刷怪数据未加载" : "")
-    + (cur ? ` · 当前精调：${cur}` : "");
 }
 
 async function yoloPickMap(id) {
   YL.scope = "cur";                                   // 点了某张图 = 进入这张图的精调
   YL.win = []; YL.mapid = ""; YL.sel = -1;          // 换图：清掉旧窗口
-  $("#yl-picked").textContent = `地图 ${id} 渲染中（整图，大图要几秒）…`;
+  ylMapList();                                        // 立刻把选中行高亮刷出来
+  $("#yl-msg").textContent = `地图 ${id} 渲染中（整图，大图要几秒）…`;
   try {
     await mapLoad(id, true, CLSMODE);
   } catch (e) {                                       // noqa: BLE001
-    $("#yl-picked").textContent = "⚠ " + (e.message || e);
+    $("#yl-msg").textContent = "⚠ " + (e.message || e);
     return;
   }
   if (!mapData || !mapData.overlay || String(mapRef.id) !== String(id)) {
-    $("#yl-picked").textContent = `⚠ 地图 ${id} 加载失败（看顶部错误栏）`;
+    $("#yl-msg").textContent = `⚠ 地图 ${id} 加载失败（看顶部错误栏）`;
     return;
   }
+  $("#yl-msg").textContent = "";
   yoloOpen();                                       // 数据好了 → 采样出框
 }
 
