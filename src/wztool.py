@@ -33,6 +33,7 @@ import csv
 import gzip
 import hashlib
 import importlib.util
+import io
 import json
 import math
 import os
@@ -4254,7 +4255,7 @@ def c_char_players() -> dict:
 
 def _composite_players(outdir: Path | None, mj: dict, base_png, seed: str,
                        no_bg: bool = False):
-    """把 1~5 个随机玩家贴到地面上，产出 preview_players.png。
+    """把 0~5 个随机玩家贴到地面上，产出 preview_players.png。
 
     外观/名字/站位全部由 seed 决定（同 seed 同布局，与 _composite_mobs 同款）：
     随机外观（肤色/发型/脸型/装备穿戴概率）+ 随机名字，随机 foothold 段内随机
@@ -4280,7 +4281,7 @@ def _composite_players(outdir: Path | None, mj: dict, base_png, seed: str,
         f = None
     places: list[dict] = []
     tags: list[tuple[int, int, str]] = []
-    for _ in range(rng.randint(1, 5)):
+    for _ in range(rng.randint(0, 5)):
         look = _rand_player_look(rng)
         try:
             fr = _player_stand(look["spec"], rng)
@@ -5292,11 +5293,14 @@ def _yolo_cam(px: float, py: float, vr: dict | None, W: int, H: int) -> tuple:
 
 def _yolo_views(mj: dict, vr, minx: float, miny: float, iw: int, ih: int,
                 n: int, sizes: list, seed: str, anchors=()) -> list:
-    """采 n 个相机窗口 [(left, top, W, H)]（预览图像素坐标）。
+    """采 n 个相机窗口 [(left, top, W, H, px, py)]（预览图像素坐标）。
 
     ① 锚点构图（玩家居中）占 1/4：真实画面里自己几乎总在画面中央；
     ② 其余从「站位 → 相机 → VR 钳制」的候选里做贪心最远点采样 —— 相机步进 1px
        就是上千个几乎相同的窗口，不铺开只是重复样本，还会让验证指标虚高。
+
+    后两位 (px, py) 是产生这个窗口的玩家站位（世界坐标）：相机被 VR 钳到贴边时
+    窗口中心≠人物位置（客户端真实行为），前端红点要标在人物脚底而不是窗口中心。
     """
     rng = random.Random(f"yolo:view:{seed}")
     pts = _yolo_stand_points(mj)
@@ -5312,7 +5316,7 @@ def _yolo_views(mj: dict, vr, minx: float, miny: float, iw: int, ih: int,
     for (ax, ay) in list(anchors)[: max(1, n // 4)]:
         W, H = rng.choice(sizes)
         views.append((_cl(int(ax - W / 2), 0, iw - W),
-                      _cl(int(ay - H / 2), 0, ih - H), W, H))
+                      _cl(int(ay - H / 2), 0, ih - H), W, H, ax, ay))
     if len(views) >= n:
         return views[:n]
     pool, seen = [], set()
@@ -5325,7 +5329,7 @@ def _yolo_views(mj: dict, vr, minx: float, miny: float, iw: int, ih: int,
             if k in seen:
                 continue
             seen.add(k)
-            pool.append((l, t, W, H))
+            pool.append((l, t, W, H, px, py))
     if not pool:
         return views
     first = rng.choice(pool)
@@ -5428,12 +5432,53 @@ def _yolo_windows_query(mid: str, n: int = 8, size: str = "", cls: bool = False)
         W, H = VIEW_W, VIEW_H
     views = _yolo_views(mj, vr, minx, miny, iw, ih, max(1, min(60, int(n or 8))),
                         [(W, H)], f"{mid}:edit", ())
+    pps = [[round(v[4] - minx), round(v[5] - miny)] if len(v) >= 6 else None
+           for v in views]
     vrpx = None
     if vr:
         vrpx = [round(vr["left"] - minx), round(vr["top"] - miny),
                 round(vr["right"] - minx), round(vr["bottom"] - miny)]
     return {"id": mid, "minx": minx, "miny": miny, "iw": iw, "ih": ih, "vr": vrpx,
-            "views": [[int(l), int(t), W, H] for (l, t, _w, _h) in views]}
+            "views": [[int(l), int(t), W, H] for (l, t, _w, _h, *_r) in views],
+            "pps": pps}
+
+
+# 精调页「实时画面」整图合成缓存（单槽：只留当前地图当前 seed 的合成结果）
+_yview_cache: dict = {}
+
+
+def _yolo_composite(mid: str, cls: bool, seed: str):
+    """整图合成（底图 + 怪物 + 掉落 + 0~5 随机玩家，布局由 seed 决定）→ PIL Image。
+
+    精调页右侧「实时画面」用：一次渲染整张合成图，前端本地裁剪窗口 —— 拖窗口时
+    裁剪是纯客户端操作，不用每次拖动都请求服务端重渲染。seed 变了（🎲 换一批）
+    才重新合成。
+    """
+    from PIL import Image
+    key = (str(mid), bool(cls), str(seed))
+    ent = _yview_cache.get("cur")
+    if ent and ent[0] == key:
+        return ent[1]
+    d = c_map_export(str(mid), preview=True, cls=bool(cls), no_bg=True)
+    outdir = Path(d["dir"])
+    mj = json.loads((outdir / "map.json").read_text(encoding="utf-8"))
+    ov = d.get("overlay") or {}
+    base = Image.open(outdir / "preview_nobg.png").convert("RGBA")
+    backs = mj.get("back") or []
+    R = _render_mod()
+    tex = R.TexStore([str(outdir / "img")])
+    im = base.copy()
+    lay = f"{mid}:view:{seed}"
+    got, _ = _composite_mobs(_need_ws(), None, mj, im, lay, 1)
+    im = got if got is not None else im
+    got, _ = _composite_drops(None, mj, im, lay)
+    im = got if got is not None else im
+    got, _ = _composite_players(None, mj, im, lay)
+    im = got if got is not None else im
+    val = (im, backs, tex, float(ov["minx"]), float(ov["miny"]))
+    _yview_cache.clear()
+    _yview_cache["cur"] = (key, val)
+    return val
 
 
 def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
@@ -5544,9 +5589,10 @@ def _yolo_run(maps: list, mode: str, per_map: int, layouts: int, sizes: list,
                 else:
                     views = _yolo_views(mj, vr, minx, miny, iw, ih, per_map, sizes,
                                         f"{mid}:l{li}", anchors)
-                for vi, (l, t, W, H) in enumerate(views):
+                for vi, v in enumerate(views):
                     if _ystop.is_set():
                         break
+                    l, t, W, H = v[0], v[1], v[2], v[3]
                     img = _yolo_window(im, backs, tex, l, t, W, H, minx, miny)
                     name = f"{mid}_{li:02d}_{vi:03d}"
                     lbl = _yolo_label(boxes, l, t, W, H)
@@ -5701,7 +5747,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if not p.is_file():
             self._send_json(404, {"detail": "not found"})
             return
-        body = p.read_bytes()
+        self._send_bytes(p.read_bytes(), mime)
+
+    def _send_bytes(self, body: bytes, mime: str) -> None:
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(body)))
@@ -5811,6 +5859,25 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       (qs.get("id") or [""])[0], (qs.get("n") or ["8"])[0],
                       (qs.get("size") or [""])[0],
                       (qs.get("cls") or [""])[0] in ("1", "true", "yes"))
+        elif path == "/api/yolo/composite":
+            # 精调页「实时画面」：整图合成（mobs+drops+0~5 玩家，seed 定布局），
+            # 前端拿去本地裁剪窗口 —— 拖动零请求
+            qs = urllib.parse.parse_qs(u.query)
+            mid = (qs.get("id") or [""])[0]
+            if not re.fullmatch(r"\d{1,9}", mid.strip()):
+                self._send_json(400, {"detail": "地图 id 应该是数字"})
+                return
+            try:
+                im = _yolo_composite(mid.strip(),
+                                     (qs.get("cls") or ["0"])[0] in ("1", "true", "yes"),
+                                     (qs.get("seed") or [""])[0])[0]
+                buf = io.BytesIO()
+                im.convert("RGB").save(buf, "PNG")
+                self._send_bytes(buf.getvalue(), "image/png")
+            except CliError as e:
+                self._send_json(400, {"detail": str(e)})
+            except Exception as e:             # noqa: BLE001
+                self._send_json(500, {"detail": str(e)})
         elif path.startswith("/preview/"):
             self._send_file(CACHE / urllib.parse.unquote(path[len("/preview/"):]),
                             "image/png")
