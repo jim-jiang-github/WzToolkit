@@ -4323,6 +4323,494 @@ def _cls_map_export(mid: str, preview: bool, mobs: bool, density: int,
                              drops=drops, players=players)
 
 
+# ── 自动寻路：foothold 导航图 + A* ───────────────────────────────────────────
+# 地形/绳梯不需要"识别"：map.json 里的 foothold / ladderRope 就是客户端读的那份
+# 真值（WZJS 转换与经典 XML 对照 9/9 一致）。这里把它建成图，A* 出「走 / 跳 /
+# 落 / 爬」动作序列 —— 后续游戏内执行端（按键）按序列走即可。
+#
+# 物理常量全部来自客户端源码（mxd_client_source/repo）：
+#   Physics.cpp      GRAVFORCE = 0.14 px/tick²
+#   Player::get_walkforce   = 0.05 + 0.11·speed/100；地面摩擦 (0.5+0.1)·hspeed/3
+#                            → 平衡速度 = 6×walkforce ≈ 0.8 px/tick（speed=100）
+#   Player::get_jumpforce   = 1.0 + 3.5·jump/100，jump 基础 100 → 初速 4.5 px/tick
+#                            → 跳高 = 4.5²/(2·0.14) ≈ 72px，滞空 ≈ 64 tick
+#   Player::get_climbforce  = speed/100 → 1.0 px/tick
+#   Constants::TIMESTEP     = 8ms → 125 tick/s
+# 空中不加速（FALL 态只有反向减速 0.025/tick），所以水平跳距 ≈ 0.8×64 ≈ 51px，
+# 起跳速度就是助跑速度，不会有"跳得更远"的额外加成。
+NAV_TICK_HZ = 125.0
+NAV_WALK_T = 0.80                    # px/tick
+NAV_CLIMB_T = 1.00                   # px/tick
+NAV_JUMP_T = 4.50                    # px/tick（起跳初速，向上）
+NAV_GRAV_T = 0.14                    # px/tick²
+NAV_WALK = NAV_WALK_T * NAV_TICK_HZ  # px/s（代价与启发函数用）
+NAV_CLIMB = NAV_CLIMB_T * NAV_TICK_HZ
+NAV_JUMP_UP = NAV_JUMP_T ** 2 / (2 * NAV_GRAV_T)   # ≈ 72px
+NAV_JUMP_MAXFALL = 520               # 一次起跳最多算落到下方多少 px
+NAV_SPOT_STEP = 80                   # 沿 foothold 采样间距（起跳/下坠候选点）
+
+_NAV_PROFILE = None
+
+
+def _nav_jump_profile() -> list:
+    """按客户端物理逐 tick 积分一次跳跃，返回下降段 [(dy, dx)]（dy 向下为正）。
+
+    起跳点为 (0,0)、初速向上 4.5px/tick、重力 0.14px/tick²、水平 0.8px/tick
+    （助跑满速）。顶点之后 y 单调增，所以落点高度 dy 与水平位移 dx 一一对应，
+    查表即可得到"跳到低 dy 的平台时最远能飞多远"。"""
+    global _NAV_PROFILE
+    if _NAV_PROFILE is not None:
+        return _NAV_PROFILE
+    pts, v, y, x, prev = [], -NAV_JUMP_T, 0.0, 0.0, 0.0
+    while y < NAV_JUMP_MAXFALL:
+        v += NAV_GRAV_T
+        y += v
+        x += NAV_WALK_T
+        if y > prev:                 # 已过顶点：下降段
+            pts.append((y, x))
+        prev = y
+    _NAV_PROFILE = pts
+    return pts
+
+
+def _nav_reach(dy: float) -> float | None:
+    """跳到「比起点低 dy」的高度时，水平最多能飞多远（px）。dy 负数=更高。"""
+    if dy < -NAV_JUMP_UP:
+        return None                  # 跳不了那么高
+    pts = _nav_jump_profile()
+    if dy <= pts[0][0]:              # 顶点附近，第一次采样之后再插值
+        for yy, xx in pts:
+            if yy >= dy:
+                return xx
+        return None
+    lo, hi = 0, len(pts) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if pts[mid][0] < dy:
+            lo = mid + 1
+        else:
+            hi = mid
+    yy, xx = pts[lo]
+    if lo == 0:
+        return xx
+    y0, x0 = pts[lo - 1]
+    if yy <= y0:
+        return xx
+    return x0 + (xx - x0) * (dy - y0) / (yy - y0)
+
+
+def _nav_norm_fh(mj: dict) -> list:
+    """把 foothold 统一成「左端 / 右端 + 两端 y」，斜面按线性插值取高度。"""
+    out = []
+    for f in mj.get("foothold") or []:
+        try:
+            x1, x2 = int(f["x1"]), int(f["x2"])
+            y1, y2 = int(f["y1"]), int(f["y2"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if x1 == x2:
+            continue
+        if x1 > x2:                  # 统一成左→右
+            x1, x2, y1, y2 = x2, x1, y2, y1
+        out.append({"id": int(f.get("id") or 0), "xl": x1, "yl": y1,
+                    "xr": x2, "yr": y2, "layer": int(f.get("layer") or 0),
+                    "prev": int(f.get("prev") or 0), "next": int(f.get("next") or 0)})
+    return out
+
+
+def _nav_y_at(fh: dict, x: float) -> float:
+    if fh["xr"] <= fh["xl"]:
+        return float(fh["yl"])
+    x = min(max(x, fh["xl"]), fh["xr"])
+    return fh["yl"] + (fh["yr"] - fh["yl"]) * (x - fh["xl"]) / (fh["xr"] - fh["xl"])
+
+
+def _nav_spans(fh: dict, x: float, pad: float = 2.0) -> bool:
+    return fh["xl"] - pad <= x <= fh["xr"] + pad
+
+
+def _nav_ladders(mj: dict) -> list:
+    out = []
+    for lr in mj.get("ladderRope") or []:
+        try:
+            x = int(lr["x"]); a, b = int(lr["y1"]), int(lr["y2"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append({"x": x, "top": min(a, b), "bot": max(a, b),
+                    "ladder": bool(int(lr.get("l") or 0))})
+    return out
+
+
+def _nav_land_below(fhs: list, x: float, y: float) -> dict | None:
+    """从 (x, y) 垂直下坠，落在最高的那段 foothold 上（客户端 update_fh 同语义）。"""
+    best = None
+    for fh in fhs:
+        if not _nav_spans(fh, x, 0.0):
+            continue
+        yy = _nav_y_at(fh, x)
+        if yy <= y + 1:
+            continue
+        if best is None or yy < _nav_y_at(best, x):
+            best = fh
+    return best
+
+
+def _nav_blocked(fhs: list, x: float, y_from: float, y_to: float,
+                 up: bool = False) -> bool:
+    """跳跃路径上会不会先撞到别的平台（撞上就只能落在它上面）。
+
+    下落/平跳：中间有平台挡住落点 → 该边不存在；上跳：头顶有平台挡住起跳空间
+    （客户端平台可以从下往上穿过，所以上跳只查 y_from 以上 30px 内的"天花板"）。"""
+    lo, hi = (y_from - 30, y_to) if up else (y_from - 8, y_to - 2)
+    for fh in fhs:
+        if not _nav_spans(fh, x, 2.0):
+            continue
+        yy = _nav_y_at(fh, x)
+        if abs(yy - y_from) <= 2.5:      # 起跳/下坠点自己脚下这段不算挡路
+            continue
+        if lo < yy < hi:
+            return True
+    return False
+
+
+def _nav_graph(mj: dict) -> dict:
+    """建点图：点 = (foothold, x) 或绳梯端点（fh=-1），边 = 走 / 跳 / 落 / 爬。
+
+    绳梯两端的 y1/y2 就是挂在绳上的极限位置，客户端挂绳判定（MapInfo.cpp
+    Ladder::inrange）= 水平 |dx| <= 10 且高度落在 [y1, y2] 内（上下各带 5px
+    余量）。所以：绳梯底端悬空时只能从上面的平台下爬、到绳底再松手掉下去 ——
+    用两个虚拟端点节点把这段表达出来。"""
+    fhs, lads = _nav_norm_fh(mj), _nav_ladders(mj)
+    spots, adj = [], []
+
+    def new_spot(x: float, y: float, fh: int = -1, kind: str = "walk") -> int:
+        spots.append({"fh": fh, "x": float(x), "y": float(y), "kind": kind})
+        adj.append([])
+        return len(spots) - 1
+
+    def add_spot(fi: int, x: float, kind: str = "walk") -> int:
+        """foothold 上的点（同段同 x 复用）；x 夹进段内。"""
+        x = float(min(max(x, fhs[fi]["xl"]), fhs[fi]["xr"]))
+        for i, sp in enumerate(spots):
+            if sp["fh"] == fi and abs(sp["x"] - x) < 1.5:
+                return i
+        return new_spot(x, _nav_y_at(fhs[fi], x), fi, kind)
+
+    def link(a: int, b: int, cost: float, act: dict) -> None:
+        if a == b:
+            return
+        adj[a].append({"to": b, "cost": cost, "act": act})
+
+    def walk(a: int, b: int) -> None:
+        d = abs(spots[b]["x"] - spots[a]["x"])
+        if d < 0.8:
+            return
+        link(a, b, d / NAV_WALK, {"a": "walk", "to": [spots[b]["x"], spots[b]["y"]]})
+        link(b, a, d / NAV_WALK, {"a": "walk", "to": [spots[a]["x"], spots[a]["y"]]})
+
+    # ---- 1. 每段 foothold 上的采样点（两端 + 等距；跳/落候选都从这里出）----
+    for fi, fh in enumerate(fhs):
+        xs = [float(fh["xl"]), float(fh["xr"])]
+        n = int((fh["xr"] - fh["xl"]) / NAV_SPOT_STEP)
+        xs += [fh["xl"] + (i + 1) * (fh["xr"] - fh["xl"]) / (n + 1) for i in range(n)]
+        xs.sort()
+        for x in xs:
+            add_spot(fi, x)
+
+    # ---- 2. 绳梯：两个虚拟端点 + 客户端判定范围内的挂点 ----
+    lad_nodes: list = [[] for _ in lads]
+    for li, lad in enumerate(lads):
+        top = new_spot(lad["x"], lad["top"], -1, "ladder_end")
+        bot = new_spot(lad["x"], lad["bot"], -1, "ladder_end")
+        lad_nodes[li] = [(lad["top"], top), (lad["bot"], bot)]
+        for fi, fh in enumerate(fhs):
+            if not _nav_spans(fh, lad["x"], 10.0):
+                continue
+            yy = _nav_y_at(fh, lad["x"])
+            if lad["top"] - 8 <= yy <= lad["bot"] + 8:      # 客户端 inrange + 余量
+                lad_nodes[li].append((yy, add_spot(fi, lad["x"], "ladder")))
+
+    # ---- 3. 走：同一段上相邻点 + 跨段（prev/next 或首尾相接）----
+    by_fh: dict = {}
+    for i, sp in enumerate(spots):
+        if sp["fh"] >= 0:
+            by_fh.setdefault(sp["fh"], []).append(i)
+    for fi, ids in by_fh.items():
+        ids.sort(key=lambda i: spots[i]["x"])
+        for a, b in zip(ids, ids[1:]):
+            walk(a, b)
+    # 跨段：A 的右端 ≈ B 的左端（含 prev/next 声明的连接），高度差小就算连通
+    for fi, fh in enumerate(fhs):
+        for gi, gh in enumerate(fhs):
+            if fi == gi:
+                continue
+            gap = gh["xl"] - fh["xr"]
+            dy = abs(_nav_y_at(gh, gh["xl"]) - _nav_y_at(fh, fh["xr"]))
+            if fh["next"] != gh["id"] and not (-4 <= gap <= 14 and dy <= 16):
+                continue
+            if dy > 24:
+                continue
+            a = add_spot(fi, fh["xr"])
+            b = add_spot(gi, gh["xl"])
+            d = max(1.0, abs(gap) + dy)
+            link(a, b, d / NAV_WALK, {"a": "walk", "to": [spots[b]["x"], spots[b]["y"]]})
+            link(b, a, d / NAV_WALK, {"a": "walk", "to": [spots[a]["x"], spots[a]["y"]]})
+
+    # ---- 4. 落：每个点上垂直下坠到下面最高的平台（含绳梯端点松手）----
+    for i, sp in enumerate(spots):
+        land = _nav_land_below(fhs, sp["x"], sp["y"])
+        if land is None or (sp["fh"] >= 0 and land is fhs[sp["fh"]]):
+            continue
+        ly = _nav_y_at(land, sp["x"])
+        dy = ly - sp["y"]
+        if dy < 6 or _nav_blocked(fhs, sp["x"], sp["y"], ly):
+            continue
+        j = add_spot(fhs.index(land), sp["x"], "fall")
+        act = {"a": "fall", "to": [spots[j]["x"], spots[j]["y"]]}
+        if sp["fh"] >= 0:
+            # 段中间下坠 = 客户端 DOWN+JUMP（穿过平台）；两端 = 走下去
+            fh = fhs[sp["fh"]]
+            act["drop"] = fh["xl"] + 4 < sp["x"] < fh["xr"] - 4
+        link(i, j, 0.25 + dy / 700.0, act)
+
+    # ---- 5. 跳：每个点上按跳跃包线找能落脚的其他平台 ----
+    for i, sp in enumerate(spots):
+        if sp["fh"] < 0:
+            continue
+        sx, sy, sfi = sp["x"], sp["y"], sp["fh"]
+        for gi, gh in enumerate(fhs):
+            if gi == sfi:
+                continue
+            if gh["xr"] < sx - 220 or gh["xl"] > sx + 220:
+                continue
+            lx = min(max(sx, gh["xl"]), gh["xr"])
+            ly = _nav_y_at(gh, lx)
+            dy, dx = ly - sy, lx - sx
+            if abs(dy) < 2 and abs(dx) < 2:
+                continue
+            reach = _nav_reach(dy)
+            if reach is None or abs(dx) > reach + 2 or dy > 380:
+                continue
+            if _nav_blocked(fhs, lx, sy, ly, up=dy < 0):
+                continue
+            if dy < 0 and _nav_blocked(fhs, lx, sy - NAV_JUMP_UP + 4, sy, up=True):
+                continue
+            j = add_spot(gi, lx, "jump")
+            cost = 0.55 + max(0.0, dy) / 260.0 + abs(dx) / 420.0
+            act = {"a": "jump", "from": [sx, sy], "to": [spots[j]["x"], spots[j]["y"]],
+                   "dir": 1 if dx >= 0 else -1}
+            link(i, j, cost, act)
+        # 跳过去抓绳：绳底悬空的绳梯只能这么上（客户端允许空中按↑抓）
+        for li, nodes in enumerate(lad_nodes):
+            for _, j in nodes:
+                nx, ny = spots[j]["x"], spots[j]["y"]
+                dx, dy = nx - sx, ny - sy
+                if abs(dx) > 24 or dy > 320:
+                    continue
+                reach = _nav_reach(dy)
+                if reach is None or abs(dx) > reach + 2:
+                    continue
+                if _nav_blocked(fhs, nx, sy, ny, up=dy < 0):
+                    continue
+                link(i, j, 0.75 + abs(dx) / 420.0, {
+                    "a": "grab", "from": [sx, sy], "to": [nx, ny],
+                    "dir": 1 if dx >= 0 else -1, "x": lads[li]["x"]})
+
+    # ---- 6. 爬：同一根绳梯上按高度排序的节点两两相连（相邻层，双向）----
+    for li, lad in enumerate(lads):
+        nodes = sorted(lad_nodes[li], key=lambda t: t[0])
+        merged = []                     # 高度几乎相同的挂点/端点合并，免得原地打转
+        for y, i in nodes:
+            if merged and abs(y - merged[-1][0]) < 3.5:
+                continue
+            merged.append((y, i))
+        for (ya, a), (yb, b) in zip(merged, merged[1:]):
+            dy = yb - ya
+            if dy < 4:
+                continue
+            up = {"a": "climb", "from": [spots[a]["x"], spots[a]["y"]],
+                  "to": [spots[b]["x"], spots[b]["y"]],
+                  "ladder": lad["ladder"], "x": lad["x"]}
+            dn = {"a": "climb", "from": up["to"], "to": up["from"],
+                  "ladder": lad["ladder"], "x": lad["x"]}
+            link(a, b, dy / NAV_CLIMB + 0.4, up)
+            link(b, a, dy / NAV_CLIMB + 0.4, dn)
+
+    return {"fhs": fhs, "ladders": lads, "spots": spots, "adj": adj}
+
+
+_NAV_CACHE: dict = {}
+
+
+def _nav_cached(mid: str) -> dict | None:
+    """按 map.json 的 mtime 缓存导航图（一张图几百个点，A* 很快）。"""
+    for d in (WZJS_MAP / mid, CACHE / "map" / mid):
+        p = d / "map.json"
+        if not p.exists():
+            continue
+        try:
+            st = p.stat().st_mtime
+        except OSError:
+            continue
+        key = (str(p), st)
+        hit = _NAV_CACHE.get(key)
+        if hit is None:
+            try:
+                mj = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            hit = _nav_graph(mj)
+            _NAV_CACHE.clear()
+            _NAV_CACHE[key] = hit
+        return hit
+    return None
+
+
+def _nav_snap(g: dict, x: float, y: float) -> int | None:
+    """把任意点吸到 foothold 上：优先脚下/最近的平台，再在段内取 x。"""
+    fhs, best = g["fhs"], None
+    for fi, fh in enumerate(fhs):
+        if not _nav_spans(fh, x, 40.0):
+            continue
+        px = min(max(x, fh["xl"]), fh["xr"])
+        yy = _nav_y_at(fh, px)
+        score = abs(yy - y) + abs(px - x) * 0.35
+        if yy < y - 26:              # 头顶的平台不是"脚下这块"
+            score += 200
+        if best is None or score < best[0]:
+            best = (score, fi, px, yy)
+    if best is None:
+        return None
+    _, fi, px, yy = best
+    for i, sp in enumerate(g["spots"]):
+        if sp["fh"] == fi and abs(sp["x"] - px) < 1.5:
+            return i
+    g["spots"].append({"fh": fi, "x": px, "y": yy, "kind": "tmp"})
+    g["adj"].append([])
+    new = len(g["spots"]) - 1
+    # 临时点接回原图：同段点 + 走/跳/落三类边
+    _nav_wire_tmp(g, new)
+    return new
+
+
+def _nav_wire_tmp(g: dict, i: int) -> None:
+    """给动态点（起点/终点）补边：同段相邻点走，其余平台按跳/落规则连。"""
+    sp, spots, fhs, adj = g["spots"][i], g["spots"], g["fhs"], g["adj"]
+    sx, sy = sp["x"], sp["y"]
+    same = [j for j, o in enumerate(spots)
+            if o["fh"] == sp["fh"] and abs(o["x"] - sx) > 1.0]
+    same.sort(key=lambda j: abs(spots[j]["x"] - sx))
+    for j in same[:2]:
+        d = abs(spots[j]["x"] - sx)
+        adj[i].append({"to": j, "cost": d / NAV_WALK,
+                       "act": {"a": "walk", "to": [spots[j]["x"], spots[j]["y"]]}})
+        adj[j].append({"to": i, "cost": d / NAV_WALK,
+                       "act": {"a": "walk", "to": [sx, sy]}})
+    land = _nav_land_below(fhs, sx, sy)
+    if land is not None and land is not fhs[sp["fh"]]:
+        ly = _nav_y_at(land, sx)
+        dy = ly - sy
+        if dy > 6 and not _nav_blocked(fhs, sx, sy, ly):
+            for j, o in enumerate(spots):
+                if o["fh"] == fhs.index(land) and abs(o["x"] - sx) < 1.5:
+                    adj[i].append({"to": j, "cost": 0.25 + dy / 700.0,
+                                   "act": {"a": "fall", "to": [o["x"], o["y"]]}})
+                    break
+    for gi, gh in enumerate(fhs):
+        if gi == sp["fh"]:
+            continue
+        if gh["xr"] < sx - 220 or gh["xl"] > sx + 220:
+            continue
+        lx = min(max(sx, gh["xl"]), gh["xr"])
+        ly = _nav_y_at(gh, lx)
+        dy, dx = ly - sy, lx - sx
+        if abs(dy) < 2 and abs(dx) < 2:
+            continue
+        reach = _nav_reach(dy)
+        if reach is None or abs(dx) > reach + 2 or dy > 380:
+            continue
+        if _nav_blocked(fhs, lx, sy, ly, up=dy < 0):
+            continue
+        for j, o in enumerate(spots):
+            if o["fh"] == gi and abs(o["x"] - lx) < 1.5:
+                adj[i].append({"to": j, "cost": 0.55, "act": {
+                    "a": "jump", "from": [sx, sy], "to": [o["x"], o["y"]],
+                    "dir": 1 if dx >= 0 else -1}})
+                break
+
+
+def _nav_astar(g: dict, src: int, dst: int) -> list | None:
+    import heapq
+    spots, adj = g["spots"], g["adj"]
+    tx, ty = spots[dst]["x"], spots[dst]["y"]
+
+    def h(i: int) -> float:
+        return ((spots[i]["x"] - tx) ** 2 + (spots[i]["y"] - ty) ** 2) ** 0.5 / NAV_CLIMB
+
+    gs = {src: 0.0}
+    prev: dict = {}
+    heap = [(h(src), 0.0, src)]
+    seen = set()
+    while heap:
+        _, gc, i = heapq.heappop(heap)
+        if i in seen:
+            continue
+        seen.add(i)
+        if i == dst:
+            path = [i]
+            while path[-1] != src:
+                path.append(prev[path[-1]])
+            return list(reversed(path))
+        for e in adj[i]:
+            j = e["to"]
+            if j in seen:
+                continue
+            ng = gc + e["cost"]
+            if ng < gs.get(j, 1e18):
+                gs[j] = ng
+                prev[j] = i
+                heapq.heappush(heap, (ng + h(j), ng, j))
+    return None
+
+
+def c_cls_path(mid: str, fx: float, fy: float, tx: float, ty: float) -> dict:
+    """地图寻路：世界坐标 from → to，返回动作序列 + 折线（画图/执行两用）。"""
+    mid = str(mid).strip()
+    if not re.fullmatch(r"\d{1,9}", mid):
+        raise CliError("地图 id 应该是数字", 2)
+    g = _nav_cached(mid)
+    if g is None:
+        raise CliError(f"地图 {mid} 还没有 map.json 缓存（先打开这张图渲染一次）", 1)
+    a = _nav_snap(g, float(fx), float(fy))
+    b = _nav_snap(g, float(tx), float(ty))
+    if a is None or b is None:
+        raise CliError("起点或终点附近没有可站立的地面（点在地图外了？）", 1)
+    nodes = _nav_astar(g, a, b)
+    if not nodes:
+        return {"ok": False, "why": "没有连通的路线（可能被墙隔开/需要传送门）",
+                "from": [fx, fy], "to": [tx, ty]}
+    spots = g["spots"]
+    pts = [[round(spots[i]["x"], 1), round(spots[i]["y"], 1)] for i in nodes]
+    acts, cost = [], 0.0
+    for u, v in zip(nodes, nodes[1:]):
+        e = next((x for x in g["adj"][u] if x["to"] == v), None)
+        if e is None:
+            continue
+        cost += e["cost"]
+        a_ = e["act"]
+        if a_["a"] == "walk" and acts and acts[-1]["a"] == "walk":
+            acts[-1]["to"] = a_["to"]          # 连续走合并成一段
+        else:
+            acts.append(a_)
+    if acts and acts[0]["a"] == "walk":
+        acts[0]["from"] = [round(fx, 1), round(fy, 1)]
+    return {"ok": True, "id": mid, "pts": pts, "actions": acts,
+            "cost": round(cost, 2), "spots": len(spots),
+            "jumps": sum(1 for x in acts if x["a"] == "jump"),
+            "falls": sum(1 for x in acts if x["a"] == "fall"),
+            "climbs": sum(1 for x in acts if x["a"] == "climb")}
+
+
 # ── 全库出图（map-all）──────────────────────────────────────────────────────
 # 临时脚本 scripts/_maptest.py 的正式版：把每张图的预览缓存
 # （map.json + 贴图 + preview.png，WebUI「预览」同一条链路）批量建好，
@@ -5202,6 +5690,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_char_parts, (qs.get("cat") or ["hair"])[0])
         elif path == "/api/char/players":
             self._api(c_char_players)
+        elif path == "/api/cls/path":
+            qs = urllib.parse.parse_qs(u.query)
+            vals = []
+            for k in ("fx", "fy", "tx", "ty"):
+                try:
+                    vals.append(float((qs.get(k) or ["0"])[0]))
+                except ValueError:
+                    vals.append(0.0)
+            self._api(c_cls_path, (qs.get("id") or [""])[0], *vals)
         elif path.startswith("/api/char/icon/"):
             rest = path[len("/api/char/icon/"):]
             cat, _, iid = rest.partition("/")
