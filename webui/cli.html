@@ -136,12 +136,6 @@
              gap: 10px; overflow: auto; min-height: 0; }
   #yl-scope button { padding: 4px 10px; font-size: 12px; }
   .yl-man { border-top: 1px dashed rgba(128,128,128,.3); padding-top: 10px; }
-  .yl-mlist { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 2px; max-height: 130px;
-              overflow: auto; }
-  .yl-mlist .it { font-size: 12px; padding: 2px 8px; border: 1px solid rgba(128,128,128,.4);
-                  border-radius: 6px; cursor: pointer; max-width: 260px; overflow: hidden;
-                  text-overflow: ellipsis; white-space: nowrap; }
-  .yl-mlist .it.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
   .yl-edit { display: flex; gap: 14px; margin-top: 8px; align-items: flex-start; }
   .yl-mapwrap { position: relative; flex: 1; min-width: 0; max-width: 100%; align-self: flex-start; }
   .yl-mapwrap img { display: block; max-width: 100%; image-rendering: pixelated;
@@ -855,11 +849,15 @@
         <div class="muted" id="yl-msg"></div>
         <div class="yl-man" id="yl-man" hidden>
           <div class="row">
-            <input type="text" id="yl-q" placeholder="搜地图 id / 名字 → 点一下选进本页精调 …"
-                   style="width:280px" autocomplete="off">
-            <span class="muted" id="yl-picked"></span>
+            <input type="text" id="yl-q" placeholder="搜索 id 或名字 …" style="flex:1;min-width:0" autocomplete="off">
+            <div class="filters" id="yl-flt" style="flex:none">
+              <button class="flt on" data-f="all">全部</button>
+              <button class="flt" data-f="mob">有怪</button>
+              <button class="flt" data-f="empty">无怪</button>
+            </div>
           </div>
-          <div class="yl-mlist" id="yl-mlist"></div>
+          <div class="list" id="yl-mlist" style="max-height:240px;flex:none"></div>
+          <div class="row" style="margin:2px 0"><span class="muted" id="yl-picked"></span></div>
           <div class="row">
             <b>相机窗口（拖/微调，每格导一张）</b>
             <button class="mini" id="yl-resamp" title="按「每图窗口」数重新自动采样一版（foothold 站位 → 相机公式 → VR 钳制），作为微调起点">🎲 自动采样</button>
@@ -3925,7 +3923,7 @@ window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); fitGam
 
 /* ---------------- YOLO 训练集导出 ---------------- */
 let YLTIMER = 0;
-const YL = { scope: "cur", win: [], sel: -1, vr: null, iw: 0, ih: 0, mapid: "", loading: false };
+const YL = { scope: "cur", win: [], sel: -1, vr: null, iw: 0, ih: 0, mapid: "", loading: false, filt: "all" };
 
 function yoloScopeMaps() {
   if (YL.scope === "cur") return mapRef ? [String(mapRef.id)] : [];
@@ -3998,24 +3996,33 @@ function yoloOpen() {
   }
 }
 
-/* 本页地图选择器：搜 id/名字 → 点一下加载该图并进精调 */
+/* 本页地图选择器：和地图页同款控件（搜索 + 全部/有怪/无怪 + 列表行带名字/Lv） */
 function ylMapList() {
   const q = ($("#yl-q").value || "").trim().toLowerCase();
   const box = $("#yl-mlist");
   if (!box) return;
-  const items = CLSMODE ? (CLS_MAPS || []) : MAPS.map((s) => ({ id: s }));
-  let arr = items.filter((m) =>
-    !q || String(m.id).includes(q) ||
-    (CLSMODE && `${m.name || ""} ${m.street || ""}`.toLowerCase().includes(q)));
-  arr = arr.slice(0, q ? 40 : 24);
+  let items = CLSMODE ? (CLS_MAPS || []) : MAPS.map((s) => ({ id: s }));
+  if (q) items = items.filter((m) => String(m.id).includes(q) ||
+    (CLSMODE && ((m.name || "").toLowerCase().includes(q) ||
+                 (m.street || "").toLowerCase().includes(q))));
+  const has = (m) => (CLSMODE ? CLS_LIFE && CLS_LIFE.has(m.id) : LIFE.has(String(m.id)));
+  const noLife = CLSMODE ? !CLS_LIFE : !LIFE.size;
+  if (YL.filt !== "all" && !noLife)
+    items = items.filter((m) => YL.filt === "mob" ? has(m) : !has(m));
+  const top = items.slice(0, 200);
   const cur = mapRef ? String(mapRef.id) : "";
-  box.innerHTML = arr.map((m) => {
-    const label = CLSMODE && m.name ? esc(m.name) + " " : "";
-    const tip = CLSMODE ? `${m.id} · ${esc(m.name || "")}${m.street ? " · " + esc(m.street) : ""}${m.mob ? " · 有怪" : ""}`
-                        : String(m.id);
-    return `<span class="it${String(m.id) === cur ? " on" : ""}" data-id="${m.id}" title="${tip}">${label}<span class="muted">${m.id}</span></span>`;
-  }).join("") || '<span class="muted">没有匹配的地图</span>';
-  box.querySelectorAll(".it").forEach((el) => { el.onclick = () => yoloPickMap(el.dataset.id); });
+  box.innerHTML = top.map((m) => CLSMODE
+    ? `<div class="it" data-id="${m.id}" title="${esc(m.street ? m.street + " · " : "")}${esc(m.desc || "")}">` +
+      `<span class="id">${m.id}</span><span class="nm">${esc(m.name || "")}</span>${mapLvChip(m.id)}</div>`
+    : `<div class="it" data-id="${m}"><span class="id">${m}</span>${mapLvChip(m)}</div>`
+  ).join("") || '<div class="muted" style="padding:10px">没有匹配</div>';
+  box.querySelectorAll(".it").forEach((el) => {
+    el.classList.toggle("on", el.dataset.id === cur);   // 当前精调的图高亮
+    el.onclick = () => yoloPickMap(el.dataset.id);
+  });
+  $("#yl-picked").textContent =
+    `共 ${items.length} 张` + (noLife && YL.filt !== "all" ? " · 刷怪数据未加载" : "")
+    + (cur ? ` · 当前精调：${cur}` : "");
 }
 
 async function yoloPickMap(id) {
@@ -4151,6 +4158,14 @@ $("#yl-mapimg").addEventListener("mousedown", (e) => {
 
 $("#yl-resamp").onclick = yoloResample;
 $("#yl-q").oninput = ylMapList;
+$("#yl-flt").onclick = (e) => {
+  const b = e.target.closest(".flt");
+  if (!b) return;
+  $$("#yl-flt .flt").forEach((x) => x.classList.remove("on"));
+  b.classList.add("on");
+  YL.filt = b.dataset.f;
+  ylMapList();
+};
 $("#yl-addwin").onclick = () => {
   if (!YL.iw) return;
   const w = (YL.win[YL.sel] || YL.win[0] || [0, 0, 1366, 768]).slice();
