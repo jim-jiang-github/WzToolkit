@@ -140,18 +140,18 @@
   .yl-mapwrap img { display: block; max-width: 100%; image-rendering: pixelated;
                     border-radius: 8px; cursor: crosshair; }
   .yl-wbox { position: absolute; border: 1px solid rgba(255,216,64,.9);
-             background: rgba(255,216,64,.12); box-sizing: border-box;
+             background: transparent; box-sizing: border-box;
              cursor: move; }
   .yl-wbox .tag { position: absolute; left: 0; top: 0; font-size: 10px; line-height: 13px;
                   padding: 0 4px; background: rgba(0,0,0,.6); color: #ffd840;
                   white-space: nowrap; border-radius: 0 0 4px 0; }
-  .yl-wbox.on { border: 2px solid #ffd840; background: rgba(255,216,64,.24); z-index: 3; }
+  .yl-wbox.on { border: 2px solid #ffd840; background: transparent; z-index: 3; }
   .yl-wbox.bad { border-color: #ff5252; }
   .yl-wbox.bad .tag { color: #ff5252; }
-  /* 相机中心点：窗口正中心 = 相机对准的位置（白圈红点，深浅底都看得清） */
-  .yl-wbox .dot { position: absolute; left: 50%; top: 50%; width: 7px; height: 7px;
-                  margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: #ff3030;
-                  box-shadow: 0 0 0 1.5px rgba(255,255,255,.9); pointer-events: none; }
+  /* 站位红点：窗口正中心 = 人物脚底（白圈红点，深浅底都看得清） */
+  .yl-wbox .dot { position: absolute; width: 21px; height: 21px;
+                  margin: -10.5px 0 0 -10.5px; border-radius: 50%; background: #ff3030;
+                  box-shadow: 0 0 0 2px rgba(255,255,255,.9); pointer-events: none; }
   .yl-vr { position: absolute; border: 1px dashed rgba(255,82,82,.65);
            box-sizing: border-box; pointer-events: none; z-index: 1; }
   .yl-side { width: 400px; flex: none; display: flex; flex-direction: column; gap: 6px; }
