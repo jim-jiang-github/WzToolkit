@@ -187,6 +187,10 @@
   .browse div { padding: 4px 10px; cursor: pointer; border-radius: 5px; }
   .browse div:hover { background: #0e3b35; }
   .mapimg { display: block; image-rendering: pixelated; cursor: zoom-in; }
+  /* 寻路模式：整块画布变成选点靶面（图片在最上层，光标要盖过 .mapimg 的 zoom-in） */
+  .gameview.picking, .gameview.picking .mapimg { cursor: crosshair; }
+  /* 工具栏上的开关按钮（寻路等）= 打开状态高亮 */
+  button.mini.on { background: var(--acc); color: #04121b; border-color: var(--acc); }
   /* 地图「显示设置」弹窗：工具栏只留按钮，开关都收进来 */
   .optpop { position: absolute; right: 0; top: 32px; z-index: 30; width: 320px;
             background: var(--panel); border: 1px solid var(--acc); border-radius: 8px;
@@ -926,7 +930,8 @@ const OPTS = Object.assign({
   lad: true,    // 显示梯子
   mmp: true,    // 小地图 HUD：传送门
   mmn: true,    // 小地图 HUD：NPC
-  path: false,  // 点击寻路：点两下图规划「走/跳/落/爬」路线（foothold 导航图 + A*）
+  path: true,   // 点击寻路：点两下图规划「走/跳/落/爬」路线（foothold 导航图 + A*）
+                 // 默认开 —— 点击地图 = 选点；要看整张大图用工具栏「🔍 查看大图」
   density: 1,   // 怪物密度倍数
 }, JSON.parse(localStorage.getItem("wt_mapopts") || "{}"));
 function saveOpts() { localStorage.setItem("wt_mapopts", JSON.stringify(OPTS)); }
@@ -942,6 +947,14 @@ if (!localStorage.getItem("wt_mapopts_drops_def")) {
 if (!localStorage.getItem("wt_mapopts_players_def")) {
   OPTS.players = true;
   localStorage.setItem("wt_mapopts_players_def", "1");
+  saveOpts();
+}
+/* 一次性迁移（2026-11-16）：点击寻路改默认开。之前存的 path:false 都是旧默认
+   值被 saveOpts 带进去的（用户根本没找到这个开关），强制翻回 true 一次；
+   之后用户手动关掉就以他关的为准。 */
+if (!localStorage.getItem("wt_mapopts_path_def")) {
+  OPTS.path = true;
+  localStorage.setItem("wt_mapopts_path_def", "1");
   saveOpts();
 }
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
@@ -1037,32 +1050,43 @@ function bindGvDrag() {
     vpClamp();
     DRAGMOVED = Date.now();
   };
-  gv.onclick = async (e) => {
-    // 点击寻路：预览图像素 → 世界坐标（overlay.minx/miny 是图 (0,0) 的世界坐标）
-    if (!OPTS.path || !mapData || !mapData.overlay || !VIEWPOS || !mapRef) return;
-    if (e.target.closest(".mm-hud") || e.target.closest("#vpframe")) return;
-    if (Date.now() - DRAGMOVED < 500) return;      // 刚拖完画布不算点击
-    const r = gv.getBoundingClientRect();
-    const px = (e.clientX - r.left) / GVS + VIEWPOS.x;
-    const py = (e.clientY - r.top) / GVS + VIEWPOS.y;
-    const w = { x: Math.round(px + mapData.overlay.minx),
-                y: Math.round(py + mapData.overlay.miny) };
-    if (!PAT || PAT.id !== mapRef.id || (PAT.a && PAT.b))
-      PAT = { id: mapRef.id, a: w, res: null };
-    else if (!PAT.b) PAT.b = w;
-    renderLifeDots();
-    const out = $("#path-out");
-    if (out) out.innerHTML = pathSummary();
-    if (!(PAT.a && PAT.b)) return;
-    try {
-      const q = `id=${mapRef.id}&fx=${PAT.a.x}&fy=${PAT.a.y}&tx=${PAT.b.x}&ty=${PAT.b.y}`;
-      PAT.res = await api("/api/cls/path?" + q);
-    } catch (err) {
-      PAT.res = { ok: false, why: (err && err.message) || String(err) };
-    }
-    renderLifeDots();
-    if (out) out.innerHTML = pathSummary();
-  };
+  // 选点挂「捕获阶段」：预览图外面套着 <a id="mz-open">（点开放大查看），它的
+  // 冒泡监听会 preventDefault + stopPropagation 把 click 吃掉 —— 真鼠标点图时
+  // 冒泡到不了 #gameview，寻路就永远选不上点（jsdom 里直接往 #gameview 派事件
+  // 反而"能过"，所以之前没测出来）。捕获先于 <a> 跑，一定拿得到。
+  gv.addEventListener("click", onGvClick, true);
+  gv.classList.toggle("picking", !!OPTS.path);
+}
+
+/* 点击寻路：预览图像素 → 世界坐标（overlay.minx/miny 是图 (0,0) 的世界坐标） */
+async function onGvClick(e) {
+  if (!OPTS.path || !mapData || !mapData.overlay || !VIEWPOS || !mapRef) return;
+  const gv = $("#gameview");
+  const t = e.target instanceof Element ? e.target : null;
+  if (t && (t.closest(".mm-hud") || t.closest("#vpframe"))) return;   // HUD 自己处理点击
+  if (e.button) return;
+  if (Date.now() - DRAGMOVED < 500) return;      // 刚拖完画布不算点击
+  e.preventDefault();            // 别让 <a id="mz-open"> 的默认跳转把页面换掉
+  const r = gv.getBoundingClientRect();
+  const px = (e.clientX - r.left) / GVS + VIEWPOS.x;
+  const py = (e.clientY - r.top) / GVS + VIEWPOS.y;
+  const w = { x: Math.round(px + mapData.overlay.minx),
+              y: Math.round(py + mapData.overlay.miny) };
+  if (!PAT || PAT.id !== mapRef.id || (PAT.a && PAT.b))
+    PAT = { id: mapRef.id, a: w, res: null };
+  else if (!PAT.b) PAT.b = w;
+  renderLifeDots();
+  const out = $("#path-out");
+  if (out) out.innerHTML = pathSummary();
+  if (!(PAT.a && PAT.b)) return;
+  try {
+    const q = `id=${mapRef.id}&fx=${PAT.a.x}&fy=${PAT.a.y}&tx=${PAT.b.x}&ty=${PAT.b.y}`;
+    PAT.res = await api("/api/cls/path?" + q);
+  } catch (err) {
+    PAT.res = { ok: false, why: (err && err.message) || String(err) };
+  }
+  renderLifeDots();
+  if (out) out.innerHTML = pathSummary();
 }
 window.addEventListener("mousemove", (e) => {
   if (!VPDRAG) return;
@@ -3407,6 +3431,20 @@ async function lifeOverlayHTML() {
    点两下图：第一下=起点，第二下=终点；第三下重新选起点。物理（跳高/走速/
    爬速）取自客户端源码，绳梯挂点判定同 MapInfo::Ladder::inrange。 */
 let PAT = null;    // {id, a:{x,y}, b:{x,y}, res}
+
+/* 开/关寻路模式：工具栏按钮的 on 态、画布光标、旧路线一起收拾干净 */
+function setPathMode(on) {
+  OPTS.path = !!on;
+  saveOpts();
+  PAT = null;
+  const pb = $("#path-btn"), gv = $("#gameview"), out = $("#path-out"), ck = $("#path-toggle");
+  if (pb) pb.classList.toggle("on", OPTS.path);
+  if (ck) ck.checked = OPTS.path;
+  if (gv) gv.classList.toggle("picking", OPTS.path);
+  renderLifeDots();
+  if (out) out.innerHTML = OPTS.path ? "🧭 寻路模式：在地图上点一下选起点" : "";
+}
+
 const PATH_STYLE = {
   walk:  'stroke="#ffd23f" stroke-width="4"',
   jump:  'stroke="#ff8c3a" stroke-width="4" stroke-dasharray="10 6" fill="none"',
@@ -3416,6 +3454,7 @@ const PATH_STYLE = {
 };
 function pathSvgHtml() {
   if (!PAT || !PAT.res || !PAT.res.ok || !mapData || !mapData.overlay) return "";
+  if (PAT.id !== (mapRef && mapRef.id)) return "";   // 换图后别把上一张的路线画上来
   const ov = mapData.overlay, W = mapData.preview.w, H = mapData.preview.h;
   const X = (p) => +(p[0] - ov.minx).toFixed(1);
   const Y = (p) => +(p[1] - ov.miny).toFixed(1);
@@ -3638,6 +3677,8 @@ async function mapLoad(id, preview, cls) {
       ${d.preview.w}×${d.preview.h}${preview ? "（预览）" : ""}</div>
       <div class="row">
         ${nKinds ? `<button class="mini" id="dex-btn" title="这只地图出现的怪物，带立绘的图鉴">👾 怪物图鉴（${nKinds} 种）</button>` : ""}
+        <button class="mini ${OPTS.path ? "on" : ""}" id="path-btn" title="寻路模式（开=点地图选起点/终点，自动规划走/跳/落/爬；关=点地图打开整图放大查看）">🧭 点击寻路</button>
+        <button class="mini" id="mz-btn" title="整张地图放大查看（滚轮/滚动条平移，叠加层同样显示）">🔍 查看大图</button>
         <button class="mini" id="opt-btn" title="显示叠加层与导出选项">⚙ 显示设置</button>
         <button class="primary mini" id="do-export" title="导出 WebUI 里游戏窗口当前显示的那块画面（1366×768，拖动画布到哪就导哪）→ .exports/maps/&lt;id&gt;/window.png；是否带怪物由「显示怪物」开关决定，不显示背景同样生效">导出窗口</button>
       </div>
@@ -3651,7 +3692,7 @@ async function mapLoad(id, preview, cls) {
         <label title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上；切换时原地换图，画面不闪黑"><input type="checkbox" id="nobg-toggle" ${OPTS.nobg ? "checked" : ""} /> 不显示背景</label>
         ${nRope ? `<label title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" ${OPTS.rope ? "checked" : ""} /> 显示绳索（${nRope}）</label>` : ""}
         ${nLad ? `<label title="半透明绿框=梯子攀爬区；数据来自 map.json 的 ladderRope（l=1）"><input type="checkbox" id="rope-lad" ${OPTS.lad ? "checked" : ""} /> 显示梯子（${nLad}）</label>` : ""}
-        <label title="地图上点两下：第一下=起点，第二下=终点，自动规划「走/跳/落/爬绳」路线并画出来（黄=走、橙弧=跳/抓绳、紫点=爬、蓝虚=落）。物理参数取自客户端源码（跳高≈72px、走速100px/s），/foothold 是客户端读的同一份真值，无需图像识别。第三下重新选起点"><input type="checkbox" id="path-toggle" ${OPTS.path ? "checked" : ""} /> 🧭 点击寻路</label>
+        <label title="地图上点两下：第一下=起点，第二下=终点，自动规划「走/跳/落/爬绳」路线并画出来（黄=走、橙弧=跳/抓绳、紫点=爬、蓝虚=落）。物理参数取自客户端源码（跳高≈72px、走速100px/s），/foothold 是客户端读的同一份真值，无需图像识别。第三下重新选起点。开关在工具栏上（🧭 点击寻路），这里只是同一状态的镜像"><input type="checkbox" id="path-toggle" ${OPTS.path ? "checked" : ""} /> 🧭 点击寻路</label>
         ${d.minimap ? `<div class="optgrp">小地图 HUD 标记</div>
         <label title="pt=2 的传送口，小地图上画蓝圈；点击蓝圈跳到目标地图"><input type="checkbox" id="mm-p" ${OPTS.mmp ? "checked" : ""} /> 传送门 ${d.minimap.portals.length}</label>
         <label><input type="checkbox" id="mm-n" ${OPTS.mmn ? "checked" : ""} /> NPC ${d.minimap.npcs.length}</label>` : ""}
@@ -3678,7 +3719,7 @@ async function mapLoad(id, preview, cls) {
           </div>
         </div>
       </div>
-      <div id="path-out" class="muted" style="margin:2px 0 4px;min-height:16px"></div>
+      <div id="path-out" class="muted" style="margin:2px 0 4px;min-height:16px">${OPTS.path ? "🧭 寻路模式：在地图上点一下选起点（工具栏可关）" : ""}</div>
       <div id="export-out" style="margin-top:6px"></div>`;
     mapData = d;
     bindMinimap(d);
@@ -3722,11 +3763,16 @@ async function mapLoad(id, preview, cls) {
     };
     const mo = $("#mz-open");
     if (mo) mo.onclick = (e) => {
+      // 这里只是「别跳走」：click 仍然要往上冒泡，寻路选点靠捕获阶段拿（见 onGvClick）
       e.preventDefault();
-      if (OPTS.path) { e.stopPropagation(); return; }   // 寻路模式：点击留给选点
+      if (OPTS.path) return;                      // 寻路模式：点击 = 选点，不放大
       if (Date.now() - DRAGMOVED < 300) return;   // 刚拖完画布 → 当成拖动，不当点击
       mzOpen();
     };
+    const pbtn = $("#path-btn");
+    if (pbtn) pbtn.onclick = () => setPathMode(!OPTS.path);
+    const mbtn = $("#mz-btn");
+    if (mbtn) mbtn.onclick = () => mzOpen();
     const lt = $("#life-toggle");
     if (lt) lt.onchange = () => { OPTS.dots = lt.checked; saveOpts(); renderLifeDots(); };
     const mt = $("#mob-toggle");
@@ -3754,13 +3800,7 @@ async function mapLoad(id, preview, cls) {
     const fh = $("#fh-toggle");
     if (fh) fh.onchange = () => { OPTS.fh = fh.checked; saveOpts(); renderLifeDots(); };
     const pw = $("#path-toggle");
-    if (pw) pw.onchange = () => {
-      OPTS.path = pw.checked; saveOpts();
-      PAT = null;                                 // 开关寻路都清掉旧路线
-      renderLifeDots();
-      const out = $("#path-out");
-      if (out) out.innerHTML = OPTS.path ? "🧭 寻路模式：在地图上点一下选起点" : "";
-    };
+    if (pw) pw.onchange = () => setPathMode(pw.checked);
     const nb2 = $("#nobg-toggle");
     if (nb2) nb2.onchange = () => { OPTS.nobg = nb2.checked; saveOpts(); syncBkVisible(); };
     const ds = $("#density");
