@@ -5406,10 +5406,13 @@ def _yolo_label(boxes: list, left: int, top: int, W: int, H: int,
             kid = str(p.get("kind", ""))
             ent["id"] = kid
             ent["name"] = (mob_name or {}).get(kid, "")
-        elif cls == 2:                         # drop
+        elif cls == 2:                         # drop：正数=道具 id(zfill8 查名)、负数=金币
             iid = str(p.get("item", ""))
             ent["id"] = iid
-            ent["name"] = (iname or {}).get(iid, "")
+            if iid.lstrip("-").isdigit() and int(iid) < 0:
+                ent["name"] = "金币"
+            else:
+                ent["name"] = (iname or {}).get(iid.zfill(8), "")
         else:                                  # player：合成时已带随机名
             ent["id"] = ""
             ent["name"] = str(p.get("name", "")) or "player"
@@ -5544,12 +5547,19 @@ def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
                 mobname = {m["id"]: (m.get("name") or "") for m in mob_meta(mobnx)}
             except Exception:                      # noqa: BLE001
                 mobname = {}
+        # 物品名（zfill8 → 名）：怀旧服中文表优先（json_a2909 TextAsset），
+        # 没有的退服务端英文表（vendor/itemnames.json）
         iname: dict = {}
         try:
-            iname = {k: (v or {}).get("name") or ""
-                     for k, v in _itemnames().items()}
+            for iid, cn in _cls_itemnames().items():
+                iname[str(iid).zfill(8)] = cn
         except Exception:                          # noqa: BLE001
-            iname = {}
+            pass
+        try:
+            for k, v in _itemnames().items():
+                iname.setdefault(str(k), (v or {}).get("name") or "")
+        except Exception:                          # noqa: BLE001
+            pass
         ann_path = run / "annotations.jsonl"
         ann_path.parent.mkdir(parents=True, exist_ok=True)
         ann = ann_path.open("w", encoding="utf-8")
