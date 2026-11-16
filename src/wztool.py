@@ -1711,6 +1711,81 @@ def _cls_tables() -> dict:
     return tables
 
 
+CLS_ITEMNAMES = CLS_MMIDX / "itemnames.json"   # 怀旧服道具名表缓存（带 json 包 mtime 戳）
+_cls_items_state: dict = {"state": None}
+
+
+def _cls_itemnames() -> dict:
+    """怀旧服道具名表（中文）：去前导零 itemid → name。
+
+    源 = json_a2909* 包的 TextAsset「Item」（17298 条）。图鉴/掉落显示用的
+    vendor/itemnames.json 来自服务端 String.wz 是英文的；用户实际玩的怀旧服
+    名字是中文——道具名优先取这里，取不到再退英文。
+    """
+    w = _cls_w_dir()
+    if w is None:
+        return {}
+    try:
+        stamp = max(p.stat().st_mtime for p in (w / "w").glob("json_*.bundle"))
+    except ValueError:
+        return {}
+    st = _cls_items_state["state"]
+    if st is not None and st["stamp"] == stamp:
+        return st["names"]
+    try:
+        raw = json.loads(CLS_ITEMNAMES.read_text(encoding="utf-8"))
+        if raw.get("stamp") == stamp:
+            names = raw.get("names") or {}
+            _cls_items_state["state"] = {"stamp": stamp, "names": names}
+            return names
+    except (OSError, ValueError):
+        pass
+    names: dict[str, str] = {}
+    try:
+        import UnityPy
+    except ImportError:
+        return names
+    for b in sorted((w / "w").glob("json_*.bundle")):
+        try:
+            env = UnityPy.load(str(b))
+        except Exception:                    # noqa: BLE001
+            continue
+        for o in env.objects:
+            if o.type.name != "TextAsset":
+                continue
+            try:
+                d = o.read()
+            except Exception:                # noqa: BLE001
+                continue
+            if getattr(d, "m_Name", "") != "Item":
+                continue
+            s = d.m_Script
+            if isinstance(s, str):
+                s = s.encode("utf-8", "surrogateescape")
+            try:
+                j = json.loads(s.decode("utf-8-sig"))
+            except (ValueError, UnicodeDecodeError):
+                continue
+            cand = {k: (v.get("name") or "")
+                    for k, v in j.items()
+                    if isinstance(k, str) and k.isdigit()
+                    and isinstance(v, dict)}
+            if len(cand) > len(names):       # 取最大的那张（防同名小表误伤）
+                names = cand
+        if len(names) > 10000:
+            break
+    try:
+        CLS_MMIDX.mkdir(parents=True, exist_ok=True)
+        tmp = CLS_ITEMNAMES.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"stamp": stamp, "names": names}, ensure_ascii=False),
+                       encoding="utf-8")
+        os.replace(tmp, CLS_ITEMNAMES)
+    except OSError:
+        pass
+    _cls_items_state["state"] = {"stamp": stamp, "names": names}
+    return names
+
+
 # ── 怀旧服 WZJS 大图库（1750 张地图 → 可渲染 map_dir）────────────────────
 # json_573635e1*.bundle 的 WZJS 地图对象 + Obj/Tile/Back 分类页，配上
 # spritesheet 注册表，由 vendor/clsmap.py 转成 .cache\wzjs-map\<id>\
@@ -1997,7 +2072,10 @@ def c_cls_icons() -> dict:
                 "done": _iconsjob["done"], "total": _iconsjob["total"],
                 "stage": _iconsjob["stage"] or "等待构建"}
     d = json.loads((CLS_ICONS / "index.json").read_text(encoding="utf-8"))
-    icons = [{"id": iid, "name": v["n"], "cat": v["c"], "mobs": v["m"]}
+    cn = _cls_itemnames()                    # 怀旧服中文名优先（index 里是英文名）
+    icons = [{"id": iid,
+              "name": cn.get(str(int(iid))) or v["n"],
+              "cat": v["c"], "mobs": v["m"]}
              for iid, v in d["icons"].items()]
     icons.sort(key=lambda r: r["id"])
     return {"ready": True, "icons": icons}
@@ -2008,6 +2086,41 @@ def c_cls_icon_png(iid: str) -> Path:
     if not p.is_file():
         raise CliError(f"图标 {iid} 不存在（图鉴还没建好？）", 2)
     return p
+
+
+_drops_api_cache: dict = {}
+
+
+def c_cls_drops() -> dict:
+    """掉落表（正向）：mobid(去前导零字符串) → [{i, n, c}]。
+
+    页面叠加层「显示掉落」用（与怪物立绘叠加同款纯前端随机摆放）：
+    i 是 8 位 zfill 道具 id，直接拼 /api/cls/icon/&lt;i&gt; 取图标；
+    只下发**图标已提取**的道具（没图标的掉出来也看不见）；
+    meso 是金币贴图可用档位（meso_&lt;tier&gt;_0.png）。
+    掉落表真源是服务端（vendor/drops.json，gen-drops.py 生成）。
+    """
+    if _drops_api_cache.get("drops"):
+        return _drops_api_cache
+    names = _itemnames()
+    cn = _cls_itemnames()                    # 怀旧服中文名优先，退服务端英文名
+    out: dict[str, list] = {}
+    for mob, items in _drops().items():
+        rows = []
+        for e in items:
+            iid = int(e.get("i") or 0)
+            if iid <= 0 or not (CLS_ICONS / f"{iid:08d}.png").is_file():
+                continue
+            rows.append({"i": f"{iid:08d}",
+                         "n": (cn.get(str(iid))
+                               or (names.get(f"{iid:08d}") or {}).get("name", "")),
+                         "c": e.get("c", 0)})
+        if rows:
+            out[str(mob)] = rows
+    meso = [t for t in range(4) if (CLS_ICONS / f"meso_{t}_0.png").is_file()]
+    _drops_api_cache.clear()
+    _drops_api_cache.update({"drops": out, "meso": meso})
+    return _drops_api_cache
 
 
 def _wzjs_build(log=None) -> None:
@@ -4786,6 +4899,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._api(c_cls_maps)
         elif path == "/api/cls/icons":
             self._api(c_cls_icons)
+        elif path == "/api/cls/drops":
+            self._api(c_cls_drops)
         elif path.startswith("/api/cls/icon/"):
             try:
                 self._send_file(c_cls_icon_png(path.rsplit("/", 1)[-1]),
