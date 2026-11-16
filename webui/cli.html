@@ -134,7 +134,6 @@
   /* YOLO 训练集面板 */
   .yl-body { padding: 12px 16px; display: flex; flex-direction: column;
              gap: 10px; overflow: auto; min-height: 0; }
-  #yl-scope button { padding: 4px 10px; font-size: 12px; }
   /* 左右结构：左=地图选择栏，右=相机窗口编辑器/进度（用户 2026-11-16） */
   .yl-cols { display: flex; gap: 16px; align-items: stretch; min-height: 0; }
   .yl-left { width: 272px; flex: none; display: flex; flex-direction: column; gap: 8px; }
@@ -817,19 +816,6 @@
       </div>
       <div class="yl-body">
         <div class="row">
-          <span class="muted">范围</span>
-          <div class="seg" id="yl-scope">
-            <button data-s="cur" class="on" title="只导一张地图：在下面搜地图 id/名字点一下选进来，然后拖黄框精调相机窗口">当前地图</button>
-            <button data-s="list" title="导出本数据源（现代库/怀旧服）列表里的全部地图">全部地图</button>
-            <button data-s="mob" title="只导有怪物刷新的地图（怀旧服大图库 339 张）——训练检测建议用这档">全部有怪</button>
-          </div>
-          <span class="muted">类别</span>
-          <label class="muted" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="yl-mob" checked> 怪物</label>
-          <label class="muted" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="yl-boss" checked> BOSS</label>
-          <label class="muted" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="yl-drop" checked> 掉落</label>
-          <label class="muted" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="yl-player" checked> 玩家</label>
-        </div>
-        <div class="row">
           <span class="muted">每图窗口</span>
           <input type="text" id="yl-per" value="8" style="min-width:56px;width:56px" title="每张地图采多少个相机窗口（相机位置按站位→相机公式→VR钳制采样，自动铺开不重复）">
           <span class="muted">随机布局</span>
@@ -837,7 +823,7 @@
           <span class="muted">验证集 %</span>
           <input type="text" id="yl-val" value="15" style="min-width:56px;width:56px" title="按整张地图划分 train/val（不是按窗口随机切——同图的相似窗口会泄漏，验证 mAP 会虚高）">
           <label class="muted" style="display:flex;gap:4px;align-items:center" title="窗口尺寸在 1024×768 / 1366×768 / 1280×720 / 1920×1080 里随机——不同玩家客户端分辨率不一样"><input type="checkbox" id="yl-rsize"> 随机分辨率</label>
-          <label class="muted" style="display:flex;gap:4px;align-items:center" title="网格窗口铺满每张地图的完整画面（右/下贴边自动补齐，不留死角），忽略「每图窗口」和手动精调窗口；分辨率用上面选的（不随机）。配「全部地图」= 把整个地图空间一张不漏搬进训练集"><input type="checkbox" id="yl-cover"> 铺满整图</label>
+          <label class="muted" style="display:flex;gap:4px;align-items:center" title="网格窗口铺满每张地图的完整画面（右/下贴边自动补齐，不留死角），忽略「每图窗口」和手动精调窗口；分辨率用上面选的（不随机）"><input type="checkbox" id="yl-cover"> 铺满整图</label>
           <span class="muted" id="yl-count"></span>
         </div>
         <div class="yl-cols">
@@ -4017,7 +4003,10 @@ window.addEventListener("resize", () => { if ($("#mm-hud")) mmHudPlace(); fitGam
 
 /* ---------------- YOLO 训练集导出 ---------------- */
 let YLTIMER = 0;
-const YL = { scope: "cur", win: [], sel: -1, vr: null, iw: 0, ih: 0, mapid: "", loading: false, filt: "all" };
+const YL = { scope: "mob", win: [], sel: -1, vr: null, iw: 0, ih: 0, mapid: "", loading: false, filt: "all" };
+// 范围/类别选择行已删（用户 2026-11-16：左侧已有地图搜索）——
+// scope 固定起步「全部有怪」(mob)，左侧点选某张图时 yoloPickMap 自动切「当前地图」(cur)；
+// 类别（怪物/BOSS/掉落/玩家）固定全开，见 yoloStart。
 
 function yoloScopeMaps() {
   if (YL.scope === "cur") return mapRef ? [String(mapRef.id)] : [];
@@ -4031,7 +4020,6 @@ function yoloScopeMaps() {
 }
 
 function yoloOpen() {
-  $$("#yl-scope button").forEach((b) => b.classList.toggle("on", b.dataset.s === YL.scope));
   const items = CLSMODE ? (CLS_MAPS || []) : MAPS;
   const nmob = CLSMODE ? items.filter((m) => m.mob).length : LIFE.size;
   $("#yl-count").textContent =
@@ -4081,7 +4069,6 @@ function ylMapList() {
 
 async function yoloPickMap(id) {
   YL.scope = "cur";                                   // 点了某张图 = 进入这张图的精调
-  $$("#yl-scope button").forEach((b) => b.classList.toggle("on", b.dataset.s === "cur"));
   YL.win = []; YL.mapid = ""; YL.sel = -1;          // 换图：清掉旧窗口
   $("#yl-picked").textContent = `地图 ${id} 渲染中（整图，大图要几秒）…`;
   try {
@@ -4292,7 +4279,7 @@ async function yoloStart() {
   const maps = yoloScopeMaps();
   if (!maps.length) {
     $("#yl-msg").textContent =
-      YL.scope === "cur" ? "先在上面搜一张地图点进去（或把范围切到「全部有怪」）"
+      YL.scope === "cur" ? "先在上面搜一张地图点进去再导出"
       : "列表还没加载好（回地图页等列表出来再回来）";
     return;
   }
@@ -4305,8 +4292,7 @@ async function yoloStart() {
       val: parseInt($("#yl-val").value, 10) || 15,
       random_size: $("#yl-rsize").checked,
       cover: $("#yl-cover").checked,
-      mob: $("#yl-mob").checked, boss: $("#yl-boss").checked,
-      drop: $("#yl-drop").checked, player: $("#yl-player").checked,
+      mob: true, boss: true, drop: true, player: true,   // 类别固定全开（选择行已删）
     };
     // 当前地图 + 精调过窗口 + 没勾铺满 → 按用户摆的位置导，不再自动采样
     if (YL.scope === "cur" && !$("#yl-cover").checked && mapRef && YL.win.length
@@ -4321,7 +4307,6 @@ async function yoloStart() {
   yoloPoll();
 }
 
-$$("#yl-scope button").forEach((b) => b.onclick = () => { YL.scope = b.dataset.s; yoloOpen(); });
 $("#yl-cover").onchange = () => { $("#yl-per").disabled = $("#yl-cover").checked; };
 $("#yl-start").onclick = yoloStart;
 $("#yl-stop").onclick = async () => {
