@@ -817,7 +817,6 @@
             <button data-s="cur" class="on" title="只导一张地图：在下面搜地图 id/名字点一下选进来，然后拖黄框精调相机窗口">当前地图</button>
             <button data-s="list" title="导出本数据源（现代库/怀旧服）列表里的全部地图">全部地图</button>
             <button data-s="mob" title="只导有怪物刷新的地图（怀旧服大图库 339 张）——训练检测建议用这档">全部有怪</button>
-            <button data-s="pick" title="自己挑地图：在下面的框里填地图 id 或名字（换行/逗号/空格分隔），支持模糊搜名">自选名单</button>
           </div>
           <span class="muted">类别</span>
           <label class="muted" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="yl-mob" checked> 怪物</label>
@@ -835,12 +834,16 @@
           <label class="muted" style="display:flex;gap:4px;align-items:center" title="窗口尺寸在 1024×768 / 1366×768 / 1280×720 / 1920×1080 里随机——不同玩家客户端分辨率不一样"><input type="checkbox" id="yl-rsize"> 随机分辨率</label>
           <span class="muted" id="yl-count"></span>
         </div>
-        <div class="row" id="yl-pickrow" hidden>
-          <textarea id="yl-pick" rows="3" spellcheck="false"
-            placeholder="自选地图：一行一个（或逗号/空格分隔），填地图 id 或名字，如：&#10;001000000&#10;大蘑菇&#10;101010000, 弓箭手培训场"
-            style="flex:1;min-width:0;padding:6px 10px;font:inherit;background:inherit;color:inherit;border:1px solid rgba(128,128,128,.4);border-radius:6px;resize:vertical"></textarea>
-          <button class="mini" id="yl-addcur" title="把「🗺 地图」页当前正选中的那张图追加进名单">＋当前地图</button>
+        <div class="row">
+          <input type="text" id="yl-q" placeholder="搜索 id 或名字 → 点行选进精调…" style="flex:1;min-width:0" autocomplete="off">
+          <div class="filters" id="yl-flt" style="flex:none">
+            <button class="flt on" data-f="all">全部</button>
+            <button class="flt" data-f="mob">有怪</button>
+            <button class="flt" data-f="empty">无怪</button>
+          </div>
         </div>
+        <div class="list" id="yl-mlist" style="max-height:180px;flex:none"></div>
+        <div class="row" style="margin:2px 0"><span class="muted" id="yl-picked"></span></div>
         <div class="progbox" id="yl-prog" hidden>
           <div class="prog-head"><b id="yl-stage">准备中…</b><span class="muted" id="yl-pct"></span></div>
           <div class="prog-bar"><i id="yl-fill"></i></div>
@@ -848,16 +851,6 @@
         </div>
         <div class="muted" id="yl-msg"></div>
         <div class="yl-man" id="yl-man" hidden>
-          <div class="row">
-            <input type="text" id="yl-q" placeholder="搜索 id 或名字 …" style="flex:1;min-width:0" autocomplete="off">
-            <div class="filters" id="yl-flt" style="flex:none">
-              <button class="flt on" data-f="all">全部</button>
-              <button class="flt" data-f="mob">有怪</button>
-              <button class="flt" data-f="empty">无怪</button>
-            </div>
-          </div>
-          <div class="list" id="yl-mlist" style="max-height:240px;flex:none"></div>
-          <div class="row" style="margin:2px 0"><span class="muted" id="yl-picked"></span></div>
           <div class="row">
             <b>相机窗口（拖/微调，每格导一张）</b>
             <button class="mini" id="yl-resamp" title="按「每图窗口」数重新自动采样一版（foothold 站位 → 相机公式 → VR 钳制），作为微调起点">🎲 自动采样</button>
@@ -3927,7 +3920,6 @@ const YL = { scope: "cur", win: [], sel: -1, vr: null, iw: 0, ih: 0, mapid: "", 
 
 function yoloScopeMaps() {
   if (YL.scope === "cur") return mapRef ? [String(mapRef.id)] : [];
-  if (YL.scope === "pick") return yoloPickMaps().ids;
   if (CLSMODE) {
     const items = CLS_MAPS || [];
     if (YL.scope === "mob") return items.filter((m) => m.mob).map((m) => String(m.id));
@@ -3937,60 +3929,21 @@ function yoloScopeMaps() {
   return MAPS.map(String);
 }
 
-/* 自选名单：id / 名字混填，按当前数据源解析成地图 id 列表。
-   现代库列表只有 id（名字没下发给前端），所以名字匹配只在怀旧服可用 */
-function yoloPickMaps() {
-  const raw = ($("#yl-pick").value || "").split(/[\s,，、;；]+/).filter(Boolean);
-  const norm = CLSMODE
-    ? (CLS_MAPS || []).map((m) => ({ id: String(m.id), name: m.name || "", street: m.street || "" }))
-    : MAPS.map((s) => ({ id: String(s), name: "", street: "" }));
-  const byId = new Map(norm.map((m) => [m.id, m]));
-  const ids = [], miss = [];
-  for (const t of raw) {
-    if (/^\d{1,9}$/.test(t)) {
-      let hit = byId.get(t) || byId.get(t.padStart(9, "0")) || byId.get(t.padStart(6, "0"));
-      if (!hit) {
-        const cands = norm.filter((m) => m.id.includes(t));
-        if (cands.length > 1) { miss.push(t + "?"); continue; }   // id 片段多义：让用户写全
-        hit = cands[0];
-      }
-      if (hit) ids.push(hit.id); else miss.push(t);
-    } else if (CLSMODE) {
-      const cands = norm.filter((m) => m.name.includes(t) || m.street.includes(t));
-      if (!cands.length) { miss.push(t); continue; }
-      cands.forEach((m) => ids.push(m.id));   // 同名地图全部收进来
-    } else miss.push(t);
-  }
-  return { ids: [...new Set(ids)], miss };
-}
-
 function yoloOpen() {
   $$("#yl-scope button").forEach((b) => b.classList.toggle("on", b.dataset.s === YL.scope));
   const items = CLSMODE ? (CLS_MAPS || []) : MAPS;
   const nmob = CLSMODE ? items.filter((m) => m.mob).length : LIFE.size;
-  if (YL.scope === "pick") {
-    $("#yl-pickrow").hidden = false;
-    const r = yoloPickMaps();
-    $("#yl-count").textContent = r.ids.length
-      ? `已选 ${r.ids.length} 张` + (r.miss.length ? ` · ⚠ 没认出 ${r.miss.length} 个（黄色问号见下）` : "")
-      : (items.length ? "填地图 id 或名字（支持模糊搜名）" : "");
-  } else {
-    $("#yl-pickrow").hidden = true;
-    $("#yl-count").textContent =
-      items.length ? `本数据源 ${items.length} 张 · 有怪 ${nmob} 张` : "";
-  }
+  $("#yl-count").textContent =
+    items.length ? `本数据源 ${items.length} 张 · 有怪 ${nmob} 张` : "";
   if (!$("#yl-prog").hidden || $("#yl-img").src) yoloPoll();
-  // 手动精调区：「当前地图」范围就显示 —— 地图可以直接在本页下面的选择器里挑，
-  // 不用切回地图页（挑中后走同一份 mapLoad，数据/缓存/叠加全复用）
+  // 顶部地图选择器恒显示（用户 2026-11-16：选图列表放上面，自选名单删掉）
+  ylMapList();
+  // 相机窗口编辑区：只在「当前地图」范围出现
   const canEdit = YL.scope === "cur";
   $("#yl-man").hidden = !canEdit;
   if (canEdit) {
-    ylMapList();
     const ready = mapRef && mapData && mapData.overlay;
     const id = ready ? String(mapRef.id) : "";
-    $("#yl-picked").textContent = !id
-      ? "还没选地图：在上面搜一下点一张"
-      : `当前：${mapData.name ? mapData.name + " · " : ""}${id}（大图首次渲染要几秒）`;
     if (id && (YL.mapid !== id || !YL.win.length) && !YL.loading) yoloResample();
     else if (id) ylRender();
   }
@@ -4026,6 +3979,8 @@ function ylMapList() {
 }
 
 async function yoloPickMap(id) {
+  YL.scope = "cur";                                   // 点了某张图 = 进入这张图的精调
+  $$("#yl-scope button").forEach((b) => b.classList.toggle("on", b.dataset.s === "cur"));
   YL.win = []; YL.mapid = ""; YL.sel = -1;          // 换图：清掉旧窗口
   $("#yl-picked").textContent = `地图 ${id} 渲染中（整图，大图要几秒）…`;
   try {
@@ -4236,14 +4191,11 @@ async function yoloStart() {
   const maps = yoloScopeMaps();
   if (!maps.length) {
     $("#yl-msg").textContent =
-      YL.scope === "cur" ? "先在「🗺 地图」页选一张地图，或把范围切到「全部有怪」"
-      : YL.scope === "pick" ? "名单是空的：填地图 id 或名字（一行一个，支持模糊搜名）"
+      YL.scope === "cur" ? "先在上面搜一张地图点进去（或把范围切到「全部有怪」）"
       : "列表还没加载好（回地图页等列表出来再回来）";
     return;
   }
-  $("#yl-msg").textContent = YL.scope === "pick"
-    ? (() => { const m = yoloPickMaps().miss; return m.length ? "⚠ 没认出：" + m.join("、") + "（其余照常导出）" : ""; })()
-    : "";
+  $("#yl-msg").textContent = "";
   try {
     const body = {
       maps, cls: CLSMODE,
@@ -4267,15 +4219,6 @@ async function yoloStart() {
 }
 
 $$("#yl-scope button").forEach((b) => b.onclick = () => { YL.scope = b.dataset.s; yoloOpen(); });
-$("#yl-pick").addEventListener("input", yoloOpen);
-$("#yl-addcur").onclick = () => {
-  if (!mapRef) { $("#yl-msg").textContent = "「🗺 地图」页还没选中地图"; return; }
-  const ta = $("#yl-pick");
-  const cur = String(mapRef.id);
-  const have = new Set(ta.value.split(/[\s,，、;；]+/).filter(Boolean));
-  if (!have.has(cur)) ta.value = (ta.value.trim() + "\n" + cur).trim();
-  yoloOpen();
-};
 $("#yl-start").onclick = yoloStart;
 $("#yl-stop").onclick = async () => {
   try {
