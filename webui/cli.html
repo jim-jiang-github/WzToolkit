@@ -821,14 +821,13 @@
             <div class="row">
               <button class="primary mini" id="yl-start" title="按当前设置批量导出 → .exports/yolo/&lt;时间戳&gt;/（YOLO 格式：images/ labels/ dataset.yaml）">▶ 开始导出</button>
               <button class="mini" id="yl-stop" hidden>■ 停止</button>
-              <span class="muted">每图窗口</span>
-              <input type="text" id="yl-per" value="8" style="min-width:56px;width:56px" title="每张地图采多少个相机窗口（相机位置按站位→相机公式→VR钳制采样，自动铺开不重复）">
+              <span class="muted">窗口密度自动：沿地面每 120px 一个站位点，每点一个 1366×768 视窗</span>
               <span class="muted">随机布局</span>
               <input type="text" id="yl-lay" value="2" style="min-width:56px;width:56px" title="每张地图重抽几次怪物/掉落/玩家的摆位（更多布局 = 更多样的遮挡关系）">
               <span class="muted">验证集 %</span>
               <input type="text" id="yl-val" value="15" style="min-width:56px;width:56px" title="按整张地图划分 train/val（不是按窗口随机切——同图的相似窗口会泄漏，验证 mAP 会虚高）">
               <label class="muted" style="display:flex;gap:4px;align-items:center" title="窗口尺寸在 1024×768 / 1366×768 / 1280×720 / 1920×1080 里随机——不同玩家客户端分辨率不一样"><input type="checkbox" id="yl-rsize"> 随机分辨率</label>
-              <label class="muted" style="display:flex;gap:4px;align-items:center" title="网格窗口铺满每张地图的完整画面（右/下贴边自动补齐，不留死角），忽略「每图窗口」和手动精调窗口；分辨率用上面选的（不随机）"><input type="checkbox" id="yl-cover"> 铺满整图</label>
+              <label class="muted" style="display:flex;gap:4px;align-items:center" title="网格窗口铺满每张地图的完整画面（右/下贴边自动补齐，不留死角），忽略手动精调窗口；分辨率用上面选的（不随机）"><input type="checkbox" id="yl-cover"> 铺满整图</label>
             </div>
             <div class="progbox" id="yl-prog" hidden>
               <div class="prog-head"><b id="yl-stage">准备中…</b><span class="muted" id="yl-pct"></span></div>
@@ -839,7 +838,7 @@
             <div class="yl-man" id="yl-man" hidden>
               <div class="row">
                 <b>相机窗口（拖/微调，每格导一张）</b>
-                <button class="mini" id="yl-resamp" title="按「每图窗口」数重新自动采样一版（foothold 站位 → 相机公式 → VR 钳制），作为微调起点">🎲 自动采样</button>
+                <button class="mini" id="yl-resamp" title="沿地面每 120px 一个站位点自动均布一版（看得见的地面/绳子 → 相机公式 → VR 钳制），作为微调起点">🎲 自动采样</button>
                 <button class="mini" id="yl-reroll" title="换一批随机布局：怪物/掉落/玩家位置全部重抽（实时画面和导出画面同款合成规则）">🎲 换一批</button>
                 <button class="mini" id="yl-addwin" title="以当前选中窗口的位置为底，在旁边加一个新窗口（或没选中时加在地图中央）">＋ 加窗口</button>
                 <button class="mini" id="yl-delwin" title="删掉选中的那个窗口">🗑 删选中</button>
@@ -4099,8 +4098,7 @@ async function yoloResample() {
   YL.loading = true;
   $("#yl-wins").textContent = "采样中…（首次要先渲染整图）";
   try {
-    const n = parseInt($("#yl-per").value, 10) || 8;
-    const d = await api(`/api/yolo/windows?id=${id}&n=${n}&cls=${CLSMODE ? 1 : 0}`);
+    const d = await api(`/api/yolo/windows?id=${id}&cls=${CLSMODE ? 1 : 0}`);
     YL.mapid = id;
     YL.win = d.views.map((v) => v.slice());
     YL.pp = d.pps || [];
@@ -4146,16 +4144,16 @@ function ylRender() {
   }
   YL.win.forEach((w, i) => {
     const bad = ylBad(w);
-    // 红点 = 人物站位（采样窗口自带）；手动加的窗口没有站位，标窗口中心
+    // 红点 = 人物站位（采样窗口自带）；手动加/拖过的窗口没有站位 —— 硬性要求
+    // 红点必须踩在看得见的地面/绳子上，没有站位就不画点（用户 2026-11-16）
     const pp = YL.pp[i];
-    const dx = pp ? pp[0] : w[0] + (w[2] >> 1);
-    const dy = pp ? pp[1] : w[1] + (w[3] >> 1);
     html += `<div class="yl-wbox${i === YL.sel ? " on" : ""}${bad ? " bad" : ""}" data-i="${i}"`
           + ` style="left:${w[0] / W * 100}%;top:${w[1] / H * 100}%;`
           + `width:${w[2] / W * 100}%;height:${w[3] / H * 100}%">`
           + `<span class="tag">#${i + 1}${bad ? " 出界" : ""} (${w[0]},${w[1]})</span>`
-          + `<i class="dot" style="left:${(dx - w[0]) / w[2] * 100}%;top:${(dy - w[1]) / w[3] * 100}%"`
-          + ` title="${pp ? "人物站位" : "相机中心"} (${dx}, ${dy})"></i></div>`;
+          + (pp ? `<i class="dot" style="left:${(pp[0] - w[0]) / w[2] * 100}%;top:${(pp[1] - w[1]) / w[3] * 100}%"`
+                + ` title="人物站位 (${pp[0]}, ${pp[1]})"></i>` : "")
+          + `</div>`;
   });
   $("#yl-winboxes").innerHTML = html;
   $$("#yl-winboxes .yl-wbox").forEach((b) => {
@@ -4164,7 +4162,7 @@ function ylRender() {
   const w = YL.win[YL.sel];
   const pp = w && YL.pp[YL.sel];
   $("#yl-wininfo").textContent =
-    w ? `选中 #${YL.sel + 1}：左上 (${w[0]}, ${w[1]}) · ${pp ? `人物站位 (${pp[0]}, ${pp[1]})` : `中心 (${w[0] + (w[2] >> 1)}, ${w[1] + (w[3] >> 1)})`} · ${w[2]}×${w[3]}` : "（没选中窗口）";
+    w ? `选中 #${YL.sel + 1}：左上 (${w[0]}, ${w[1]}) · ${pp ? `人物站位 (${pp[0]}, ${pp[1]})` : "手动窗口（无站位点）"} · ${w[2]}×${w[3]}` : "（没选中窗口）";
   ylView();
 }
 
@@ -4197,7 +4195,7 @@ function ylCompositeLoad() {
 function ylBoxDown(e) {
   e.preventDefault();
   YL.sel = +e.currentTarget.dataset.i;
-  YL.pp[YL.sel] = null;                    // 窗口挪走 = 原采样站位作废，红点退回中心
+  YL.pp[YL.sel] = null;                    // 窗口挪走 = 原采样站位作废（红点消失）
   ylRender();
   const w = YL.win[YL.sel];
   const k = YL.iw / $("#yl-mapimg").getBoundingClientRect().width;
@@ -4225,7 +4223,7 @@ $("#yl-mapimg").addEventListener("mousedown", (e) => {
   }
   w[0] = Math.max(0, Math.min(Math.round((e.clientX - rect.left) * k - w[2] / 2), YL.iw - w[2]));
   w[1] = Math.max(0, Math.min(Math.round((e.clientY - rect.top) * k - w[3] / 2), YL.ih - w[3]));
-  YL.pp[YL.sel] = null;                    // 手动摆的窗口没有采样站位
+  YL.pp[YL.sel] = null;                    // 手动摆的窗口没有采样站位（不画红点）
   YL.sel = YL.win.indexOf(w);
   ylRender();
 });
@@ -4314,7 +4312,6 @@ async function yoloStart() {
   try {
     const body = {
       maps, cls: CLSMODE,
-      per_map: parseInt($("#yl-per").value, 10) || 8,
       layouts: parseInt($("#yl-lay").value, 10) || 2,
       val: parseInt($("#yl-val").value, 10) || 15,
       random_size: $("#yl-rsize").checked,
@@ -4334,7 +4331,6 @@ async function yoloStart() {
   yoloPoll();
 }
 
-$("#yl-cover").onchange = () => { $("#yl-per").disabled = $("#yl-cover").checked; };
 $("#yl-start").onclick = yoloStart;
 $("#yl-stop").onclick = async () => {
   try {
