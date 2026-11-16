@@ -312,6 +312,14 @@
   #list .it .lvchip { font: 10.5px/1 Consolas, monospace; color: #7fb4e8;
                       background: #1c2a3a; border-radius: 4px; padding: 2px 4px;
                       margin-left: auto; flex: none; }
+  /* 显示玩家：随机外观玩家立绘（锚点定位同怪物 .mspr）+ 游戏风格头顶名字 */
+  .pwrap { position: absolute; pointer-events: none; }
+  .pwrap .pspr { width: 100%; display: block; image-rendering: pixelated; }
+  .pwrap .ptag { position: absolute; left: 50%; bottom: calc(100% - 2px);
+                 transform: translateX(-50%); white-space: nowrap;
+                 font: 11px/1.4 SimSun, "宋体", serif; color: #fff;
+                 text-shadow: -1px 0 1px #000, 1px 0 1px #000,
+                              0 -1px 1px #000, 0 1px 1px #000; }
   .md-list .it.big.on { background: #521019; }
   .md-list .it.boss.on { background: #4a2f08; }
   .md-detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
@@ -909,6 +917,7 @@ const OPTS = Object.assign({
   dots: false,  // 显示刷怪点
   mobs: true,   // 显示怪物（页面 = 纯前端叠加层；导出图按此开关合成）
   drops: true,  // 显示掉落（页面叠加层；导出窗口同样按此开关合成）——用户 2026-11-16 定默认勾
+  players: true, // 显示玩家（随机外观随机名 1~5 个，页面叠加层；导出窗口同样合成）
   fh: false,    // 显示地面
   nobg: false,  // 不显示背景（切换时原地换图，不闪黑）
   rope: true,   // 显示绳索
@@ -924,6 +933,12 @@ function saveOpts() { localStorage.setItem("wt_mapopts", JSON.stringify(OPTS)); 
 if (!localStorage.getItem("wt_mapopts_drops_def")) {
   OPTS.drops = true;
   localStorage.setItem("wt_mapopts_drops_def", "1");
+  saveOpts();
+}
+/* 一次性迁移（2026-11-16）：显示玩家新增，默认勾选（同 drops 的迁移逻辑） */
+if (!localStorage.getItem("wt_mapopts_players_def")) {
+  OPTS.players = true;
+  localStorage.setItem("wt_mapopts_players_def", "1");
   saveOpts();
 }
 let mapRef = null;      // 当前地图 {id, preview}，滑杆改动时重新加载用
@@ -3124,16 +3139,28 @@ async function dropsTable() {
   return DROPTBL;
 }
 
+/* 随机玩家批（显示玩家叠加层用）：后端 nxchar 渲染 8 个随机外观的站立帧，
+   本地缓存一份，每次重画只随机站位/朝向/个数（同怪物的「每次渲染重新随机」）；
+   拉失败（没转 Character.nx）静默为空 */
+let PLR = null;
+async function playersData() {
+  if (PLR) return PLR;
+  try { PLR = (await api("/api/char/players")).players || []; }
+  catch (e) { PLR = []; }
+  return PLR;
+}
+
 async function lifeOverlayHTML() {
   // 详情图和放大查看器共用的叠加层（圆点 + 随机怪物立绘 + 掉落物），百分比定位，任意缩放都对准
   if (!mapData || !mapData.life_points) return "";
   const on = $("#life-toggle") && $("#life-toggle").checked;
   const sprites = $("#mob-toggle") && $("#mob-toggle").checked;
   const dropOn = $("#drop-toggle") && $("#drop-toggle").checked;
+  const plrOn = $("#player-toggle") && $("#player-toggle").checked;
   const ropeOn = $("#rope-rope") && $("#rope-rope").checked;
   const ladOn = $("#rope-lad") && $("#rope-lad").checked;
   const fhOn = $("#fh-toggle") && $("#fh-toggle").checked;
-  if (!on && !sprites && !dropOn && !ropeOn && !ladOn && !fhOn) return "";
+  if (!on && !sprites && !dropOn && !plrOn && !ropeOn && !ladOn && !fhOn) return "";
   const ov = mapData.overlay;
   const kinds = (mapData.life_kinds || []).filter((k) => k && k.id);
   // 区域裁剪后 overlay 只覆盖窗口：范围外的点不画
@@ -3251,6 +3278,50 @@ async function lifeOverlayHTML() {
         }
         return out;
       }).join("");
+    }
+  }
+  if (plrOn && (mapData.foothold_segs || []).length && !mapData.players) {
+    // 显示玩家：随机外观玩家站到地面上（渲染自 Character.nx，名字+肤色/脸型/
+    // 发型/装备全随机）。与导出合成（_composite_players）同款规则——随机
+    // foothold 段内随机 x 落地、50% 随机镜像朝向；每次重画都重新随机。
+    const players = await playersData();
+    if (players.length) {
+      const segs = mapData.foothold_segs;
+      const wx1 = ov.minx + ov.w / ov.s;
+      const n = 1 + Math.floor(Math.random() * 5);        // 1~5 个
+      for (let i = 0; i < n; i++) {
+        const p = players[Math.floor(Math.random() * players.length)];
+        const fr = p.frame;
+        // 优先挑落在可视范围内的段（20 次尝试，全图预览时必中）
+        let seg = null, x = 0;
+        for (let t = 0; t < 20; t++) {
+          const g = segs[Math.floor(Math.random() * segs.length)];
+          const lo = Math.min(g[0], g[2]), hi = Math.max(g[0], g[2]);
+          if (hi <= lo) continue;
+          const gx = lo + Math.random() * (hi - lo);
+          if (gx < ov.minx - 40 || gx > wx1 + 40) continue;
+          seg = g; x = gx; break;
+        }
+        if (!seg) {
+          const g = segs[Math.floor(Math.random() * segs.length)];
+          const lo = Math.min(g[0], g[2]), hi = Math.max(g[0], g[2]);
+          x = lo + Math.random() * (hi - lo);
+          seg = g;
+        }
+        const gy = seg[1] + (seg[3] - seg[1]) * (x - seg[0]) / (seg[2] - seg[0]);
+        const flip = Math.random() < 0.5;
+        // 翻转后锚点 = 帧宽 - 原锚点（与怪物叠加层同款）
+        const ox = flip ? fr.w - fr.ox : fr.ox;
+        const wPct = fr.w * ov.s / ov.w * 100;
+        const oxPct = ox * ov.s / ov.w * 100;
+        const oyPct = fr.oy * ov.s / ov.h * 100;
+        const pos = pct({ x, y: gy });
+        const specTip = Object.entries(p.spec || {}).map(([k, v]) => k + " " + v).join(" · ");
+        html += `<span class="pwrap" style="left:${pos.l - oxPct}%;top:${pos.t - oyPct}%;width:${wPct}%">` +
+          `<img class="pspr" src="${fr.url}" style="${flip ? "transform:scaleX(-1);" : ""}"` +
+          ` title="${esc(p.name)}${specTip ? "（" + esc(specTip) + "）" : ""}">` +
+          `<span class="ptag">${esc(p.name)}</span></span>`;
+      }
     }
   }
   if (dropOn) {
@@ -3500,6 +3571,7 @@ async function mapLoad(id, preview, cls) {
         ${d.life_count ? `        <label title="红点=每只怪的刷新位置（大BOSS品红、BOSS橙）"><input type="checkbox" id="life-toggle" ${OPTS.dots ? "checked" : ""} /> 显示刷怪点（${d.life_count}）</label>
         <label title="把怪物按巡逻区间随机摆进画面（纯页面叠加层，与导出合成同款规则；开关即时生效不重渲染）。导出图是否带怪物同样由这个开关决定"><input type="checkbox" id="mob-toggle" ${OPTS.mobs ? "checked" : ""} /> 显示怪物</label>
         <label title="在地上随机撒一层本图怪会掉的东西：金币（按金额选 4 档贴图）+ 掉落表里的道具（chance 加权）；掉落点跟刷怪巡逻区间、foothold 贴地。纯页面叠加层，开关即时生效；导出窗口是否带掉落同样由这个开关决定（掉落表来自服务端数据，道具图标取自掉落图鉴库）"><input type="checkbox" id="drop-toggle" ${OPTS.drops ? "checked" : ""} /> 显示掉落</label>` : ""}
+        <label title="把 1~5 个随机玩家站到地面上：随机名字/肤色/脸型/发型/装备/装饰（渲染自 Character.nx 真实素材），随机 foothold 落地、50% 随机朝向，每次重画都换一批站位。纯页面叠加层；导出窗口是否带玩家同样由这个开关决定"><input type="checkbox" id="player-toggle" ${OPTS.players ? "checked" : ""} /> 显示玩家</label>
         ${d.footholds ? `<label title="青色线=每一段可站立的地面（foothold，含斜坡）；看人物能走哪、哪里会掉下去、怎么跳到下个平台"><input type="checkbox" id="fh-toggle" ${OPTS.fh ? "checked" : ""} /> 显示地面（${d.footholds}）</label>` : ""}
         <label title="不画背景（天幕/云/山等 back 层全跳过），只留地形/建筑/物件，PNG 背景透明 —— 方便看清地图结构或叠加到别的底图上；切换时原地换图，画面不闪黑"><input type="checkbox" id="nobg-toggle" ${OPTS.nobg ? "checked" : ""} /> 不显示背景</label>
         ${nRope ? `<label title="半透明橙框=绳子攀爬区；数据来自 map.json 的 ladderRope（l=0）"><input type="checkbox" id="rope-rope" ${OPTS.rope ? "checked" : ""} /> 显示绳索（${nRope}）</label>` : ""}
@@ -3591,6 +3663,12 @@ async function mapLoad(id, preview, cls) {
       // 导出窗口时由服务端合成进图（preview_drops）
       OPTS.drops = dtg.checked; saveOpts(); renderLifeDots();
     };
+    const ptg = $("#player-toggle");
+    if (ptg) ptg.onchange = () => {
+      // 显示玩家同理：纯前端叠加层（随机外观玩家，渲染自 Character.nx），
+      // 导出窗口时由服务端合成进图（preview_players）
+      OPTS.players = ptg.checked; saveOpts(); renderLifeDots();
+    };
     const rr = $("#rope-rope");
     if (rr) rr.onchange = () => { OPTS.rope = rr.checked; saveOpts(); renderLifeDots(); };
     const rl = $("#rope-lad");
@@ -3632,7 +3710,8 @@ async function exportWindow() {
     const d = await api("/api/map/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: mapRef.id, preview: false, mobs: OPTS.mobs,
-                             drops: OPTS.drops, density: OPTS.density,
+                             drops: OPTS.drops, players: OPTS.players,
+                             density: OPTS.density,
                              no_bg: OPTS.nobg, view,
                              cls: !!mapRef.cls }),
     });

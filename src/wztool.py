@@ -4032,6 +4032,161 @@ def _composite_drops(outdir: Path, mj: dict, base_png: Path, seed: str,
     return out, places
 
 
+# ── 随机玩家（页面「显示玩家」叠加层 + 导出合成）────────────────────────────
+# 外观/名字一套生成器，两种展示共用：页面叠加层用 /api/char/players 的
+# 随机批（前端随机摆放），导出合成用 seed 稳定的同款规则。
+
+PLAYER_NAME_PRE = ["勇敢的", "可爱的", "神秘的", "孤独的", "暴走的", "摸鱼的",
+                   "爆肝的", "无敌的", "快乐的", "温柔的", "飞快的", "认真的"]
+PLAYER_NAME_SUF = ["蘑菇仔", "小射手", "战士", "小法师", "飞侠", "海盗",
+                   "冒险家", "枫叶仔", "小萌新", "弓箭手"]
+# 肤色加权：Light 最常见，Tan/Dark 次之，特殊肤色稀有
+PLAYER_SKINS = [(0, 6), (1, 3), (2, 2), (3, 1), (9, 1), (10, 1)]
+# 各装备槽的穿戴概率（武器大件/帽子/披风等随机有或没有，光板也真实）
+PLAYER_LOOK_P = {"cap": 0.35, "coat": 0.75, "pants": 0.65, "longcoat": 0.12,
+                 "shoes": 0.9, "glove": 0.3, "cape": 0.25, "shield": 0.18,
+                 "weapon": 0.75}
+_PLAYER_POOL_LOCK = threading.Lock()
+_PLAYER_POOL: dict[str, list] = {}
+
+
+def _player_pool(cat: str) -> list:
+    """部位素材全表（带缓存；没转 Character.nx 等异常时给空表）。"""
+    with _PLAYER_POOL_LOCK:
+        if cat not in _PLAYER_POOL:
+            try:
+                _PLAYER_POOL[cat] = c_char_parts(cat)["items"]
+            except Exception:                  # noqa: BLE001
+                _PLAYER_POOL[cat] = []
+        return _PLAYER_POOL[cat]
+
+
+def _rand_player_look(rng: random.Random) -> dict:
+    """随机外观 + 随机名字。返回 {spec, name}；spec 键 = _char_spec 认的那套。"""
+    tot = sum(w for _, w in PLAYER_SKINS)
+    r = rng.random() * tot
+    skin = PLAYER_SKINS[-1][0]
+    for s, w in PLAYER_SKINS:
+        r -= w
+        if r <= 0:
+            skin = s
+            break
+    spec = {"skin": skin}
+    for cat in CHAR_SLOTS:
+        pool = _player_pool(cat)
+        if cat in ("hair", "face"):
+            spec[cat] = rng.choice(pool)["id"] if pool else ""
+        else:
+            spec[cat] = rng.choice(pool)["id"] if pool and rng.random() < PLAYER_LOOK_P[cat] else ""
+    if spec["longcoat"]:                       # 套服盖住上衣+裤裙（_char_spec 同款规则）
+        spec["coat"] = ""
+        spec["pants"] = ""
+    return {"spec": spec, "name": rng.choice(PLAYER_NAME_PRE) + rng.choice(PLAYER_NAME_SUF)}
+
+
+def _player_stand(spec: dict, rng: random.Random | None = None) -> dict | None:
+    """渲染一套选装的 stand1 帧，随机挑一帧返回 {path, w, h, ox, oy}。
+
+    c_char_render 结果按选装哈希落 .cache/char/<key>/（多玩家/多张图复用）。
+    """
+    res = c_char_render({**spec, "actions": ["stand1"]})
+    frs = [f for f in res.get("frames", []) if f.get("action") == "stand1"]
+    if not frs:
+        return None
+    fr = rng.choice(frs) if rng else frs[0]
+    return {"path": Path(res["dir"]) / f"f_{fr['action']}_{fr['frame']}.png",
+            "url": fr["url"], "w": fr["w"], "h": fr["h"], "ox": fr["ox"], "oy": fr["oy"]}
+
+
+def c_char_players() -> dict:
+    """一批随机玩家（页面「显示玩家」叠加层用）：8 个外观 + 名字 + 站立帧。"""
+    _need_ws()
+    rng = random.Random(random.randrange(1 << 30))
+    out = []
+    for _ in range(8):
+        look = _rand_player_look(rng)
+        try:
+            fr = _player_stand(look["spec"])
+        except CliError:
+            fr = None
+        if fr is None:
+            continue
+        out.append({"name": look["name"],
+                    "spec": {k: v for k, v in look["spec"].items() if v},
+                    # path 是本地磁盘路径（合成内部用），不发给前端
+                    "frame": {k: v for k, v in fr.items() if k != "path"}})
+    if not out:
+        raise CliError("随机玩家生成失败：先转换 Character.nx（人物素材页签能用就行）", 1)
+    return {"players": out}
+
+
+def _composite_players(outdir: Path, mj: dict, base_png: Path, seed: str,
+                       no_bg: bool = False):
+    """把 1~5 个随机玩家贴到地面上，产出 preview_players.png。
+
+    外观/名字/站位全部由 seed 决定（同 seed 同布局，与 _composite_mobs 同款）：
+    随机外观（肤色/发型/脸型/装备穿戴概率）+ 随机名字，随机 foothold 段内随机
+    x 落地，50% 随机镜像；头顶画游戏风格名字（白字黑描边，12px 宋体）。
+    返回 (png路径, places)，places 带名字与像素框。
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    fhs = [(float(f["x1"]), float(f["y1"]), float(f["x2"]), float(f["y2"]))
+           for f in mj.get("foothold", [])]
+    if not fhs:
+        return None, []
+    R = _render_mod()
+    bx, by, bw, bh = R.map_bounds(mj)
+    minx, miny = bx - 40, by - 40
+    im = Image.open(base_png).convert("RGBA")
+    rng = random.Random(f"{seed}:players")
+    try:                                       # 客户端字体是 12px 宋体位图字
+        f = ImageFont.truetype("C:/Windows/Fonts/simsun.ttc", 12)
+    except Exception:                          # noqa: BLE001
+        f = None
+    places: list[dict] = []
+    tags: list[tuple[int, int, str]] = []
+    for _ in range(rng.randint(1, 5)):
+        look = _rand_player_look(rng)
+        try:
+            fr = _player_stand(look["spec"], rng)
+        except Exception:                      # noqa: BLE001
+            continue
+        if fr is None:
+            continue
+        img = Image.open(fr["path"]).convert("RGBA")
+        flip = rng.random() < 0.5
+        if flip:                               # 镜像后锚点 = 帧宽 - 原锚点
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+            ox = img.width - fr["ox"]
+        else:
+            ox = fr["ox"]
+        x1, y1, x2, y2 = rng.choice(fhs)
+        lo, hi = (x1, x2) if x1 <= x2 else (x2, x1)
+        if hi <= lo:
+            continue
+        x = rng.uniform(lo, hi)
+        gy = y1 + (y2 - y1) * (x - x1) / (x2 - x1)
+        px = round(x - minx - ox)
+        py = round(gy - miny - fr["oy"])
+        if px < -img.width or py < -img.height \
+                or px > im.width + img.width or py > im.height + img.height:
+            continue
+        im.alpha_composite(img, (px, py))
+        tags.append((px + img.width // 2, py - 8, look["name"]))
+        places.append({"name": look["name"], "x": px, "y": py,
+                       "w": img.width, "h": img.height})
+    if not places:
+        return None, []
+    if f is not None and tags:
+        d = ImageDraw.Draw(im)
+        for tx, ty, nm in tags:
+            d.text((tx, ty), nm, font=f, fill=(255, 255, 255, 255),
+                   stroke_width=2, stroke_fill=(0, 0, 0, 255), anchor="ms")
+    out = outdir / ("preview_players_nobg.png" if no_bg else "preview_players.png")
+    (im if no_bg else im.convert("RGB")).save(out)
+    return out, places
+
+
 def _map_cache_fresh(outdir: Path) -> bool:
     """导出缓存是否还能用：map.json 可解析且带 miniMap（旧版 nxmap 不导小地图），
     且数据源戳一致（换了数据源——比如从 v0.83 换国服——旧缓存全部视为过期）。"""
@@ -4068,7 +4223,8 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
                  _visited: set | None = None,
                  no_bg: bool = False,
                  cls: bool = False,
-                 drops: bool = False) -> dict:
+                 drops: bool = False,
+                 players: bool = False) -> dict:
     """导出一张地图：map.json（life/foothold/ladderRope）+ 全部贴图 + 渲染预览图。
 
     cls=True 走怀旧服 WZJS 大图库（.cache\\wzjs-map\\<id>\\，导入时已建好），
@@ -4090,7 +4246,7 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     if cls:
         return _cls_map_export(mid, preview, mobs, density, view, seed,
                                _visited if _visited is not None else set(),
-                               no_bg, drops)
+                               no_bg, drops, players)
     if not re.fullmatch(r"\d{9}", mid):
         raise CliError("地图 id 应该是 9 位数字", 2)
     visited = _visited if _visited is not None else set()
@@ -4115,7 +4271,7 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
         d = c_map_export(link, preview, mobs, density, view, seed,
-                         visited, no_bg=no_bg, drops=drops)
+                         visited, no_bg=no_bg, drops=drops, players=players)
         d["link"] = {"from": mid, "to": link}
         return d
 
@@ -4126,7 +4282,8 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
 
 def _cls_map_export(mid: str, preview: bool, mobs: bool, density: int,
                     view: tuple | None, seed: str | None,
-                    visited: set, no_bg: bool, drops: bool = False) -> dict:
+                    visited: set, no_bg: bool, drops: bool = False,
+                    players: bool = False) -> dict:
     """怀旧服 WZJS 大图导出：map_dir 已在导入时建好（.cache\\wzjs-map\\<id>），
     这里只负责读 map.json + 复用渲染管线。id 是不带前导零的页名（如 101040000
     也可能像 20000 这样短），链接图语义与国服相同（顺链渲染目标图）。"""
@@ -4146,12 +4303,12 @@ def _cls_map_export(mid: str, preview: bool, mobs: bool, density: int,
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{1,9}", link):
         d = _cls_map_export(link, preview, mobs, density, view, seed,
-                            visited, no_bg, drops)
+                            visited, no_bg, drops, players)
         d["link"] = {"from": mid, "to": link}
         return d
     return _map_export_inner(ws, mid, preview, mobs, density, view, visited,
                              seed=seed, outdir=outdir, mj=mj, no_bg=no_bg,
-                             drops=drops)
+                             drops=drops, players=players)
 
 
 # ── 全库出图（map-all）──────────────────────────────────────────────────────
@@ -4433,7 +4590,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                       seed: str | None = None,
                       outdir: Path | None = None, mj: dict | None = None,
                       no_bg: bool = False,
-                      drops: bool = False) -> dict:
+                      drops: bool = False,
+                      players: bool = False) -> dict:
     root = CACHE if preview else EXPORTS
     if outdir is None:
         outdir = (root / "map" / mid) if preview else (EXPORTS / "maps" / mid)
@@ -4581,6 +4739,22 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
             result["preview_url"] = _res_url(drop_png)
             result["drops"] = True
             result["drop_places"] = drop_places
+    # 随机玩家合成：1~5 个随机外观的玩家站到地面上（页面叠加层同规则，
+    # 名字一起画进图）。底图规则与 drops 一致——窗口导出必须落在 nobg 底图上。
+    if players:
+        if not preview and not no_bg and not result.get("mobs"):
+            pl_base = outdir / "preview_nobg.png"
+            _render_preview(outdir, pl_base, no_bg=True)
+        else:
+            pl_base = Path(result.get("preview_path") or png)
+        pl_png, pl_places = _composite_players(
+            outdir, mj, pl_base, use_seed,
+            no_bg=no_bg or "nobg" in pl_base.stem)
+        if pl_png is not None:
+            result["preview_path"] = str(pl_png)
+            result["preview_url"] = _res_url(pl_png)
+            result["players"] = True
+            result["player_places"] = pl_places
     # 导出 = 客户端那个固定 1366×768 的画面窗口（预览模式输出整张 1:1 地图，供页面叠窗口用）
     if not preview:
         from PIL import Image
@@ -5013,6 +5187,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/char/parts":
             qs = urllib.parse.parse_qs(u.query)
             self._api(c_char_parts, (qs.get("cat") or ["hair"])[0])
+        elif path == "/api/char/players":
+            self._api(c_char_players)
         elif path.startswith("/api/char/icon/"):
             rest = path[len("/api/char/icon/"):]
             cat, _, iid = rest.partition("/")
@@ -5108,7 +5284,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       str(b["seed"]) if b.get("seed") else None,
                       no_bg=bool(b.get("no_bg")),
                       cls=bool(b.get("cls")),
-                      drops=bool(b.get("drops")))
+                      drops=bool(b.get("drops")),
+                      players=bool(b.get("players")))
         elif path == "/api/map/imgsearch":
             img = b.get("image")
             if not img:
@@ -5118,7 +5295,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/export/clear-cache":
             self._api(c_clear_cache)
         elif path in ("/api/state", "/api/job", "/api/mobs", "/api/maps",
-                      "/api/char/parts", "/api/skill/jobs", "/api/skill/list",
+                      "/api/char/parts", "/api/char/players",
+                      "/api/skill/jobs", "/api/skill/list",
                       "/api/skill/frames", "/api/dmg/sets") \
                 or path.startswith("/api/mob/icon/") \
                 or (path.startswith("/api/mob/") and path.endswith("/maps")):
@@ -5536,7 +5714,8 @@ def cmd_map_export(a) -> int:
     d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density,
                      view=view, seed=getattr(a, "seed", None),
                      no_bg=bool(getattr(a, "no_bg", False)),
-                     drops=bool(getattr(a, "drops", False)))
+                     drops=bool(getattr(a, "drops", False)),
+                     players=bool(getattr(a, "players", False)))
     if a.json:
         _out(d, True)
     else:
@@ -5693,6 +5872,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--drops", action="store_true",
                    help="再撒一层掉落物（preview_drops.png）：只掉本图怪的掉落表里的东西、"
                         "掉落点跟刷怪点走；金币 4 档 + chance 加权道具（掉落表来自服务端）")
+    p.add_argument("--players", action="store_true",
+                   help="再合入 1~5 个随机玩家（preview_players.png）：随机肤色/发型/脸型/装备"
+                        "+随机名字，沿 foothold 贴地、50% 随机朝向；名字画进图（--seed 可复现）")
     p.add_argument("--seed", metavar="S", help="配合 --mobs：固定随机种子（同 seed 同布局；缺省每次随机）")
     p.add_argument("--density", type=int, default=1, metavar="N",
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
