@@ -3971,6 +3971,41 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
     meso_tiers = [0, 1, 2, 3]
     icon_cache: dict[int, Image.Image] = {}
     places: list[dict] = []
+    taken: list[tuple[float, float, float]] = []   # (x0, x1, gy) 已占的地面区间（世界坐标）
+
+    def _free_x(x: float, base_y: float, gy0: float, w: float,
+                lo: float, hi: float) -> float:
+        """同排（地面 y 相差 <24px）掉落不重叠：碰撞判定取**候选 x 处的实际地面**
+        （堆锚点在悬崖边时，挪几步就可能掉到下层平台，拿锚点行判会漏）。被占就
+        跳到占位区间外侧；**方向粘滞**——首次撞占位时按就近一侧定方向，之后一直
+        往同侧推进（否则跳过 A 撞上紧挨的 B 后又会按 B 中心判向弹回来，来回震荡）；
+        出巡逻区间换向一次，再出界就原样放下。"""
+        half = w / 2
+        x = min(max(x, lo + half), hi - half)
+
+        def _hit(v: float, gy: float):
+            return next((t for t in taken
+                         if abs(t[2] - gy) < 24
+                         and v - half < t[1] + 4 and t[0] - 4 < v + half), None)
+
+        gy = _ground(x, base_y) or gy0
+        h0 = _hit(x, gy)
+        if h0 is None:
+            return x
+        d = 1 if x >= (h0[0] + h0[1]) / 2 else -1      # 就近一侧
+        for _ in range(len(taken) + 2):
+            cand = h0[1] + half + 8 if d == 1 else h0[0] - half - 8
+            if not (lo + half <= cand <= hi - half):
+                d = -d                                  # 出界换向
+                cand = h0[1] + half + 8 if d == 1 else h0[0] - half - 8
+                if not (lo + half <= cand <= hi - half):
+                    return x                            # 两侧都出界：原地放下
+            x = cand
+            gy = _ground(x, base_y) or gy0
+            h0 = _hit(x, gy)
+            if h0 is None:
+                return x
+        return x
 
     def _icon(itemid: int) -> Image.Image | None:
         if itemid not in icon_cache:
@@ -3982,6 +4017,7 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
         px = round(x - minx - img.width / 2)
         py = round(gy - miny - img.height)
         im.alpha_composite(img, (px, py))
+        taken.append((x - img.width / 2, x + img.width / 2, gy))
         places.append({"item": itemid, "x": px, "y": py,
                        "w": img.width, "h": img.height})
 
@@ -4013,8 +4049,10 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
             p = CLS_ICONS / f"meso_{tier}_{fr}.png"
             if p.is_file():
                 coin = Image.open(p).convert("RGBA")
-                _place(coin, cx + rng.uniform(-8, 8), gy0, -tier - 1)
-        # 道具 1~3 件（chance 加权）
+                x = _free_x(cx + rng.uniform(-14, 14), base_y, gy0, coin.width, lo, hi)
+                gy = _ground(x, base_y) or gy0
+                _place(coin, x, gy, -tier - 1)
+        # 道具 1~3 件（chance 加权），同排已占就自动挪开
         tot = sum(e["c"] for e in items) or 1
         for _ in range(rng.randint(1, 3)):
             r = rng.random() * tot
@@ -4027,7 +4065,7 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
             ic = _icon(e["i"])
             if ic is None:
                 continue
-            x = cx + rng.uniform(-30, 30)
+            x = _free_x(cx + rng.uniform(-36, 36), base_y, gy0, ic.width, lo, hi)
             gy = _ground(x, base_y)
             if gy is None:
                 gy = gy0
