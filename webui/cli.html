@@ -251,6 +251,8 @@
           background: #0b0f14; }
   /* 怪物素材查看器：左列表 + 右帧播放/逐帧表 */
   #mobdex[hidden] { display: none; }
+  /* .pane 的 display:flex 会盖掉 [hidden]，每个 pane 面板都要有自己的隐藏规则 */
+  #dropdex[hidden] { display: none; }
   #skdex[hidden] { display: none; }
   #dmgdex[hidden] { display: none; }
   #battle[hidden] { display: none; }
