@@ -2227,8 +2227,8 @@ def c_cls_drops() -> dict:
                                or (names.get(f"{iid:08d}") or {}).get("name", "")),
                          "c": e.get("c", 0),
                          "w": _icon_size(f"{iid:08d}")[0]})
-        if rows:
-            out[str(mob)] = rows
+        out[str(mob)] = rows     # 掉落表里的怪全下发：没带图标道具的
+                                # 也要能单独掉金币（前端按 meso_q/等级画）
     meso = {}
     for t in range(4):
         p = CLS_ICONS / f"meso_{t}_0.png"
@@ -4009,8 +4009,9 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
     - 掉落点跟着对应怪的巡逻区间（rx0~rx1）走——怪在哪刷，东西掉在哪，
       foothold 落地不悬空；
     - 每个刷怪点 55% 概率有一堆（挂机一段时间后的地面状态），每堆 =
-      0~1 个金币（80%，金额取掉落表 i=0 条目的 q 区间真源，没条目的怪不掉钱）
-      + 1~3 件道具（按 chance 加权抽，图标缺的跳过）；
+      0~1 个金币（80%，金额优先取掉落表 i=0 条目的 q 区间真源，
+      没条目的怪按等级估算——低级图只出铜板）+ 1~3 件道具
+      （按 chance 加权抽，图标缺的跳过）；
       金币档位按客户端 MapDrops 规则（>49 金 / >99 捆 / >999 袋）选贴图。
     返回 (out_png, places)；places 是每件掉落的像素框（YOLO 标注直接用）。
     """
@@ -4104,8 +4105,6 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
             continue
         items = [e for e in table
                  if e["i"] and (CLS_ICONS / f"{e['i']:08d}.png").is_file()]
-        if not items:
-            continue
         bx0 = float(l.get("x", 0))
         # y 取出生参考、fh 指向的地面 y（cy 键可能存在但值 None，判空同 life_points）
         base_y = (float(l["cy"]) if l.get("fh") and l.get("cy") is not None
@@ -4117,11 +4116,17 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
             lo, hi = bx0 - 120, bx0 + 120
         cx = rng.uniform(lo, hi)
         gy0 = _ground(cx, base_y) or base_y
-        # 金币：**掉落表里带金币条目（i=0，q=[min,max] 金额区间）的怪才掉**，
-        # 金额用服务端真源——蜗牛这类低级怪 q 顶多几十，绝不会再摇出钱袋子
+        # 金币（80%）：金额**优先用掉落表金币条目（i=0，q=[min,max] 服务端真源）**；
+        # 没条目的怪按等级估算（服务端掉落表只给 513/949 只怪记了金币区间，
+        # 经典怪普遍没记——真机里它们也掉几个铜板）。等级估算封顶低级图
+        # 只出铜板，绝不会再像旧随机逻辑摇出钱袋子。
         mq = meso_q.get(mob)
-        if mq and rng.random() < 0.8 and meso_tiers:
-            amount = rng.randint(max(1, int(mq[0])), int(mq[1]))
+        if rng.random() < 0.8 and meso_tiers:
+            if mq:
+                amount = rng.randint(max(1, int(mq[0])), int(mq[1]))
+            else:
+                lv = (_mob_stat_table().get(mob) or [1])[0] or 1
+                amount = max(1, round(lv * rng.uniform(2.0, 6.0)))
             tier = 3 if amount > 999 else 2 if amount > 99 else 1 if amount > 49 else 0
             fr = rng.randrange(4)
             p = CLS_ICONS / f"meso_{tier}_{fr}.png"
@@ -4130,6 +4135,8 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
                 x = _free_x(cx + rng.uniform(-14, 14), base_y, gy0, coin.width, lo, hi)
                 gy = _ground(x, base_y) or gy0
                 _place(coin, x, gy, -tier - 1)
+        if not items:
+            continue
         # 道具 1~3 件（chance 加权），同排已占就自动挪开
         tot = sum(e["c"] for e in items) or 1
         for _ in range(rng.randint(1, 3)):

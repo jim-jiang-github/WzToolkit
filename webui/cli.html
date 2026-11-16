@@ -3527,27 +3527,30 @@ async function lifeOverlayHTML() {
       const iconUrl = (i) => `/api/cls/icon/${i}`;
       const wPct = (w) => w * ov.s / ov.w * 100;
       html += pts.map((p) => {
+        if (!tbl.drops[p.id]) return "";      // 掉落表外的怪（数据没有就别掉）
         const items = tbl.drops[p.id];
-        if (!items || !items.length || Math.random() > 0.55) return "";
+        if (Math.random() > 0.55) return "";
         const [lo, hi] = rxOf(p);
         const cx = lo + Math.random() * (hi - lo);
         let gy = groundAt(cx, p.y);
         if (gy === null) gy = p.y;
         let out = "";
-        // 金币：金额用掉落表真源（q 区间），档位按客户端阈值
+        // 金币：金额优先用掉落表真源（meso_q）；没条目的怪按等级估算
+        // （服务端掉落表只给部分怪记了金币区间，真机里普通怪也掉几个铜板）
         if (Math.random() < 0.8) {
           const q = mesoQ[String(p.id)];
-          if (q) {
-            const amount = q[0] + Math.floor(Math.random() * (q[1] - q[0] + 1));
-            const tier = amount > 999 ? 3 : amount > 99 ? 2 : amount > 49 ? 1 : 0;
-            const sz = meso[tier];
-            if (sz) {
-              const pos = pct({ x: cx + (Math.random() * 16 - 8), y: gy });
-              out += `<img class="dspr" src="${iconUrl(`meso_${tier}_0`)}" style="left:${pos.l - wPct(sz[0] / 2)}%;top:${pos.t}%;width:${wPct(sz[0])}%" title="${mesoName[tier]} ${amount} 金">`;
-            }
+          let amount;
+          if (q) amount = q[0] + Math.floor(Math.random() * (q[1] - q[0] + 1));
+          else amount = Math.max(1, Math.round((p.lv || 1) * (2 + Math.random() * 4)));
+          const tier = amount > 999 ? 3 : amount > 99 ? 2 : amount > 49 ? 1 : 0;
+          const sz = meso[tier];
+          if (sz) {
+            const pos = pct({ x: cx + (Math.random() * 16 - 8), y: gy });
+            out += `<img class="dspr" src="${iconUrl(`meso_${tier}_0`)}" style="left:${pos.l - wPct(sz[0] / 2)}%;top:${pos.t}%;width:${wPct(sz[0])}%" title="${mesoName[tier]} ${amount} 金">`;
           }
         }
         // 道具 1~3 件（chance 加权；全 0 时均匀抽），按图标原生宽画
+        if (items.length) {
         const tot = items.reduce((s, e) => s + (e.c || 0), 0);
         for (let n = 0; n < 1 + Math.floor(Math.random() * 3); n++) {
           let e;
@@ -3562,6 +3565,7 @@ async function lifeOverlayHTML() {
           const pos = pct({ x, y: gy2 });
           const w = e.w || 26;
           out += `<img class="dspr" src="${iconUrl(e.i)}" style="left:${pos.l - wPct(w / 2)}%;top:${pos.t}%;width:${wPct(w)}%" title="${e.n || e.i}${p.name ? "（" + p.name + " 掉落）" : ""}">`;
+        }
         }
         return out;
       }).join("");
