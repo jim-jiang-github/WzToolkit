@@ -1834,11 +1834,19 @@ _icons_lock = threading.Lock()
 
 
 def _drops() -> dict:
-    """vendor/drops.json：mobid → [{i, q:[min,max], c:chance}]。"""
+    """vendor/drops.json：mobid(int) → [{i, q:[min,max], c:chance}]。
+
+    JSON 对象键只能是字符串，装载时统一转回 int（查表方都拿 int 来）。
+    """
     if not _drops_cache:
         try:
-            _drops_cache.update(json.loads(
-                (VENDOR / "drops.json").read_text(encoding="utf-8")))
+            raw = json.loads(
+                (VENDOR / "drops.json").read_text(encoding="utf-8"))
+            for k, v in raw.items():
+                try:
+                    _drops_cache[int(k)] = v
+                except (TypeError, ValueError):
+                    continue
         except (OSError, ValueError):
             pass
     return _drops_cache
@@ -1942,6 +1950,29 @@ def _cls_icons_build(log=None) -> None:
                 miss += 1
             _iconsjob["done"] += 1
         idx = {"stamp": _cls_icons_stamp(), "icons": icons}
+        # ---- 金币掉落贴图（Item/Special/0900/0900000X/info/iconRaw/N，4 帧旋转动画）----
+        # 客户端 MapDrops.cpp：>49 金币 / >99 捆 / >999 袋，掉落合成按金额选档。
+        # 帧键是 …/iconRaw/N（不以 info/icon 结尾），上面主循环扫不到，单独提。
+        meso_ok = []
+        for tier in range(4):
+            for fr in range(4):
+                k = f"Item/Special/0900/0900000{tier}/info/iconRaw/{fr}"
+                if k not in reg:
+                    continue
+                p = CLS_ICONS / f"meso_{tier}_{fr}.png"
+                try:
+                    if not p.is_file():
+                        im = tex.frame(reg[k])
+                        if im is not None:
+                            p.parent.mkdir(parents=True, exist_ok=True)
+                            im.save(p)
+                    if p.is_file():
+                        meso_ok.append(tier)
+                        break              # 每档取到一帧就够（合成时随机档位）
+                except Exception:           # noqa: BLE001
+                    pass
+        if meso_ok:
+            idx["meso_tiers"] = sorted(set(meso_ok))
         tmp = CLS_ICONS / "index.tmp"
         tmp.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, CLS_ICONS / "index.json")
@@ -3717,6 +3748,117 @@ def _composite_mobs(ws: Path, outdir: Path, mj: dict, base_png: Path, seed: str,
     return out, places
 
 
+def _composite_drops(outdir: Path, mj: dict, base_png: Path, seed: str,
+                     no_bg: bool = False):
+    """在合成图（通常已带怪）上再撒一层**关联掉落物**。
+
+    规则（挂机训练数据的真实性要求）：
+    - 只掉**本图 life 里有的怪**能掉的东西（vendor/drops.json，服务端掉落表），
+      绝不出现这张图不可能掉的道具；
+    - 掉落点跟着对应怪的巡逻区间（rx0~rx1）走——怪在哪刷，东西掉在哪，
+      foothold 落地不悬空；
+    - 每个刷怪点 55% 概率有一堆（挂机一段时间后的地面状态），每堆 =
+      0~1 个金币（80%）+ 1~3 件道具（按 chance 加权抽，图标缺的跳过）；
+      金币档位按客户端 MapDrops 规则（>49 金 / >99 捆 / >999 袋）随机金额映射。
+    返回 (out_png, places)；places 是每件掉落的像素框（YOLO 标注直接用）。
+    """
+    from PIL import Image
+    life = [l for l in mj.get("life", []) if l.get("type") == "m"]
+    if not life or not CLS_ICONS.is_dir():
+        return None, []
+    drops = _drops()
+    rng = random.Random(f"{seed}:drops")
+    im = Image.open(base_png).convert("RGBA")
+    minx = miny = None
+    # 与渲染一致的画布原点：读预览旁的 .meta 太绕，直接用 map_bounds+pad 重算
+    R = _render_mod()
+    bx, by, bw, bh = R.map_bounds(mj)
+    minx, miny = bx - 40, by - 40
+    fhs = [(float(f["x1"]), float(f["y1"]), float(f["x2"]), float(f["y2"]))
+           for f in mj.get("foothold", [])]
+
+    def _ground(x: float, y_ref: float) -> float | None:
+        best_d = best_y = None
+        for x1, y1, x2, y2 in fhs:
+            lo, hi = (x1, x2) if x1 <= x2 else (x2, x1)
+            if hi > lo and lo <= x <= hi:
+                y = y1 + (y2 - y1) * (x - x1) / (x2 - x1)
+                d = abs(y - y_ref)
+                if best_d is None or d < best_d:
+                    best_d, best_y = d, y
+        return best_y
+
+    meso_tiers = [0, 1, 2, 3]
+    icon_cache: dict[int, Image.Image] = {}
+    places: list[dict] = []
+
+    def _icon(itemid: int) -> Image.Image | None:
+        if itemid not in icon_cache:
+            p = CLS_ICONS / f"{itemid:08d}.png"
+            icon_cache[itemid] = Image.open(p).convert("RGBA") if p.is_file() else None
+        return icon_cache[itemid]
+
+    def _place(img: Image.Image, x: float, gy: float, itemid: int):
+        px = round(x - minx - img.width / 2)
+        py = round(gy - miny - img.height)
+        im.alpha_composite(img, (px, py))
+        places.append({"item": itemid, "x": px, "y": py,
+                       "w": img.width, "h": img.height})
+
+    for l in life:
+        mob = int(str(l.get("id", "")).lstrip("0") or 0)
+        table = drops.get(mob)
+        if not table or rng.random() > 0.55:
+            continue
+        items = [e for e in table
+                 if e["i"] and (CLS_ICONS / f"{e['i']:08d}.png").is_file()]
+        if not items:
+            continue
+        bx0 = float(l.get("x", 0))
+        # y 取出生参考、fh 指向的地面 y（cy 键可能存在但值 None，判空同 life_points）
+        base_y = (float(l["cy"]) if l.get("fh") and l.get("cy") is not None
+                  else float(l.get("y") or 0))
+        rx0, rx1 = l.get("rx0"), l.get("rx1")
+        if rx0 is not None and rx1 is not None and float(rx1) > float(rx0):
+            lo, hi = float(rx0), float(rx1)
+        else:
+            lo, hi = bx0 - 120, bx0 + 120
+        cx = rng.uniform(lo, hi)
+        gy0 = _ground(cx, base_y) or base_y
+        # 金币（80%）：金额 → 档位（客户端同款阈值）
+        if rng.random() < 0.8 and meso_tiers:
+            amount = int(10 ** rng.uniform(0.8, 4.5))     # 6 ~ ~3 万
+            tier = 3 if amount > 999 else 2 if amount > 99 else 1 if amount > 49 else 0
+            fr = rng.randrange(4)
+            p = CLS_ICONS / f"meso_{tier}_{fr}.png"
+            if p.is_file():
+                coin = Image.open(p).convert("RGBA")
+                _place(coin, cx + rng.uniform(-8, 8), gy0, -tier - 1)
+        # 道具 1~3 件（chance 加权）
+        tot = sum(e["c"] for e in items) or 1
+        for _ in range(rng.randint(1, 3)):
+            r = rng.random() * tot
+            e = items[-1]
+            for cand in items:
+                r -= cand["c"]
+                if r <= 0:
+                    e = cand
+                    break
+            ic = _icon(e["i"])
+            if ic is None:
+                continue
+            x = cx + rng.uniform(-30, 30)
+            gy = _ground(x, base_y)
+            if gy is None:
+                gy = gy0
+            _place(ic, x, gy, e["i"])
+    if not places:
+        return None, []
+    out = outdir / ("preview_drops_nobg.png" if no_bg else "preview_drops.png")
+    (im if no_bg else im.convert("RGB")).save(out)
+    return out, places
+
+
 def _map_cache_fresh(outdir: Path) -> bool:
     """导出缓存是否还能用：map.json 可解析且带 miniMap（旧版 nxmap 不导小地图），
     且数据源戳一致（换了数据源——比如从 v0.83 换国服——旧缓存全部视为过期）。"""
@@ -3752,7 +3894,8 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
                  seed: str | None = None,
                  _visited: set | None = None,
                  no_bg: bool = False,
-                 cls: bool = False) -> dict:
+                 cls: bool = False,
+                 drops: bool = False) -> dict:
     """导出一张地图：map.json（life/foothold/ladderRope）+ 全部贴图 + 渲染预览图。
 
     cls=True 走怀旧服 WZJS 大图库（.cache\\wzjs-map\\<id>\\，导入时已建好），
@@ -3761,6 +3904,8 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     链接图（info/link，自己的 img 是空的）自动顺链导出目标图，返回带 link 字段。
     mobs=True 时预览图把怪随机画到地面上（preview_mobs.png，沿 rx 巡逻区间散布、
     foothold 落地，大 BOSS 不合成）；seed 缺省每次随机，传同值可复现同一布局。
+    drops=True 再撒一层掉落物（preview_drops.png）：只掉本图怪的掉落表里的
+    东西、掉落点跟刷怪点走（金币 4 档 + chance 加权道具）。
     view=(x, y) 是导出窗口（VIEW_W×VIEW_H = 客户端画面 1366×768）的左上角世界坐标；
     缺省取地图正中。导出文件统一是 1366×768，窗口超出地图边界的地方补空白。
     life_points 是刷怪点（x, y 已按客户端规则落到 cy 地面），overlay 是
@@ -3771,7 +3916,8 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     mid = str(mid).strip()
     if cls:
         return _cls_map_export(mid, preview, mobs, density, view, seed,
-                               _visited if _visited is not None else set(), no_bg)
+                               _visited if _visited is not None else set(),
+                               no_bg, drops)
     if not re.fullmatch(r"\d{9}", mid):
         raise CliError("地图 id 应该是 9 位数字", 2)
     visited = _visited if _visited is not None else set()
@@ -3796,17 +3942,18 @@ def c_map_export(mid: str, preview: bool = False, mobs: bool = False,
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{9}", link):
         d = c_map_export(link, preview, mobs, density, view, seed,
-                         visited, no_bg=no_bg)
+                         visited, no_bg=no_bg, drops=drops)
         d["link"] = {"from": mid, "to": link}
         return d
 
     return _map_export_inner(ws, mid, preview, mobs, density, view, visited,
-                             seed=seed, outdir=outdir, mj=mj, no_bg=no_bg)
+                             seed=seed, outdir=outdir, mj=mj, no_bg=no_bg,
+                             drops=drops)
 
 
 def _cls_map_export(mid: str, preview: bool, mobs: bool, density: int,
                     view: tuple | None, seed: str | None,
-                    visited: set, no_bg: bool) -> dict:
+                    visited: set, no_bg: bool, drops: bool = False) -> dict:
     """怀旧服 WZJS 大图导出：map_dir 已在导入时建好（.cache\\wzjs-map\\<id>），
     这里只负责读 map.json + 复用渲染管线。id 是不带前导零的页名（如 101040000
     也可能像 20000 这样短），链接图语义与国服相同（顺链渲染目标图）。"""
@@ -3826,11 +3973,12 @@ def _cls_map_export(mid: str, preview: bool, mobs: bool, density: int,
     link = str(mj.get("info", {}).get("link") or "").strip()
     if link and link != mid and re.fullmatch(r"\d{1,9}", link):
         d = _cls_map_export(link, preview, mobs, density, view, seed,
-                            visited, no_bg)
+                            visited, no_bg, drops)
         d["link"] = {"from": mid, "to": link}
         return d
     return _map_export_inner(ws, mid, preview, mobs, density, view, visited,
-                             seed=seed, outdir=outdir, mj=mj, no_bg=no_bg)
+                             seed=seed, outdir=outdir, mj=mj, no_bg=no_bg,
+                             drops=drops)
 
 
 # ── 全库出图（map-all）──────────────────────────────────────────────────────
@@ -4064,7 +4212,8 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
                       view: tuple | None, visited: set,
                       seed: str | None = None,
                       outdir: Path | None = None, mj: dict | None = None,
-                      no_bg: bool = False) -> dict:
+                      no_bg: bool = False,
+                      drops: bool = False) -> dict:
     root = CACHE if preview else EXPORTS
     if outdir is None:
         outdir = (root / "map" / mid) if preview else (EXPORTS / "maps" / mid)
@@ -4180,6 +4329,26 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
             result["preview_path"] = str(mob_png)
             result["preview_url"] = _res_url(mob_png)
             result["mobs"] = True
+    # 掉落物合成：只掉本图有的怪的掉落表里的东西，掉落点跟刷怪点走。
+    # 没开 mobs 也能单独开 drops（底图用普通预览）。
+    if drops and life:
+        # 窗口导出 + 要背景：与 mobs 同款——掉落必须撒在没烤背景的 nobg 底图上，
+        # 视窗裁剪时透出下面现画的视差背景；带怪时底图已是 mobs 合成结果（nobg）
+        if not preview and not no_bg and not result.get("mobs"):
+            drop_base = outdir / "preview_nobg.png"
+            _render_preview(outdir, drop_base, no_bg=True)
+        else:
+            drop_base = Path(result.get("preview_path") or png)
+        # 底图是透明版（mobs_nobg / no_bg 预览）时掉落也必须保 alpha：
+        # 窗口导出靠 alpha_composite 把透明区透给现画的视差背景
+        drop_png, drop_places = _composite_drops(
+            outdir, mj, drop_base, use_seed,
+            no_bg=no_bg or "nobg" in drop_base.stem)
+        if drop_png is not None:
+            result["preview_path"] = str(drop_png)
+            result["preview_url"] = _res_url(drop_png)
+            result["drops"] = True
+            result["drop_places"] = drop_places
     # 导出 = 客户端那个固定 1366×768 的画面窗口（预览模式输出整张 1:1 地图，供页面叠窗口用）
     if not preview:
         from PIL import Image
@@ -4194,8 +4363,9 @@ def _map_export_inner(ws: Path, mid: str, preview: bool, mobs: bool, density: in
             _render_preview(outdir, base_png, no_bg=True)
             R.draw_backs_view(canvas, mj.get("back", []), R.TexStore([str(outdir / "img")]),
                               vx + VIEW_W / 2, vy + VIEW_H / 2, VIEW_W, VIEW_H, front=0)
-        # 窗口底图：带怪用合成结果（已在 nobg 底图上），否则就是 nobg 底图
-        src_path = Path(result["preview_path"]) if result.get("mobs") else base_png
+        # 窗口底图：带怪/带掉落用合成结果（已在 nobg 底图上），否则就是 nobg 底图
+        src_path = (Path(result["preview_path"])
+                    if result.get("mobs") or result.get("drops") else base_png)
         src = Image.open(src_path).convert("RGBA")
         # 窗口可以超出地图边界（小图/边缘），只贴交集，其余留空
         sx0, sy0 = max(0, left), max(0, top)
@@ -4691,7 +4861,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       int(b.get("density") or 1), view,
                       str(b["seed"]) if b.get("seed") else None,
                       no_bg=bool(b.get("no_bg")),
-                      cls=bool(b.get("cls")))
+                      cls=bool(b.get("cls")),
+                      drops=bool(b.get("drops")))
         elif path == "/api/map/imgsearch":
             img = b.get("image")
             if not img:
@@ -5118,7 +5289,8 @@ def cmd_map_export(a) -> int:
             return 2
     d = c_map_export(a.id, preview=a.preview, mobs=a.mobs, density=a.density,
                      view=view, seed=getattr(a, "seed", None),
-                     no_bg=bool(getattr(a, "no_bg", False)))
+                     no_bg=bool(getattr(a, "no_bg", False)),
+                     drops=bool(getattr(a, "drops", False)))
     if a.json:
         _out(d, True)
     else:
@@ -5272,6 +5444,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mobs", action="store_true",
                    help="预览图合成怪物（沿地面随机散布、贴地不悬空；动作状态也随机：站/走/攻击/受击/死亡等，"
                         "默认每次随机，--seed 可复现；大 BOSS 一律不合成）")
+    p.add_argument("--drops", action="store_true",
+                   help="再撒一层掉落物（preview_drops.png）：只掉本图怪的掉落表里的东西、"
+                        "掉落点跟刷怪点走；金币 4 档 + chance 加权道具（掉落表来自服务端）")
     p.add_argument("--seed", metavar="S", help="配合 --mobs：固定随机种子（同 seed 同布局；缺省每次随机）")
     p.add_argument("--density", type=int, default=1, metavar="N",
                    help="配合 --mobs：怪物密度倍数（1-10，默认 1；每个刷怪点放 N 只，左右散开）")
