@@ -3513,12 +3513,16 @@ async function lifeOverlayHTML() {
   }
   if (dropOn) {
     // 显示掉落：与导出合成（_composite_drops）同款规则——每个刷怪点 55% 有一堆，
-    // 每堆 = 金币（80%，金额→客户端 4 档：>49 金币 / >99 捆 / >999 袋）
+    // 每堆 = 金币（80%，金额取掉落表 meso_q 的 q 区间真源，没条目的怪不掉钱，
+    //   档位按客户端 MapDrops 阈值：>49 金币 / >99 捆 / >999 袋）
     //   + 1~3 件道具（chance 加权），掉落点在怪的巡逻区间里、foothold 贴地；
-    // 只掉本图怪掉落表里的东西（服务端掉落数据）
+    // 只掉本图怪掉落表里的东西（服务端掉落数据）；
+    // 宽度一律用贴图**原生像素**（后端下发 w），不再统一拉成 26/32px——
+    // 那样金币比真机（20~23px）大出一圈
     const tbl = await dropsTable();
     if (tbl && tbl.drops) {
-      const meso = tbl.meso || [];
+      const meso = tbl.meso || {};         // 档位 → [w,h]（各档原生尺寸不同）
+      const mesoQ = tbl.meso_q || {};      // mobid → 金额 [min,max]
       const mesoName = ["金币", "金币(捆)", "金币袋", "大金币袋"];
       const iconUrl = (i) => `/api/cls/icon/${i}`;
       const wPct = (w) => w * ov.s / ov.w * 100;
@@ -3530,16 +3534,20 @@ async function lifeOverlayHTML() {
         let gy = groundAt(cx, p.y);
         if (gy === null) gy = p.y;
         let out = "";
-        // 金币：金额 → 档位（客户端 MapDrops 同款阈值）
-        if (Math.random() < 0.8 && meso.length) {
-          const amount = Math.round(Math.pow(10, 0.8 + Math.random() * 3.7)); // 6 ~ ~3万
-          const tier = amount > 999 ? 3 : amount > 99 ? 2 : amount > 49 ? 1 : 0;
-          if (meso.includes(tier)) {
-            const pos = pct({ x: cx + (Math.random() * 16 - 8), y: gy });
-            out += `<img class="dspr" src="${iconUrl(`meso_${tier}_0`)}" style="left:${pos.l - wPct(16)}%;top:${pos.t}%;width:${wPct(32)}%" title="${mesoName[tier]} ${amount} 金">`;
+        // 金币：金额用掉落表真源（q 区间），档位按客户端阈值
+        if (Math.random() < 0.8) {
+          const q = mesoQ[String(p.id)];
+          if (q) {
+            const amount = q[0] + Math.floor(Math.random() * (q[1] - q[0] + 1));
+            const tier = amount > 999 ? 3 : amount > 99 ? 2 : amount > 49 ? 1 : 0;
+            const sz = meso[tier];
+            if (sz) {
+              const pos = pct({ x: cx + (Math.random() * 16 - 8), y: gy });
+              out += `<img class="dspr" src="${iconUrl(`meso_${tier}_0`)}" style="left:${pos.l - wPct(sz[0] / 2)}%;top:${pos.t}%;width:${wPct(sz[0])}%" title="${mesoName[tier]} ${amount} 金">`;
+            }
           }
         }
-        // 道具 1~3 件（chance 加权；全 0 时均匀抽）
+        // 道具 1~3 件（chance 加权；全 0 时均匀抽），按图标原生宽画
         const tot = items.reduce((s, e) => s + (e.c || 0), 0);
         for (let n = 0; n < 1 + Math.floor(Math.random() * 3); n++) {
           let e;
@@ -3552,7 +3560,8 @@ async function lifeOverlayHTML() {
           let gy2 = groundAt(x, p.y);
           if (gy2 === null) gy2 = gy;
           const pos = pct({ x, y: gy2 });
-          out += `<img class="dspr" src="${iconUrl(e.i)}" style="left:${pos.l - wPct(13)}%;top:${pos.t}%;width:${wPct(26)}%" title="${e.n || e.i}${p.name ? "（" + p.name + " 掉落）" : ""}">`;
+          const w = e.w || 26;
+          out += `<img class="dspr" src="${iconUrl(e.i)}" style="left:${pos.l - wPct(w / 2)}%;top:${pos.t}%;width:${wPct(w)}%" title="${e.n || e.i}${p.name ? "（" + p.name + " 掉落）" : ""}">`;
         }
         return out;
       }).join("");

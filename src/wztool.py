@@ -2180,34 +2180,63 @@ _drops_api_cache: dict = {}
 
 
 def c_cls_drops() -> dict:
-    """掉落表（正向）：mobid(去前导零字符串) → [{i, n, c}]。
+    """掉落表（正向）：mobid(去前导零字符串) → [{i, n, c, w}]。
 
     页面叠加层「显示掉落」用（与怪物立绘叠加同款纯前端随机摆放）：
     i 是 8 位 zfill 道具 id，直接拼 /api/cls/icon/&lt;i&gt; 取图标；
+    w 是图标真实像素宽（前端按原生尺寸画——以前统一拉成 26px 宽，
+    金币更是被固定画成 32px，比真机 20~23px 大一圈）；
     只下发**图标已提取**的道具（没图标的掉出来也看不见）；
-    meso 是金币贴图可用档位（meso_&lt;tier&gt;_0.png）。
+    meso 是金币贴图档位 → [w,h]（各档原生尺寸不同：铜板/金币 23、捆 31、袋 32）；
+    meso_q 是 mobid → 金币金额 [min,max]（drops.json 里 i=0 条目的 q 区间，
+    没条目的怪不掉金币——低级图撒钱袋子就是这么来的）。
     掉落表真源是服务端（vendor/drops.json，gen-drops.py 生成）。
     """
-    if _drops_api_cache.get("drops"):
+    stamp = _cls_icons_stamp()
+    if _drops_api_cache.get("stamp") == stamp and _drops_api_cache.get("drops"):
         return _drops_api_cache
     names = _itemnames()
     cn = _cls_itemnames()                    # 怀旧服中文名优先，退服务端英文名
+    sz_cache: dict[str, tuple[int, int]] = {}
+
+    def _icon_size(iid: str) -> tuple[int, int]:
+        if iid not in sz_cache:
+            try:
+                from PIL import Image
+                with Image.open(CLS_ICONS / f"{iid}.png") as im:
+                    sz_cache[iid] = im.size
+            except Exception:                  # noqa: BLE001
+                sz_cache[iid] = (26, 26)
+        return sz_cache[iid]
+
     out: dict[str, list] = {}
+    meso_q: dict[str, list] = {}
     for mob, items in _drops().items():
         rows = []
         for e in items:
             iid = int(e.get("i") or 0)
+            if iid == 0:                       # 金币条目：金额区间真源
+                q = e.get("q") or []
+                if len(q) == 2 and q[1] > 0:
+                    meso_q[str(mob)] = [max(1, int(q[0])), int(q[1])]
+                continue
             if iid <= 0 or not (CLS_ICONS / f"{iid:08d}.png").is_file():
                 continue
             rows.append({"i": f"{iid:08d}",
                          "n": (cn.get(str(iid))
                                or (names.get(f"{iid:08d}") or {}).get("name", "")),
-                         "c": e.get("c", 0)})
+                         "c": e.get("c", 0),
+                         "w": _icon_size(f"{iid:08d}")[0]})
         if rows:
             out[str(mob)] = rows
-    meso = [t for t in range(4) if (CLS_ICONS / f"meso_{t}_0.png").is_file()]
+    meso = {}
+    for t in range(4):
+        p = CLS_ICONS / f"meso_{t}_0.png"
+        if p.is_file():
+            meso[t] = _icon_size(f"meso_{t}_0")
     _drops_api_cache.clear()
-    _drops_api_cache.update({"drops": out, "meso": meso})
+    _drops_api_cache.update({"drops": out, "meso": meso, "meso_q": meso_q,
+                             "stamp": stamp})
     return _drops_api_cache
 
 
@@ -3980,8 +4009,9 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
     - 掉落点跟着对应怪的巡逻区间（rx0~rx1）走——怪在哪刷，东西掉在哪，
       foothold 落地不悬空；
     - 每个刷怪点 55% 概率有一堆（挂机一段时间后的地面状态），每堆 =
-      0~1 个金币（80%）+ 1~3 件道具（按 chance 加权抽，图标缺的跳过）；
-      金币档位按客户端 MapDrops 规则（>49 金 / >99 捆 / >999 袋）随机金额映射。
+      0~1 个金币（80%，金额取掉落表 i=0 条目的 q 区间真源，没条目的怪不掉钱）
+      + 1~3 件道具（按 chance 加权抽，图标缺的跳过）；
+      金币档位按客户端 MapDrops 规则（>49 金 / >99 捆 / >999 袋）选贴图。
     返回 (out_png, places)；places 是每件掉落的像素框（YOLO 标注直接用）。
     """
     from PIL import Image
@@ -4012,6 +4042,9 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
         return best_y
 
     meso_tiers = [0, 1, 2, 3]
+    # mobid → 金币金额 [min,max]（drops.json 里 i=0 条目的 q 区间，服务端真源）
+    meso_q = {m: e["q"] for m, tab in drops.items() for e in tab
+              if e.get("i") == 0 and len(e.get("q") or []) == 2}
     icon_cache: dict[int, Image.Image] = {}
     places: list[dict] = []
     taken: list[tuple[float, float, float]] = []   # (x0, x1, gy) 已占的地面区间（世界坐标）
@@ -4084,9 +4117,11 @@ def _composite_drops(outdir: Path | None, mj: dict, base_png, seed: str,
             lo, hi = bx0 - 120, bx0 + 120
         cx = rng.uniform(lo, hi)
         gy0 = _ground(cx, base_y) or base_y
-        # 金币（80%）：金额 → 档位（客户端同款阈值）
-        if rng.random() < 0.8 and meso_tiers:
-            amount = int(10 ** rng.uniform(0.8, 4.5))     # 6 ~ ~3 万
+        # 金币：**掉落表里带金币条目（i=0，q=[min,max] 金额区间）的怪才掉**，
+        # 金额用服务端真源——蜗牛这类低级怪 q 顶多几十，绝不会再摇出钱袋子
+        mq = meso_q.get(mob)
+        if mq and rng.random() < 0.8 and meso_tiers:
+            amount = rng.randint(max(1, int(mq[0])), int(mq[1]))
             tier = 3 if amount > 999 else 2 if amount > 99 else 1 if amount > 49 else 0
             fr = rng.randrange(4)
             p = CLS_ICONS / f"meso_{tier}_{fr}.png"
