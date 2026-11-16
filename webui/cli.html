@@ -131,14 +131,9 @@
   .prog-bar.indet i { animation: progs 1.1s linear infinite; }
   @keyframes progs { from { left: -35%; width: 35%; } to { left: 100%; width: 35%; } }
   .prog-sub { font-size: 11.5px; margin-top: 5px; }
-  /* YOLO 训练集面板 */
-  .yl-body { padding: 12px 16px; display: flex; flex-direction: column;
-             gap: 10px; overflow: auto; min-height: 0; }
-  /* 左右结构：左=地图选择栏（复用地图页搜索 UI，宽度/间距与 .cols 一致），右=导出 */
-  .yl-cols { display: flex; gap: 10px; align-items: stretch; min-height: 0; }
-  .yl-left { width: 300px; flex: none; display: flex; flex-direction: column; gap: 8px; }
-  .yl-left #yl-mlist { flex: 1; min-height: 360px; max-height: none; }
-  .yl-right { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  /* YOLO 训练集面板：和地图页同构——左栏搜索列表直接放外面（无卡片），
+     右侧 .detail 卡片装导出内容（用户 2026-11-16） */
+  .yl-right { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
   .yl-man { border-top: 1px dashed rgba(128,128,128,.3); padding-top: 10px; }
   .yl-edit { display: flex; gap: 14px; margin-top: 8px; align-items: flex-start; }
   .yl-mapwrap { position: relative; flex: 1; min-width: 0; max-width: 100%; align-self: flex-start; }
@@ -810,25 +805,23 @@
       <div class="muted" id="bt-note" style="margin-top:6px">人物 / 技能 / 怪物 / 伤害样式全部随机——点「🎲 换一批」重新抽；「👾 怪物 / 👑 Boss」切换抽卡怪物池；「🗺 限定地图」只抽那张图里自然刷新的怪（输地图名或 ID 从下拉里选）；「⚔️ 攻击」打一轮：技能特效 + 怪物受击 + 真实排版的伤害数字（5% 概率 Miss）。需要 Mob.nx / Character.nx / Skill.nx / 伤害数字库都已就绪。</div>
     </div>
 
-    <!-- YOLO 训练集：左栏复用地图页搜索 UI（用户 2026-11-16），右侧只放导出相关 -->
-    <div class="pane" id="yolodex" hidden>
-      <div class="yl-body">
-        <div class="yl-cols">
-          <div class="yl-left">
-            <div style="position:relative;display:flex;gap:6px;margin-bottom:8px">
-              <input type="text" id="yl-q" placeholder="搜索 id 或名字 …" style="flex:1;min-width:0" />
-              <button id="yl-imgsearch-btn" title="粘贴截图找地图：截一张游戏里的小地图（或整窗截图），Ctrl+V 粘贴进来直接搜">🖼 找图</button>
-              <div class="optpop imgpop" id="yl-img-pop" hidden></div>
-            </div>
-            <div class="filters" id="yl-flt">
-              <button class="flt on" data-f="all">全部</button>
-              <button class="flt" data-f="mob">有怪</button>
-              <button class="flt" data-f="empty">无怪</button>
-            </div>
-            <div class="row" style="margin:2px 0 6px"><span class="muted" id="yl-count"></span></div>
-            <div class="list" id="yl-mlist"></div>
-          </div>
-          <div class="yl-right">
+    <!-- YOLO 训练集：左栏复用地图页搜索 UI（无卡片、和地图页同构），右侧 .detail 卡片只放导出相关 -->
+    <div class="cols" id="yolodex" hidden>
+      <div class="col-left">
+        <div style="position:relative;display:flex;gap:6px;margin-bottom:8px">
+          <input type="text" id="yl-q" placeholder="搜索 id 或名字 …" style="flex:1;min-width:0" />
+          <button id="yl-imgsearch-btn" title="粘贴截图找地图：截一张游戏里的小地图（或整窗截图），Ctrl+V 粘贴进来直接搜">🖼 找图</button>
+          <div class="optpop imgpop" id="yl-img-pop" hidden></div>
+        </div>
+        <div class="filters" id="yl-flt">
+          <button class="flt on" data-f="all">全部</button>
+          <button class="flt" data-f="mob">有怪</button>
+          <button class="flt" data-f="empty">无怪</button>
+        </div>
+        <div class="row" style="margin:2px 0 6px"><span class="muted" id="yl-count"></span></div>
+        <div class="list" id="yl-mlist"></div>
+      </div>
+      <div class="detail yl-right">
             <div class="row">
               <button class="primary mini" id="yl-start" title="按当前设置批量导出 → .exports/yolo/&lt;时间戳&gt;/（YOLO 格式：images/ labels/ dataset.yaml）">▶ 开始导出</button>
               <button class="mini" id="yl-stop" hidden>■ 停止</button>
@@ -874,8 +867,6 @@
             <div class="muted" id="yl-out"></div>
           </div>
         </div>
-      </div>
-    </div>
   </div>
 
   <div class="muted" style="display:none">工具链：NoLifeWzToNx（wz→nx 转换）· nxmap / nxscan（地图导出）· render_map（地图渲染）。</div>
