@@ -933,7 +933,10 @@ function api(path, opts) {
 function fail(e) { errBox.style.display = "block"; errBox.textContent = "⚠ " + (e?.stack || e?.message || String(e)); }
 
 let WS = null, CN = false, MAPS = [], TIMER = null, CN_MISSING = [], CN_NEED_CLS = false, CN_NEED_DMG = false;
-let MAP_LV = {};           // 地图id → [min,max] 推荐等级（列表行徽标）
+let MAP_LV = {};           // 现代库 地图id → [min,max] 推荐等级（列表行徽标）
+let CLS_MAP_LV = {};       // 怀旧服大图库等级表——必须与现代库分开存：
+                           // 切「现代库」再切回来时 CLS_MAPS 有缓存不重拉，
+                           // 共用一个变量会被现代库的表洗掉，徽标大面积消失
 let MAPREADY = false, BUSY = false;   // 浏览区锁定状态：数据就绪 && 没有任务在跑
 let EXPDIR = "";   // 导出目录（boot 时由 /api/state 填）
 /* 地图详情区的默认内容（含 #exp-dir 导出目录标签）——必须在此刻先存一份：
@@ -1717,6 +1720,8 @@ async function wipeData() {
     // 数据和工作区记忆都清了：输入框/状态面板回到「尚未选择」
     $("#ws-path").value = "";
     WS = null; CN = false; MAPS = []; MAP_LV = {};   // 数据清空了：推荐等级表一并失效
+    CLS_MAPS = null; CLS_MAP_LV = {}; CLS_LIFE = null; CLS_WZJS = false;
+    CLS_WZJS_STALE = false;   // 怀旧服各缓存（列表/等级/刷怪/就绪态）一并失效
     DMG.sets = null; DMG.sel = null;   // 伤害数字库也清了，切进页签时重新拉
     SK.jobs = null;                    // 技能列表同理
     $("#ws-state").textContent = "尚未选择";
@@ -1827,7 +1832,7 @@ async function loadLists() {
         CLS_WZJS_STALE = !!d.wzjs_stale;   // 建过但不就绪 = 资源包变了，给重建按钮
         // 有怪名单：大图库才有（canvas 模式没刷怪数据 → 保持 null，筛选按钮不生效）
         CLS_LIFE = Array.isArray(d.life_maps) ? new Set(d.life_maps) : null;
-        MAP_LV = d.mob_lv || {};
+        CLS_MAP_LV = d.mob_lv || {};
       } catch (e) {
         CLS_MAPS = [];
         $("#list").innerHTML =
@@ -1851,7 +1856,7 @@ async function loadLists() {
 
 /* 地图列表行的推荐等级徽标（Lv.x 或 Lv.x–y；等级来自图内自然刷怪怪的服务端数值） */
 function mapLvChip(id) {
-  const lv = MAP_LV[id];
+  const lv = (CLSMODE ? CLS_MAP_LV : MAP_LV)[id];   // 两套表按模式取，互不污染
   if (!lv || lv.length !== 2) return "";
   const tag = lv[0] !== lv[1] ? `${lv[0]}–${lv[1]}` : `${lv[0]}`;
   return `<span class="lvchip" title="推荐等级（本图怪物等级区间）">Lv.${tag}</span>`;
