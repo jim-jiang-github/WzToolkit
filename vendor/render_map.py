@@ -314,26 +314,29 @@ def render_map(map_json: dict, img_dirs: list[str], opts: RenderOpts | None = No
                 _blit(canvas, tex, x0, y0, x0 + wd, y0 + ht)
 
     # --- 8 层 ---
-    # 同层内 tile 与 obj 按 z **归并**绘制（z 升序）。tile 的 z 来自瓦片图节点
-    # （客户端 Tile.cpp: z = dsrc["z"]，为 0 再取 zM），obj 的 z 来自地图条目。
-    # 早期版本照 Journey 系客户端 TilesObjs::draw 分开画（obj 全画完再画 tile），
-    # 结果 z=0 的地面/墙瓦片盖住 z=9+ 的物件——101030110 第1军营整屏只剩墙砖格
-    # 就是这个原因。经典地图 tile 条目的 zM 恒 0，必须靠图节点的 z 才能排对。
+    # 同层绘制顺序照客户端 TilesObjs::draw（Stage.cpp 逐层 0..7 调用）：
+    # **obj 按 z 升序全画完 → tile 按 z 升序**，两套独立 z 序列、不按 z 归并——
+    # 同层 tile 永远盖住 obj（地图作者把「要在地面前面」的东西放更高的层）。
+    # 之前改成按 z 归并，L3/L5 的物件（z 9-13）画到了 z -4..1 的瓦片上面，
+    # 岩路III/火焰之地的大岩石和栅栏盖住了地面砖（用户 2026-11-16 实测）。
+    # tile 的 z 来自瓦片图节点（客户端 Tile.cpp: z = dsrc["z"]，为 0 再取 zM），
+    # obj 的 z 来自地图条目；tile 之间的先后靠它排对，经典地图 tile 条目的
+    # zM 恒 0，必须靠图节点的 z 才能排对。
     layers = map_json.get("layers", [])
     for li in range(8):
         L = layers[li] if li < len(layers) else {}
-        items = [(int(t.get("z", 0)), 0, t) for t in L.get("tile", [])]
-        items += [(int(o.get("z", 0)), 1, o) for o in L.get("obj", [])]
-        items.sort(key=lambda it: (it[0], it[1]))   # 同 z 时 tile 先（等同 WZ 里 tile 节点在前）
-        for _z, kind, e in items:
-            tex = store.get(e.get("img", ""))
-            if tex is None:
-                continue
-            im = tex
-            if kind == 1 and int(e.get("f", 0)) == 1:
-                im = im.transpose(Image.FLIP_LEFT_RIGHT)
-            place(im, float(e["x"]) - e.get("ox", 0), float(e["y"]) - e.get("oy", 0),
-                  int(e.get("a", 255)))
+        for kind in (1, 0):                     # 1=obj 先画，0=tile 后画
+            entries = L.get("obj" if kind else "tile", [])
+            items = sorted(entries, key=lambda it: int(it.get("z", 0)))
+            for e in items:
+                tex = store.get(e.get("img", ""))
+                if tex is None:
+                    continue
+                im = tex
+                if kind == 1 and int(e.get("f", 0)) == 1:
+                    im = im.transpose(Image.FLIP_LEFT_RIGHT)
+                place(im, float(e["x"]) - e.get("ox", 0), float(e["y"]) - e.get("oy", 0),
+                      int(e.get("a", 255)))
 
     # --- 前景背景（front=1）---
     for b in ([] if opts.no_bg else map_json.get("back", [])):
