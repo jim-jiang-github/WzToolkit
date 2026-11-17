@@ -807,21 +807,39 @@
           <button id="yl-imgsearch-btn" title="粘贴截图找地图：截一张游戏里的小地图（或整窗截图），Ctrl+V 粘贴进来直接搜">🖼 找图</button>
           <div class="optpop imgpop" id="yl-img-pop" hidden></div>
         </div>
-        <div class="row" style="margin:2px 0 6px"><span class="muted" id="yl-count"></span></div>
+        <div class="row" style="margin:2px 0 6px;position:relative">
+          <span class="muted" id="yl-count"></span>
+          <span style="flex:1"></span>
+          <button class="primary mini" id="yl-start" title="一次性导出本数据源全部有怪地图 → .exports/yolo/&lt;时间戳&gt;/（YOLO 格式：images/ labels/ dataset.yaml）">▶ 导出全部</button>
+          <button class="mini" id="yl-stop" hidden>■ 停止</button>
+          <button class="mini" id="yl-cfg-btn" title="导出设置：随机布局 / 每布局窗口数 / 分辨率 / 类别">⚙</button>
+          <div class="optpop" id="yl-cfg-pop" hidden style="width:300px;left:auto;right:0;top:32px">
+            <div class="optgrp">随机布局：每张地图重抽几套怪物/掉落/玩家摆位</div>
+            <input type="text" id="yl-cfg-lay" value="2" style="width:72px;min-width:0">
+            <div class="optgrp">每布局最多窗口（0 = 不限）</div>
+            <input type="text" id="yl-cfg-maxv" value="32" style="width:72px;min-width:0"
+                   title="沿地面每 120px 一个站位点、视窗 1366px，相邻窗口重叠约 91%——封顶 32 几乎不损失信息，整库体积/耗时才可控">
+            <div class="optgrp">窗口分辨率</div>
+            <select id="yl-cfg-size" style="width:140px">
+              <option value="1366x768">1366×768（客户端默认）</option>
+              <option value="1280x720">1280×720</option>
+              <option value="1024x768">1024×768</option>
+              <option value="1920x1080">1920×1080</option>
+            </select>
+            <div class="optgrp">类别（全部正样本，按种分类）</div>
+            <label><input type="checkbox" id="yl-cfg-mob" checked> 怪物</label>
+            <label><input type="checkbox" id="yl-cfg-boss" checked> BOSS</label>
+            <label><input type="checkbox" id="yl-cfg-drop" checked> 掉落</label>
+            <label><input type="checkbox" id="yl-cfg-player" checked> 玩家</label>
+            <div class="muted" style="font-size:11.5px;margin-top:8px;border-top:1px solid var(--line);padding-top:7px">
+              全部进训练集（不留验证集）；改完直接关掉，设置会记住。
+            </div>
+          </div>
+        </div>
         <div class="list" id="yl-mlist"></div>
       </div>
       <div class="detail yl-right">
-            <div class="row">
-              <button class="primary mini" id="yl-start" title="按当前设置批量导出 → .exports/yolo/&lt;时间戳&gt;/（YOLO 格式：images/ labels/ dataset.yaml）">▶ 开始导出</button>
-              <button class="mini" id="yl-stop" hidden>■ 停止</button>
-              <span class="muted">窗口密度自动：沿地面每 120px 一个站位点，每点一个 1366×768 视窗</span>
-              <span class="muted">随机布局</span>
-              <input type="text" id="yl-lay" value="2" style="min-width:56px;width:56px" title="每张地图重抽几次怪物/掉落/玩家的摆位（更多布局 = 更多样的遮挡关系）">
-              <span class="muted">验证集 %</span>
-              <input type="text" id="yl-val" value="15" style="min-width:56px;width:56px" title="按整张地图划分 train/val（不是按窗口随机切——同图的相似窗口会泄漏，验证 mAP 会虚高）">
-              <label class="muted" style="display:flex;gap:4px;align-items:center" title="窗口尺寸在 1024×768 / 1366×768 / 1280×720 / 1920×1080 里随机——不同玩家客户端分辨率不一样"><input type="checkbox" id="yl-rsize"> 随机分辨率</label>
-              <label class="muted" style="display:flex;gap:4px;align-items:center" title="网格窗口铺满每张地图的完整画面（右/下贴边自动补齐，不留死角），忽略手动精调窗口；分辨率用上面选的（不随机）"><input type="checkbox" id="yl-cover"> 铺满整图</label>
-            </div>
+            <div class="muted" id="yl-cfgsum" style="margin-bottom:6px"></div>
             <div class="progbox" id="yl-prog" hidden>
               <div class="prog-head"><b id="yl-stage">准备中…</b><span class="muted" id="yl-pct"></span></div>
               <div class="prog-bar"><i id="yl-fill"></i></div>
@@ -4013,6 +4031,54 @@ function yoloScopeMaps() {
   return MAPS.map(String);
 }
 
+/* 全量导出范围（用户 2026-11-17：导出按钮不再一张一张导，固定导全部有怪地图）：
+   怀旧服 = cls 名单里 mob 的地图（339 张）；现代库 = LIFE 有怪 id 集合 */
+function yoloAllMobMaps() {
+  if (CLSMODE) return (CLS_MAPS || []).filter((m) => m.mob).map((m) => String(m.id));
+  return [...LIFE].map(String);
+}
+
+/* ---- 导出设置（⚙ 弹层）：全量导出的参数，改完即存 localStorage ---- */
+const YLCFG = { lay: 2, maxv: 32, size: "1366x768",
+                mob: true, boss: true, drop: true, player: true };
+const YLCFG_KEY = "wz-yl-cfg-v1";
+
+function ylCfgSum() {
+  const n = yoloAllMobMaps().length;
+  const cls = [["mob", "怪"], ["boss", "BOSS"], ["drop", "掉落"], ["player", "玩家"]]
+    .filter(([k]) => YLCFG[k]).map(([, v]) => v);
+  $("#yl-cfgsum").textContent =
+    `▶ 导出 ${n ? n + " 张" : "全部有怪地图"}（每张沿地面自动采窗）`
+    + ` · 随机布局 ${YLCFG.lay} · 每布局 ${YLCFG.maxv || "不限"} 窗 · ${YLCFG.size}`
+    + ` · 类别：${cls.join(" / ") || "无"} · 全部进 train`;
+}
+
+function ylCfgSave() {
+  YLCFG.lay = Math.max(1, Math.min(8, parseInt($("#yl-cfg-lay").value, 10) || 2));
+  YLCFG.maxv = Math.max(0, Math.min(64, parseInt($("#yl-cfg-maxv").value, 10) || 0));
+  YLCFG.size = $("#yl-cfg-size").value || "1366x768";
+  for (const k of ["mob", "boss", "drop", "player"])
+    YLCFG[k] = $("#yl-cfg-" + k).checked;
+  $("#yl-cfg-lay").value = YLCFG.lay;
+  $("#yl-cfg-maxv").value = YLCFG.maxv;
+  try { localStorage.setItem(YLCFG_KEY, JSON.stringify(YLCFG)); } catch (e) {}
+  ylCfgSum();
+  ylRender();
+}
+
+function ylCfgLoad() {
+  try {
+    const s = JSON.parse(localStorage.getItem(YLCFG_KEY) || "{}");
+    for (const k of Object.keys(YLCFG)) if (k in s) YLCFG[k] = s[k];
+  } catch (e) {}
+  $("#yl-cfg-lay").value = YLCFG.lay;
+  $("#yl-cfg-maxv").value = YLCFG.maxv;
+  $("#yl-cfg-size").value = YLCFG.size;
+  for (const k of ["mob", "boss", "drop", "player"])
+    $("#yl-cfg-" + k).checked = YLCFG[k];
+  ylCfgSum();
+}
+
 function yoloOpen() {
   if (!$("#yl-prog").hidden || $("#yl-img").src) yoloPoll();
   ylMapList();                                        // 左栏列表 + 计数行（和地图页同款）
@@ -4051,6 +4117,7 @@ function ylMapList() {
   $("#yl-count").textContent =
     (CLSMODE ? "怀旧服 " : "") + `${items.length} 张`
     + (noLife && items.length ? " · 刷怪数据未加载 —— 重启服务后刷新页面" : "");
+  ylCfgSum();                                  // 右侧「导出 N 张 · 参数」摘要跟着列表刷新
   const top = items.slice(0, 400);
   const cur = mapRef ? String(mapRef.id) : "";
   box.innerHTML = top.map((m) => CLSMODE
@@ -4115,7 +4182,7 @@ function ylRender() {
   if ($("#yl-man").hidden) return;
   const W = YL.iw, H = YL.ih;
   if (!W || !H) return;
-  const lay = parseInt($("#yl-lay").value, 10) || 2;
+  const lay = YLCFG.lay;
   $("#yl-wins").textContent =
     YL.win.length ? `${YL.win.length} 窗 × ${lay} 布局 = ${YL.win.length * lay} 张` : "没有窗口：🎲 自动采样 或 点图添加";
   let html = "";
@@ -4308,26 +4375,25 @@ async function yoloPoll() {
 }
 
 async function yoloStart() {
-  const maps = yoloScopeMaps();
+  const maps = yoloAllMobMaps();          // 全量：本数据源全部有怪地图，不再单张导
   if (!maps.length) {
-    $("#yl-msg").textContent =
-      YL.scope === "cur" ? "先在上面搜一张地图点进去再导出"
-      : "列表还没加载好（回地图页等列表出来再回来）";
+    $("#yl-msg").textContent = "地图列表还没加载好（回地图页等列表出来再回来）";
+    return;
+  }
+  if (!YLCFG.mob && !YLCFG.boss && !YLCFG.drop && !YLCFG.player) {
+    $("#yl-cfg-pop").hidden = false;
+    $("#yl-msg").textContent = "⚙ 设置里至少要勾一个类别";
     return;
   }
   $("#yl-msg").textContent = "";
   try {
     const body = {
       maps, cls: CLSMODE,
-      layouts: parseInt($("#yl-lay").value, 10) || 2,
-      val: parseInt($("#yl-val").value, 10) || 15,
-      random_size: $("#yl-rsize").checked,
-      cover: $("#yl-cover").checked,
-      mob: true, boss: true, drop: true, player: true,   // 类别固定全开（选择行已删）
+      layouts: YLCFG.lay, size: YLCFG.size, max_views: YLCFG.maxv,
+      mob: YLCFG.mob, boss: YLCFG.boss, drop: YLCFG.drop, player: YLCFG.player,
     };
-    // 当前地图 + 精调过窗口 + 没勾铺满 → 按用户摆的位置导，不再自动采样
-    if (YL.scope === "cur" && !$("#yl-cover").checked && mapRef && YL.win.length
-        && YL.mapid === String(mapRef.id))
+    // 当前地图手动精调过窗口 → 这张图按你摆的位置导，其余图自动采样
+    if (mapRef && YL.win.length && YL.mapid === String(mapRef.id))
       body.windows = { [String(mapRef.id)]: YL.win.map((w) => w.slice()) };
     await api("/api/yolo/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -4339,6 +4405,20 @@ async function yoloStart() {
 }
 
 $("#yl-start").onclick = yoloStart;
+$("#yl-cfg-btn").onclick = (e) => {
+  e.stopPropagation();
+  const pop = $("#yl-cfg-pop");
+  pop.hidden = !pop.hidden;
+  if (!pop.hidden) ylCfgLoad();          // 每次打开回填当前设置
+};
+for (const id of ["yl-cfg-lay", "yl-cfg-maxv", "yl-cfg-size", "yl-cfg-mob",
+                  "yl-cfg-boss", "yl-cfg-drop", "yl-cfg-player"]) {
+  const el = $("#" + id);
+  el.onchange = ylCfgSave;
+  if (el.type === "text") el.onblur = ylCfgSave;
+}
+$("#yl-cfg-pop").onclick = (e) => e.stopPropagation();
+document.addEventListener("click", () => { $("#yl-cfg-pop").hidden = true; });
 $("#yl-stop").onclick = async () => {
   try {
     await api("/api/yolo/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
@@ -4347,6 +4427,7 @@ $("#yl-stop").onclick = async () => {
 };
 
 setMode("map");   // 初始态：地图（顺便填上左侧导轨下方的提示）
+ylCfgLoad();      // 恢复上次的导出设置（⚙ 弹层）
 dataModeSync();   // 恢复上次的 数据模式（现代库/怀旧服）开关状态
 boot();</script>
 </body>
