@@ -5528,7 +5528,8 @@ def _yolo_composite(mid: str, cls: bool, seed: str):
 def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
               val_pct: int, flags: dict, out_root: Path,
               windows: dict | None = None, cover: bool = False,
-              max_views: int = 0) -> None:
+              max_views: int = 0, li_off: int = 0) -> None:
+    # li_off：布局序号偏移（补导第 N 套布局时用，seed 也随之错开不重复）
     from PIL import Image
     runs = out_root
     run = runs / time.strftime("%Y%m%d-%H%M%S")
@@ -5602,7 +5603,8 @@ def _yolo_run(maps: list, mode: str, layouts: int, sizes: list,
             # 大量以 0000 结尾，取尾两位会整段整段落进同一侧
             split_val = (int(hashlib.md5(mid.encode()).hexdigest()[:8], 16) % 100
                          < val_pct) if mid.isdigit() else False
-            for li in range(layouts):
+            for _li in range(layouts):
+                li = _li + li_off
                 if _ystop.is_set():
                     break
                 lay = f"{mid}:l{li}"
@@ -5764,7 +5766,10 @@ def c_yolo_export(body: dict) -> dict:
         if _yjob["running"]:
             raise CliError("上一轮还在跑：先等它结束或点「停止」", 1)
     layouts = max(1, min(8, int(body.get("layouts") or 2)))
-    val_pct = max(0, min(40, int(body.get("val") or 15)))
+    # 用户 2026-11-17：验证集取消——合成数据 train/val 同分布，val 的 mAP 参考
+    # 意义有限；全部进 train，质量校对改为训完拉回本地按新 seed 生成对比图。
+    # 注意不能写 `or 15` 兜底（0 or 15 = 15 会吞掉显式的 0）
+    val_pct = max(0, min(40, int(body.get("val") or 0)))
     res = str(body.get("size") or "1366x768")
     try:
         W, H = (int(x) for x in res.lower().split("x"))
