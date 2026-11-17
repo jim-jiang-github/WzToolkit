@@ -5801,8 +5801,10 @@ def c_yolo_export(body: dict) -> dict:
     mode = "cls" if body.get("cls") else "mod"
     cover = bool(body.get("cover"))          # 铺满整图：网格窗口盖住每张图全部画面
     # 自动采样每布局窗口数封顶（0=不限）：站位步距 120px、视窗 1366px，相邻窗口
-    # 重叠 91%，封顶 32 几乎不损失信息，整库 339 张导出体积/耗时才可控
-    max_views = max(0, min(64, int(body.get("max_views") or 32)))
+    # 重叠 91%，封顶 32 几乎不损失信息，整库 339 张导出体积/耗时才可控。
+    # 注意 0 是合法值（不限），不能写 `or 32` 兜底吞掉
+    _mv = body.get("max_views")
+    max_views = max(0, min(64, int(_mv))) if _mv not in (None, "") else 32
     _ystop.clear()
     with _ylock:
         _yjob.update(running=True, error="", stage="启动", done=0,
